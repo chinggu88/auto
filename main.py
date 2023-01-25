@@ -1,0 +1,363 @@
+import time
+import win32gui
+import pyautogui as gu
+import schedule as sc
+import keyboard as k
+import time
+import threading
+import os.path
+
+ishunting =0
+isture=True
+def getcursorinfo():
+    #기본커서 65539
+    #칼커서 3017359
+    #11865074
+    return win32gui.GetCursorInfo()[1]
+def pushkeyboard():
+    print('프로그램종료')
+    gu.press('f10', presses=1)
+    exit()
+def windshotandiofstom():
+    print('windshotandiofstom')
+    time.sleep(2)
+    gu.press('f10', presses=1)
+    time.sleep(2)
+    gu.press('f11', presses=1)
+    time.sleep(1)
+    gu.press('f12', presses=1)
+def windshotandiofstom1():
+    print('windshotandiofstom1')
+    gu.press('f7', presses=1)
+    time.sleep(2)
+    gu.press('f8', presses=1)
+
+def delmagic():
+    print('delmagic')
+    time.sleep(0.5)
+    gu.press('f9', presses=1)
+    time.sleep(0.5)
+    gu.press('f9', presses=1)
+    time.sleep(0.5)
+    gu.press('f9', presses=1)
+    time.sleep(0.5)
+    gu.press('f9', presses=1)
+    time.sleep(0.5)
+    gu.press('f9', presses=1)
+    time.sleep(0.5)
+    gu.press('f10', presses=1)
+    time.sleep(0.5)
+    gu.press('f10', presses=1)
+    time.sleep(0.5)
+    gu.press('f10', presses=1)
+    time.sleep(0.5)
+    gu.press('f10', presses=1)
+    time.sleep(0.5)
+    gu.press('f10', presses=1)
+    time.sleep(0.5)
+    gu.press('f11', presses=1)
+    time.sleep(0.5)
+    gu.press('f11', presses=1)
+    time.sleep(0.5)
+    gu.press('f11', presses=1)
+    time.sleep(0.5)
+    gu.press('f11', presses=1)
+    time.sleep(0.5)
+    gu.press('f11', presses=1)
+    time.sleep(0.5)
+    gu.press('f12', presses=1)
+    time.sleep(0.5)
+    gu.press('f12', presses=1)
+    time.sleep(0.5)
+    gu.press('f12', presses=1)
+    time.sleep(0.5)
+    gu.press('f12', presses=1)
+    time.sleep(0.5)
+    gu.press('f12', presses=1)
+    threading.Timer(600, delmagic).start()
+def morefast():
+    print('morefast')
+    gu.press('f7', presses=1)
+    time.sleep(3)
+    gu.press('f8', presses=1)
+    threading.Timer(600, morefast).start()
+
+
+#
+def fool(p,atkvalue):
+    gu.moveTo(p[0] + 20, p[1] + 400)
+    time.sleep(0.5)
+    # gu.moveTo(p[0]+30, p[1]-30)
+    while True:
+        gu.moveTo(p[0]-20, p[1])
+        if (win32gui.GetCursorInfo()[1] == atkvalue):
+            gu.keyDown('ctrl')
+            time.sleep(0.5)
+            gu.doubleClick()
+            gu.keyUp('ctrl')
+            gu.moveTo(p[0] + 20, p[1] + 400)
+        gu.moveTo(p[0], p[1]+20)
+        if (win32gui.GetCursorInfo()[1] == atkvalue):
+            gu.keyDown('ctrl')
+            time.sleep(0.5)
+            gu.doubleClick()
+            gu.keyUp('ctrl')
+            gu.moveTo(p[0] + 20, p[1] + 400)
+        gu.moveTo(p[0]+20, p[1] + 20)
+        if (win32gui.GetCursorInfo()[1] == atkvalue):
+            gu.keyDown('ctrl')
+            time.sleep(0.5)
+            gu.doubleClick()
+            gu.keyUp('ctrl')
+            gu.moveTo(p[0] + 20, p[1] + 400)
+
+
+#용던
+def attack(p,len,atkvalue):
+    isattack = True
+    cnt =0
+    if(len%2 == 0):
+        print('len 홀수로 지정')
+    else:
+
+        #시작지점
+        startPoint=[p[0]-(((len-1)/2)*50),p[1]-(((len-1)/2)*90)]
+
+        #->
+        for i in range(0,len-1):
+            startPoint[0]=startPoint[0]+50
+            gu.moveTo(startPoint[0], startPoint[1])
+            gu.keyDown('ctrl')
+            time.sleep(1)
+            gu.doubleClick()
+
+            cnt = 0
+        #아래로
+        for j in range(0,len-1):
+            startPoint[1] = startPoint[1] + 50
+            gu.moveTo(startPoint[0], startPoint[1])
+            gu.keyDown('ctrl')
+            time.sleep(1)
+            gu.doubleClick()
+
+            cnt = 0
+        # <-
+        for i in range(0, len - 1):
+            startPoint[0] = startPoint[0] - 50
+            gu.moveTo(startPoint[0], startPoint[1])
+            gu.keyDown('ctrl')
+            gu.doubleClick()
+            time.sleep(1)
+            cnt = 0
+        #위로
+        for j in range(0,len-1):
+            startPoint[1] = startPoint[1] - 50
+            gu.moveTo(startPoint[0], startPoint[1])
+            gu.keyDown('ctrl')
+            time.sleep(1)
+            gu.doubleClick()
+            cnt = 0
+
+
+#용던
+def attack1(p,len,atkvalue):
+    isattack = True
+    cnt =0
+    if(len%2 == 0):
+        print('len 홀수로 지정')
+    else:
+        while isattack:
+            #시작지점
+            startPoint=[p[0]-(((len-1)/2)*50),p[1]-(((len-1)/2)*90)]
+
+            #->
+            for i in range(0,len-1):
+                gu.moveTo(startPoint[0], startPoint[1] + 400)
+                startPoint[0]=startPoint[0]+50
+                gu.moveTo(startPoint[0], startPoint[1])
+                if (win32gui.GetCursorInfo()[1] == atkvalue):
+                    gu.keyDown('ctrl')
+                    time.sleep(0.5)
+                    gu.click()
+                    gu.keyUp('ctrl')
+                    cnt = 0
+            #아래로
+            for j in range(0,len-1):
+                gu.moveTo(startPoint[0], startPoint[1] + 400)
+                startPoint[1] = startPoint[1] + 50
+                gu.moveTo(startPoint[0], startPoint[1])
+                if (win32gui.GetCursorInfo()[1] == atkvalue):
+                    gu.keyDown('ctrl')
+                    time.sleep(0.5)
+                    gu.click()
+                    gu.keyUp('ctrl')
+                    cnt = 0
+            # <-
+            for i in range(0, len - 1):
+                gu.moveTo(startPoint[0], startPoint[1] + 400)
+                startPoint[0] = startPoint[0] - 50
+                gu.moveTo(startPoint[0], startPoint[1])
+                if (win32gui.GetCursorInfo()[1] == atkvalue):
+                    # print('공격')
+                    gu.keyDown('ctrl')
+                    time.sleep(0.5)
+                    gu.click()
+                    gu.keyUp('ctrl')
+                    cnt = 0
+            #위로
+            for j in range(0,len-1):
+                gu.moveTo(startPoint[0], startPoint[1] + 400)
+                startPoint[1] = startPoint[1] - 50
+                gu.moveTo(startPoint[0], startPoint[1])
+                if (win32gui.GetCursorInfo()[1] == atkvalue):
+                    gu.keyDown('ctrl')
+                    time.sleep(0.5)
+                    gu.click()
+                    gu.keyUp('ctrl')
+                    cnt = 0
+
+            cnt +=1
+            if (cnt == 2):
+                # attack(centerpoint, 3, attackinfo)
+                # gu.press('f5', presses=1)
+                cnt = 0
+                # isattack = False
+#어택 마우스 셋팅
+def setattckinfo(centerpoint):
+    gu.moveTo(centerpoint[0],centerpoint[1]-200)
+    time.sleep(0.1)
+    gu.click()
+    time.sleep(0.1)
+    gu.keyDown('ctrl')
+    time.sleep(0.1)
+    info = win32gui.GetCursorInfo()[1]
+    time.sleep(0.1)
+    gu.keyUp('ctrl')
+    return info
+
+
+#보상확인하기
+def checkrMp():
+    file_path = os.path.dirname(os.path.realpath(__file__)) + '\\' + 'image' + '\\'
+    checkrmp = gu.locateCenterOnScreen(file_path + 'checkmp1.PNG', confidence=0.8)
+    if checkrmp == None:
+        print('파톰 완료')
+        gu.press('f6', presses=1)
+        ishunting=1
+
+    threading.Timer(1, checkrMp).start()
+#마크 확인
+def checkrMark():
+    global ishunting
+    global isture
+    if ishunting == 0:
+        file_path = os.path.dirname(os.path.realpath(__file__)) + '\\' + 'image' + '\\'
+        mark1 = gu.locateCenterOnScreen(file_path + 'mark1.PNG', confidence=0.8)
+        mark2 = gu.locateCenterOnScreen(file_path + 'mark2.PNG', confidence=0.8)
+        if mark1 != None:
+            print('혈마크 감지')
+            gu.press('f8', presses=1)
+            ishunting=2
+            isture =False
+            exit()
+        if mark2 != None:
+            print('혈마크 감지')
+            gu.press('f8', presses=1)
+            ishunting=2
+            isture = False
+            exit()
+
+    threading.Timer(1, checkrMark).start()
+def setbuff30():
+    gu.press('f11', presses=1)
+    threading.Timer(1700, setbuff30).start()
+
+def setbuff20():
+    time.sleep(1)
+    gu.press('f6', presses=1)
+    time.sleep(1)
+    gu.press('f7', presses=1)
+    time.sleep(1)
+    gu.press('f12', presses=1)
+    threading.Timer(1200, setbuff20).start()
+
+def setbuff10():
+    time.sleep(1)
+    gu.press('f9', presses=1)
+
+    threading.Timer(600, setbuff10).start()
+#피 확인
+def checkrHp():
+    global isture
+    file_path = os.path.dirname(os.path.realpath(__file__)) + '\\' + 'image' + '\\'
+    checkrmp = gu.locateCenterOnScreen(file_path + 'checkhp.PNG', confidence=0.8)
+    if checkrmp != None:
+        print('피 소모 완료 귀한!')
+        gu.press('f8', presses=1)
+        isture=False
+    threading.Timer(1, checkrHp).start()
+#변신
+def transform():
+    gu.press('f5', presses=1)
+    file_path = os.path.dirname(os.path.realpath(__file__)) + '\\' + 'image' + '\\'
+    lv80 = gu.locateCenterOnScreen(file_path + 'lv80.PNG', confidence=0.8)
+    if lv80 != None:
+        gu.moveTo(lv80)
+        gu.click()
+        knight = gu.locateCenterOnScreen(file_path + 'night.PNG', confidence=0.8)
+        if knight != None:
+            gu.moveTo(knight)
+            gu.click()
+
+    threading.Timer(1200, transform).start()
+
+if __name__ == '__main__':
+
+    count = 1
+    attackinfo=[]
+    #False d오른쪽이동 True 왼쪽이동
+    direction=False
+    centerpoint = [625, 480]
+    attackinfo = setattckinfo(centerpoint)
+    # transform()
+    print(attackinfo)
+    # morefast()
+    # checkrMp()
+    # delmagic()
+
+
+    checkrHp()
+    checkrMark()
+    setbuff10()
+    setbuff20()
+    setbuff30()
+
+    # attackinfo=1018953961
+    print(attackinfo)
+    while isture:
+        if ishunting == 0:
+            sc.run_pending()
+            # fool(centerpoint,attackinfo)
+            attack1(centerpoint, 3, attackinfo)
+            # atta  ck(centerpoint, 3, attackinfo)
+
+            # fool(centerpoint,attackinfo)
+            # time.sleep(1)
+            # result = attack_one(centerpoint,3,attackinfo)
+            # if(result):
+            #     attack_one(centerpoint, 13, attackinfo)
+
+            count += 1
+            # gu.press('f5', presses=1)
+
+
+
+
+
+
+
+
+
+
+
+
