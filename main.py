@@ -224,7 +224,7 @@ def attack1(p,len,atkvalue):
         sc.run_pending()
 
         cnt += 1
-        if cnt >= 20:         #10바퀴 동안 못 잡으면 f5
+        if cnt >= 15:         #10바퀴 동안 못 잡으면 f5
             gu.press('f5', presses=1)
             cnt = 0
 
@@ -236,11 +236,12 @@ def attack1(p,len,atkvalue):
                 time.sleep(PROBE_SETTLE)
                 dirty = False
             if _probe(x, y, atkvalue):
+                gu.keyDown('ctrl')
                 time.sleep(CTRL_DELAY)
                 gu.click()
+                gu.keyUp('ctrl')
                 dirty = True
-                cnt = 0                  #클릭했으면 카운트 초기화
-                break                    #가까운 좌표부터 다시 스캔
+                break                       #가까운 좌표부터 다시 스캔
 #어택 마우스 셋팅
 def setattckinfo(centerpoint):
     gu.moveTo(centerpoint[0],centerpoint[1]-200)
