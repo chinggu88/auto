@@ -240,6 +240,7 @@ def attack1(p,len,atkvalue):
                 gu.click()
                 dirty = True
                 cnt = 0                  #클릭했으면 카운트 초기화
+                time.sleep(3)
                 break                    #가까운 좌표부터 다시 스캔
 #어택 마우스 셋팅
 def setattckinfo(centerpoint):
@@ -288,6 +289,20 @@ def checkrMark():
 
     threading.Timer(1, checkrMark).start()
 
+#채팅창에 ".버프" 입력 (매크로 명령어)
+def sendbuffchat():
+    print('.버프 입력')
+    gu.press('enter', presses=1)        #채팅창 열기
+    time.sleep(0.3)
+    k.write('.버프', delay=0.05)         #유니코드로 직접 입력
+    #유니코드 입력이 게임에서 안 먹히면 아래처럼 한/영 전환 + 두벌식 조합으로 대체
+    # k.press_and_release('hangul')
+    # time.sleep(0.2)
+    # gu.typewrite('.qjvm', interval=0.05)   # . + 버(qj) + 프(vm)
+    # k.press_and_release('hangul')
+    time.sleep(0.3)
+    gu.press('enter', presses=1)        #전송
+
 def setbuff10():
     time.sleep(1)
     gu.press('f6', presses=1)
@@ -295,6 +310,8 @@ def setbuff10():
     gu.press('f7', presses=1)
     time.sleep(1)
     gu.press('f9', presses=1)
+    time.sleep(1)
+    sendbuffchat()
 
     threading.Timer(1800, setbuff10).start()
 #피 확인
@@ -345,6 +362,7 @@ if __name__ == '__main__':
 
     # attackinfo=1018953961
     print(attackinfo)
+    #.버프 추가하기
     while isture:
         if ishunting == 0:
             sc.run_pending()
