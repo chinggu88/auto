@@ -1,5 +1,6 @@
 import time
 import win32gui
+import win32api
 import pyautogui as gu
 import schedule as sc
 import keyboard as k
@@ -9,6 +10,11 @@ import os.path
 
 ishunting =0
 isture=True
+
+#탐색 튜닝값 (실기에서 조정)
+PROBE_SETTLE = 0.025   # 커서 모양 갱신 대기 최대치(초)
+PROBE_STEP   = 0.003   # 폴링 간격(초)
+CTRL_DELAY   = 0.08    # ctrl 누른 뒤 클릭까지(초)
 def getcursorinfo():
     #기본커서 65539
     #칼커서 3017359
@@ -159,69 +165,64 @@ def attack(p,len,atkvalue):
             cnt = 0
 
 
+#pyautogui 를 거치지 않는 저수준 이동 (PAUSE 우회)
+def _movefast(x, y):
+    win32api.SetCursorPos((int(x), int(y)))
+
+#(x,y)로 이동 후 공격 커서인지 확인. 맞으면 즉시 True
+def _probe(x, y, atkvalue):
+    _movefast(x, y)
+    deadline = time.perf_counter() + PROBE_SETTLE
+    while True:
+        if (win32gui.GetCursorInfo()[1] == atkvalue):
+            return True
+        if time.perf_counter() >= deadline:
+            return False
+        time.sleep(PROBE_STEP)
+
+#정사각 둘레 좌표를 중심에서 가까운 순으로 미리 계산
+def _scanpoints(p, ln, step=50):
+    half = (ln - 1) // 2
+    pts = [(p[0] + dx * step, p[1] + dy * step)
+           for dx in range(-half, half + 1)
+           for dy in range(-half, half + 1)
+           if not (dx == 0 and dy == 0)]
+    pts.sort(key=lambda q: (q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2)
+    return pts
+
 #용던
 def attack1(p,len,atkvalue):
-    isattack = True
-    cnt =0
+    global isture
+    global ishunting
     if(len%2 == 0):
         print('len 홀수로 지정')
-    else:
-        while isattack:
-            #시작지점
-            startPoint=[p[0]-(((len-1)/2)*50),p[1]-(((len-1)/2)*90)]
+        return
 
-            #->
-            for i in range(0,len-1):
-                gu.moveTo(startPoint[0], startPoint[1] + 400)
-                startPoint[0]=startPoint[0]+50
-                gu.moveTo(startPoint[0], startPoint[1])
-                if (win32gui.GetCursorInfo()[1] == atkvalue):
-                    gu.keyDown('ctrl')
-                    time.sleep(0.5)
-                    gu.click()
-                    gu.keyUp('ctrl')
-                    cnt = 0
-            #아래로
-            for j in range(0,len-1):
-                gu.moveTo(startPoint[0], startPoint[1] + 400)
-                startPoint[1] = startPoint[1] + 50
-                gu.moveTo(startPoint[0], startPoint[1])
-                if (win32gui.GetCursorInfo()[1] == atkvalue):
-                    gu.keyDown('ctrl')
-                    time.sleep(0.5)
-                    gu.click()
-                    gu.keyUp('ctrl')
-                    cnt = 0
-            # <-
-            for i in range(0, len - 1):
-                gu.moveTo(startPoint[0], startPoint[1] + 400)
-                startPoint[0] = startPoint[0] - 50
-                gu.moveTo(startPoint[0], startPoint[1])
-                if (win32gui.GetCursorInfo()[1] == atkvalue):
-                    # print('공격')
-                    gu.keyDown('ctrl')
-                    time.sleep(0.5)
-                    gu.click()
-                    gu.keyUp('ctrl')
-                    cnt = 0
-            #위로
-            for j in range(0,len-1):
-                gu.moveTo(startPoint[0], startPoint[1] + 400)
-                startPoint[1] = startPoint[1] - 50
-                gu.moveTo(startPoint[0], startPoint[1])
-                if (win32gui.GetCursorInfo()[1] == atkvalue):
-                    gu.keyDown('ctrl')
-                    time.sleep(0.5)
-                    gu.click()
-                    gu.keyUp('ctrl')
-                    cnt = 0
+    points  = _scanpoints(p, len)
+    parkpos = (p[0], p[1] + 400)
+    dirty   = False   #직전 프로브 히트 -> 커서가 공격모양으로 남아있음
 
-            cnt +=1
-            if (cnt == 2):
-                # attack(centerpoint, 3, attackinfo)
-                # gu.press('f5', presses=1)
-                cnt = 0
-                # isattack = False
+    while isture:
+        if ishunting != 0:
+            time.sleep(0.2)   #풀스핀 방지
+            continue
+
+        sc.run_pending()
+
+        for (x, y) in points:
+            if (not isture) or ishunting != 0:
+                break
+            if dirty:                    #히트 직후에만 커서 초기화
+                _movefast(parkpos[0], parkpos[1])
+                time.sleep(PROBE_SETTLE)
+                dirty = False
+            if _probe(x, y, atkvalue):
+                gu.keyDown('ctrl')
+                time.sleep(CTRL_DELAY)
+                gu.click()
+                gu.keyUp('ctrl')
+                dirty = True
+                break                    #가까운 좌표부터 다시 스캔
 #어택 마우스 셋팅
 def setattckinfo(centerpoint):
     gu.moveTo(centerpoint[0],centerpoint[1]-200)
@@ -318,6 +319,8 @@ if __name__ == '__main__':
     #False d오른쪽이동 True 왼쪽이동
     direction=False
     centerpoint = [625, 480]
+    #FAILSAFE 대체 : tab 으로 즉시 종료
+    k.add_hotkey('tab', lambda: os._exit(0))
     attackinfo = setattckinfo(centerpoint)
     # transform()
     print(attackinfo)
@@ -338,7 +341,8 @@ if __name__ == '__main__':
         if ishunting == 0:
             sc.run_pending()
             # fool(centerpoint,attackinfo)
-            attack1(centerpoint, 3, attackinfo)
+            #기존 스캔박스 위치 유지 (원본 시작점이 y로 40px 위에 잡혔음)
+            attack1([centerpoint[0], centerpoint[1] - 40], 3, attackinfo)
             # atta  ck(centerpoint, 3, attackinfo)
 
             # fool(centerpoint,attackinfo)

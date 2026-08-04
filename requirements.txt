@@ -1,0 +1,20 @@
+# lin_auto 실행에 필요한 파이썬 패키지 (Windows / Python 3.9 기준)
+# 설치: pip install -r requirements.txt
+
+# 마우스/키보드 합성 입력 + 화면 템플릿 매칭
+pyautogui==0.9.54
+
+# pyautogui 스크린샷/이미지 처리 (locateCenterOnScreen 의존)
+Pillow==10.4.0
+
+# locateCenterOnScreen 의 confidence= 옵션에 반드시 필요
+opencv-python==4.10.0.84
+
+# win32gui / win32api (커서 모양으로 타겟 판별)
+pywin32==306
+
+# f5~f12 등 게임 스킬 키 입력
+keyboard==0.13.5
+
+# 각 스크립트에서 import 만 하고 main.py 에서만 run_pending() 호출
+schedule==1.2.2
