@@ -140,14 +140,13 @@ def sendbuffchat():
     print('.버프 입력')
     gu.press('enter', presses=1)        #채팅창 열기
     time.sleep(0.3)
-    gu.press('.', presses=1)        #채팅창 열기
+    k.write('.버프', delay=0.05)        #유니코드로 직접 주입 (IME 안 거침)
     time.sleep(0.3)
-    _togglehangul()                        #한글 입력 모드로 전환
-    gu.typewrite('.qjvm', interval=0.05)   # . + 버(qj) + 프(vm)
-    time.sleep(0.3)
-    _togglehangul()                        #영문 모드로 복구 (F키 단축키 보호)
-    #IME 조합이 게임에서 안 먹히면 아래 유니코드 직접 입력으로 대체
-    # k.write('.버프', delay=0.05)
+    #한/영 토글이 게임 창에 안 먹혀서 .qjvm 이 그대로 찍힘. 아래 IME 방식은 보류
+    # _togglehangul()                        #한글 입력 모드로 전환
+    # gu.typewrite('.qjvm', interval=0.05)   # . + 버(qj) + 프(vm)
+    # time.sleep(0.3)
+    # _togglehangul()                        #영문 모드로 복구 (F키 단축키 보호)
     gu.press('enter', presses=1)        #전송
 
 def setbuff30():
