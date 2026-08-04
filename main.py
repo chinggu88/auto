@@ -224,7 +224,7 @@ def attack1(p,len,atkvalue):
         sc.run_pending()
 
         cnt += 1
-        if cnt >= 30:         #10바퀴 동안 못 잡으면 f5
+        if cnt >= 20:         #10바퀴 동안 못 잡으면 f5
             gu.press('f5', presses=1)
             cnt = 0
 
@@ -238,7 +238,7 @@ def attack1(p,len,atkvalue):
             if _probe(x, y, atkvalue):
                 #마우스 중간 휠 클릭
                 time.sleep(CTRL_DELAY)
-                gu.press('f5', presses=1)
+                gu.press('f8', presses=1)
                 time.sleep(CTRL_DELAY)
                 gu.click()
                 time.sleep(CTRL_DELAY)
