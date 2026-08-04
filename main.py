@@ -269,24 +269,12 @@ def checkrMark():
             exit()
 
     threading.Timer(1, checkrMark).start()
-def setbuff30():
-    gu.press('f11', presses=1)
-    threading.Timer(1700, setbuff30).start()
-
-def setbuff20():
-    time.sleep(1)
-    gu.press('f6', presses=1)
-    time.sleep(1)
-    gu.press('f7', presses=1)
-    time.sleep(1)
-    gu.press('f12', presses=1)
-    threading.Timer(1200, setbuff20).start()
 
 def setbuff10():
     time.sleep(1)
     gu.press('f9', presses=1)
 
-    threading.Timer(600, setbuff10).start()
+    threading.Timer(1800, setbuff10).start()
 #피 확인
 def checkrHp():
     global isture
@@ -299,7 +287,7 @@ def checkrHp():
     threading.Timer(1, checkrHp).start()
 #변신
 def transform():
-    gu.press('f5', presses=1)
+    gu.press('f11', presses=1)
     file_path = os.path.dirname(os.path.realpath(__file__)) + '\\' + 'image' + '\\'
     lv80 = gu.locateCenterOnScreen(file_path + 'lv80.PNG', confidence=0.8)
     if lv80 != None:
@@ -330,10 +318,8 @@ if __name__ == '__main__':
 
 
     checkrHp()
-    checkrMark()
+    # checkrMark()
     setbuff10()
-    setbuff20()
-    setbuff30()
 
     # attackinfo=1018953961
     print(attackinfo)
