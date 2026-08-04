@@ -125,18 +125,27 @@ def setattckinfo(centerpoint):
     return info
 
 
+#한/영 전환. keyboard 라이브러리에 'hangul' 키 이름이 없어서 VK 코드를 직접 쏨
+VK_HANGUL       = 0x15
+KEYEVENTF_KEYUP = 0x0002
+
+def _togglehangul():
+    win32api.keybd_event(VK_HANGUL, 0, 0, 0)
+    time.sleep(0.05)
+    win32api.keybd_event(VK_HANGUL, 0, KEYEVENTF_KEYUP, 0)
+    time.sleep(0.2)
+
 #채팅창에 ".버프" 입력 (매크로 명령어)
 def sendbuffchat():
     print('.버프 입력')
     gu.press('enter', presses=1)        #채팅창 열기
     time.sleep(0.3)
-    k.write('.버프', delay=0.05)         #유니코드로 직접 입력
-    #유니코드 입력이 게임에서 안 먹히면 아래처럼 한/영 전환 + 두벌식 조합으로 대체
-    # k.press_and_release('hangul')
-    # time.sleep(0.2)
+    _togglehangul()                        #한글 입력 모드로 전환
     gu.typewrite('.qjvm', interval=0.05)   # . + 버(qj) + 프(vm)
-    k.press_and_release('hangul')
     time.sleep(0.3)
+    _togglehangul()                        #영문 모드로 복구 (F키 단축키 보호)
+    #IME 조합이 게임에서 안 먹히면 아래 유니코드 직접 입력으로 대체
+    # k.write('.버프', delay=0.05)
     gu.press('enter', presses=1)        #전송
 
 def setbuff30():
