@@ -147,6 +147,8 @@ def setbuff10():
     time.sleep(1)
     gu.press('f9', presses=1)
     time.sleep(1)
+    gu.press('f10', presses=1)
+    time.sleep(1)
     sendbuffchat()
 
     threading.Timer(1800, setbuff10).start()
