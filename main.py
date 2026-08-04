@@ -236,11 +236,6 @@ def attack1(p,len,atkvalue):
                 time.sleep(PROBE_SETTLE)
                 dirty = False
             if _probe(x, y, atkvalue):
-                #마우스 중간 휠 클릭
-                time.sleep(CTRL_DELAY)
-                gu.press('f8', presses=1)
-                time.sleep(CTRL_DELAY)
-                gu.click()
                 time.sleep(CTRL_DELAY)
                 gu.click()
                 dirty = True
