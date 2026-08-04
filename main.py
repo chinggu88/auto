@@ -241,6 +241,7 @@ def attack1(p,len,atkvalue):
                 gu.click()
                 gu.keyUp('ctrl')
                 dirty = True
+                cnt = 0
                 break                       #가까운 좌표부터 다시 스캔
 #어택 마우스 셋팅
 def setattckinfo(centerpoint):
