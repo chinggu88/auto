@@ -240,7 +240,6 @@ def attack1(p,len,atkvalue):
                 gu.click()
                 dirty = True
                 cnt = 0                  #클릭했으면 카운트 초기화
-                time.sleep(3)
                 break                    #가까운 좌표부터 다시 스캔
 #어택 마우스 셋팅
 def setattckinfo(centerpoint):
