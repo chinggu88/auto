@@ -197,7 +197,7 @@ def checkrHp():
     global isture
     file_path = IMAGE_DIR
     checkrmp = gu.locateCenterOnScreen(file_path + 'checkhp.PNG', confidence=0.8)
-    if checkrmp != None:
+    if checkrmp == None:
         print('피 소모 완료 귀한!')
         gu.press('f12', presses=1)
         isture=False
