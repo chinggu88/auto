@@ -8,6 +8,10 @@ import time
 import threading
 import os.path
 
+#최신 pyautogui 는 이미지 못 찾으면 None 대신 ImageNotFoundException 을 던짐
+#아래 코드 전체가 None 비교를 전제로 하므로 예전 동작(None 반환)으로 되돌림
+gu.useImageNotFoundException(False)
+
 ishunting =0
 isture=True
 
@@ -146,7 +150,7 @@ def attack(p,len,atkvalue):
             time.sleep(1)
             gu.doubleClick()
 
-            cnt = 0
+            cnt = 0/누구 다나
         # <-
         for i in range(0, len - 1):
             startPoint[0] = startPoint[0] - 50

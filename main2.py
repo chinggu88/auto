@@ -6,6 +6,10 @@ import threading
 import win32gui
 from datetime import datetime
 
+#최신 pyautogui 는 이미지 못 찾으면 None 대신 ImageNotFoundException 을 던짐
+#아래 코드 전체가 None 비교를 전제로 하므로 예전 동작(None 반환)으로 되돌림
+m.useImageNotFoundException(False)
+
 #0 사냥중 1 휴식중
 ishunting =1
 #사냥 시작시간

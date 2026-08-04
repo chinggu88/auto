@@ -8,6 +8,9 @@ import threading
 import os.path
 
 gu.FAILSAFE = False
+#최신 pyautogui 는 이미지 못 찾으면 None 대신 ImageNotFoundException 을 던짐
+#아래 코드 전체가 None 비교를 전제로 하므로 예전 동작(None 반환)으로 되돌림
+gu.useImageNotFoundException(False)
 isattack = True
 #어택 마우스 셋팅
 def setattckinfo(centerpoint):
