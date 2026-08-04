@@ -212,7 +212,7 @@ def attack1(p,len,atkvalue):
         return
 
     points  = _scanpoints(p, len)
-    parkpos = (p[0], p[1] + 400)
+    parkpos = (p[0], p[1] + 350)
     dirty   = False   #직전 프로브 히트 -> 커서가 공격모양으로 남아있음
     cnt     = 0       #클릭 없이 헛돈 횟수
 
@@ -224,22 +224,25 @@ def attack1(p,len,atkvalue):
         sc.run_pending()
 
         cnt += 1
-        if cnt >= 10:         #10바퀴 동안 못 잡으면 f5
+        if cnt >= 30:         #10바퀴 동안 못 잡으면 f5
             gu.press('f5', presses=1)
             cnt = 0
 
         for (x, y) in points:
             if (not isture) or ishunting != 0:
                 break
-            if dirty:                    #히트 직후에만 커서 초기화
+            if 19:                    #히트 직후에만 커서 초기화
                 _movefast(parkpos[0], parkpos[1])
                 time.sleep(PROBE_SETTLE)
                 dirty = False
             if _probe(x, y, atkvalue):
-                gu.keyDown('ctrl')
+                #마우스 중간 휠 클릭
+                time.sleep(CTRL_DELAY)
+                gu.press('f5', presses=1)
                 time.sleep(CTRL_DELAY)
                 gu.click()
-                gu.keyUp('ctrl')
+                time.sleep(CTRL_DELAY)
+                gu.click()
                 dirty = True
                 cnt = 0                  #클릭했으면 카운트 초기화
                 break                    #가까운 좌표부터 다시 스캔
@@ -334,7 +337,7 @@ if __name__ == '__main__':
     #FAILSAFE 대체 : tab 으로 즉시 종료
     k.add_hotkey('tab', lambda: os._exit(0))
     attackinfo = setattckinfo(centerpoint)
-    # transform()
+    transform()
     print(attackinfo)
     # morefast()
     # checkrMp()
