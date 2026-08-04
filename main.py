@@ -28,155 +28,14 @@ isture=True
 PROBE_SETTLE = 0.025   # 커서 모양 갱신 대기 최대치(초)
 PROBE_STEP   = 0.003   # 폴링 간격(초)
 CTRL_DELAY   = 0.08    # ctrl 누른 뒤 클릭까지(초)
-def getcursorinfo():
-    #기본커서 65539
-    #칼커서 3017359
-    #11865074
-    return win32gui.GetCursorInfo()[1]
-def pushkeyboard():
-    print('프로그램종료')
-    gu.press('f10', presses=1)
-    exit()
-def windshotandiofstom():
-    print('windshotandiofstom')
-    time.sleep(2)
-    gu.press('f10', presses=1)
-    time.sleep(2)
-    gu.press('f11', presses=1)
-    time.sleep(1)
-    gu.press('f12', presses=1)
-def windshotandiofstom1():
-    print('windshotandiofstom1')
-    gu.press('f7', presses=1)
-    time.sleep(2)
-    gu.press('f8', presses=1)
+STEPS        = (50, 70, 90)   # 원 3단계 스텝(=반지름). 한 단계 높을수록 20씩 커짐
 
-def delmagic():
-    print('delmagic')
-    time.sleep(0.5)
-    gu.press('f9', presses=1)
-    time.sleep(0.5)
-    gu.press('f9', presses=1)
-    time.sleep(0.5)
-    gu.press('f9', presses=1)
-    time.sleep(0.5)
-    gu.press('f9', presses=1)
-    time.sleep(0.5)
-    gu.press('f9', presses=1)
-    time.sleep(0.5)
-    gu.press('f10', presses=1)
-    time.sleep(0.5)
-    gu.press('f10', presses=1)
-    time.sleep(0.5)
-    gu.press('f10', presses=1)
-    time.sleep(0.5)
-    gu.press('f10', presses=1)
-    time.sleep(0.5)
-    gu.press('f10', presses=1)
-    time.sleep(0.5)
-    gu.press('f11', presses=1)
-    time.sleep(0.5)
-    gu.press('f11', presses=1)
-    time.sleep(0.5)
-    gu.press('f11', presses=1)
-    time.sleep(0.5)
-    gu.press('f11', presses=1)
-    time.sleep(0.5)
-    gu.press('f11', presses=1)
-    time.sleep(0.5)
-    gu.press('f12', presses=1)
-    time.sleep(0.5)
-    gu.press('f12', presses=1)
-    time.sleep(0.5)
-    gu.press('f12', presses=1)
-    time.sleep(0.5)
-    gu.press('f12', presses=1)
-    time.sleep(0.5)
-    gu.press('f12', presses=1)
-    threading.Timer(600, delmagic).start()
-def morefast():
-    print('morefast')
-    gu.press('f7', presses=1)
-    time.sleep(3)
-    gu.press('f8', presses=1)
-    threading.Timer(600, morefast).start()
-
-
-#
-def fool(p,atkvalue):
-    gu.moveTo(p[0] + 20, p[1] + 400)
-    time.sleep(0.5)
-    # gu.moveTo(p[0]+30, p[1]-30)
-    while True:
-        gu.moveTo(p[0]-20, p[1])
-        if (win32gui.GetCursorInfo()[1] == atkvalue):
-            gu.keyDown('ctrl')
-            time.sleep(0.5)
-            gu.doubleClick()
-            gu.keyUp('ctrl')
-            gu.moveTo(p[0] + 20, p[1] + 400)
-        gu.moveTo(p[0], p[1]+20)
-        if (win32gui.GetCursorInfo()[1] == atkvalue):
-            gu.keyDown('ctrl')
-            time.sleep(0.5)
-            gu.doubleClick()
-            gu.keyUp('ctrl')
-            gu.moveTo(p[0] + 20, p[1] + 400)
-        gu.moveTo(p[0]+20, p[1] + 20)
-        if (win32gui.GetCursorInfo()[1] == atkvalue):
-            gu.keyDown('ctrl')
-            time.sleep(0.5)
-            gu.doubleClick()
-            gu.keyUp('ctrl')
-            gu.moveTo(p[0] + 20, p[1] + 400)
-
-
-#용던
-def attack(p,len,atkvalue):
-    isattack = True
-    cnt =0
-    if(len%2 == 0):
-        print('len 홀수로 지정')
-    else:
-
-        #시작지점
-        startPoint=[p[0]-(((len-1)/2)*50),p[1]-(((len-1)/2)*90)]
-
-        #->
-        for i in range(0,len-1):
-            startPoint[0]=startPoint[0]+50
-            gu.moveTo(startPoint[0], startPoint[1])
-            gu.keyDown('ctrl')
-            time.sleep(1)
-            gu.doubleClick()
-
-            cnt = 0
-        #아래로
-        for j in range(0,len-1):
-            startPoint[1] = startPoint[1] + 50
-            gu.moveTo(startPoint[0], startPoint[1])
-            gu.keyDown('ctrl')
-            time.sleep(1)
-            gu.doubleClick()
-
-            cnt = 0
-        # <-
-        for i in range(0, len - 1):
-            startPoint[0] = startPoint[0] - 50
-            gu.moveTo(startPoint[0], startPoint[1])
-            gu.keyDown('ctrl')
-            gu.doubleClick()
-            time.sleep(1)
-            cnt = 0
-        #위로
-        for j in range(0,len-1):
-            startPoint[1] = startPoint[1] - 50
-            gu.moveTo(startPoint[0], startPoint[1])
-            gu.keyDown('ctrl')
-            time.sleep(1)
-            gu.doubleClick()
-            cnt = 0
-
+#innerauto 튜닝값
+RETURN_WAIT  = 10      # f12 귀환 후 마을 로딩 대기(초)
+INNER_IMG1   = 'inner1.PNG'   # f10 누른 뒤 찾을 이미지 (실제 파일명으로 교체)
+INNER_IMG2   = 'inner2.PNG'   # f1 누른 뒤 찾을 이미지 (실제 파일명으로 교체)
+INNER_CONF   = 0.8     # 두 이미지 매칭 신뢰도
+INNER_TRY    = 10      # 이미지 못 찾을 때 재시도 횟수 (1초 간격)
 
 #pyautogui 를 거치지 않는 저수준 이동 (PAUSE 우회)
 def _movefast(x, y):
@@ -194,12 +53,21 @@ def _probe(x, y, atkvalue):
         time.sleep(PROBE_STEP)
 
 #정사각 둘레 좌표를 중심에서 가까운 순으로 미리 계산
-def _scanpoints(p, ln, step=50):
+#steps 를 여러개 주면 반지름이 다른 원을 겹쳐서 다단계로 훑는다 (안쪽 원부터 스캔)
+def _scanpoints(p, ln, steps=STEPS):
     half = (ln - 1) // 2
-    pts = [(p[0] + dx * step, p[1] + dy * step)
-           for dx in range(-half, half + 1)
-           for dy in range(-half, half + 1)
-           if not (dx == 0 and dy == 0)]
+    seen = set()
+    pts  = []
+    for step in steps:
+        for dx in range(-half, half + 1):
+            for dy in range(-half, half + 1):
+                if dx == 0 and dy == 0:
+                    continue
+                q = (p[0] + dx * step, p[1] + dy * step)
+                if q in seen:      #안쪽 원과 겹치는 좌표는 버림
+                    continue
+                seen.add(q)
+                pts.append(q)
     pts.sort(key=lambda q: (q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2)
     return pts
 
@@ -257,39 +125,6 @@ def setattckinfo(centerpoint):
     return info
 
 
-#보상확인하기
-def checkrMp():
-    file_path = IMAGE_DIR
-    checkrmp = gu.locateCenterOnScreen(file_path + 'checkmp1.PNG', confidence=0.8)
-    if checkrmp == None:
-        print('파톰 완료')
-        gu.press('f6', presses=1)
-        ishunting=1
-
-    threading.Timer(1, checkrMp).start()
-#마크 확인
-def checkrMark():
-    global ishunting
-    global isture
-    if ishunting == 0:
-        file_path = IMAGE_DIR
-        mark1 = gu.locateCenterOnScreen(file_path + 'mark1.PNG', confidence=0.8)
-        mark2 = gu.locateCenterOnScreen(file_path + 'mark2.PNG', confidence=0.8)
-        if mark1 != None:
-            print('혈마크 감지')
-            gu.press('f8', presses=1)
-            ishunting=2
-            isture =False
-            exit()
-        if mark2 != None:
-            print('혈마크 감지')
-            gu.press('f8', presses=1)
-            ishunting=2
-            isture = False
-            exit()
-
-    threading.Timer(1, checkrMark).start()
-
 #채팅창에 ".버프" 입력 (매크로 명령어)
 def sendbuffchat():
     print('.버프 입력')
@@ -315,6 +150,46 @@ def setbuff10():
     sendbuffchat()
 
     threading.Timer(1800, setbuff10).start()
+#이미지 나올 때까지 재시도하고 찾으면 클릭. 끝내 못 찾으면 False
+def _findandclick(name):
+    file_path = IMAGE_DIR
+    for i in range(0, INNER_TRY):
+        pos = gu.locateCenterOnScreen(file_path + name, confidence=INNER_CONF)
+        if pos != None:
+            gu.moveTo(pos)
+            time.sleep(0.3)
+            gu.click()
+            return True
+        time.sleep(1)
+    print('innerauto : ' + name + ' 못 찾음')
+    return False
+
+#귀환 후 마무리 : f10 -> 이미지클릭 -> f1 -> 이미지클릭 -> 스크립트 종료
+def innerauto():
+    print('innerauto 시작')
+
+    #1. f10
+    gu.press('f10', presses=1)
+    time.sleep(1)
+    #2~3. 이미지 찾고 클릭
+    if not _findandclick(INNER_IMG1):
+        print('innerauto 중단 - 스크립트 종료')
+        os._exit(1)
+    time.sleep(1)
+
+    #4. f1
+    gu.press('f1', presses=1)
+    time.sleep(1)
+    #5~6. 이미지 찾고 클릭
+    if not _findandclick(INNER_IMG2):
+        print('innerauto 중단 - 스크립트 종료')
+        os._exit(1)
+    time.sleep(1)
+
+    #7. 시스템 종료 (매크로 프로세스만 즉시 종료)
+    print('innerauto 완료 - 스크립트 종료')
+    os._exit(0)
+
 #피 확인
 def checkrHp():
     global isture
@@ -324,6 +199,9 @@ def checkrHp():
         print('피 소모 완료 귀한!')
         gu.press('f12', presses=1)
         isture=False
+        time.sleep(RETURN_WAIT)   #귀환 완료 대기
+        innerauto()               #여기서 프로세스가 끝나므로 타이머 재등록 안함
+        return
     threading.Timer(1, checkrHp).start()
 #변신
 def transform():
@@ -344,39 +222,22 @@ if __name__ == '__main__':
 
     count = 1
     attackinfo=[]
-    #False d오른쪽이동 True 왼쪽이동
-    direction=False
     centerpoint = [625, 480]
     #FAILSAFE 대체 : tab 으로 즉시 종료
     k.add_hotkey('tab', lambda: os._exit(0))
     attackinfo = setattckinfo(centerpoint)
     transform()
     print(attackinfo)
-    # morefast()
-    # checkrMp()
-    # delmagic()
-
 
     checkrHp()
-    # checkrMark()
     setbuff10()
 
-    # attackinfo=1018953961
     print(attackinfo)
-    #.버프 추가하기
     while isture:
         if ishunting == 0:
             sc.run_pending()
-            # fool(centerpoint,attackinfo)
             #기존 스캔박스 위치 유지 (원본 시작점이 y로 40px 위에 잡혔음)
             attack1([centerpoint[0], centerpoint[1] - 40], 3, attackinfo)
-            # atta  ck(centerpoint, 3, attackinfo)
-
-            # fool(centerpoint,attackinfo)
-            # time.sleep(1)
-            # result = attack_one(centerpoint,3,attackinfo)
-            # if(result):
-            #     attack_one(centerpoint, 13, attackinfo)
 
             count += 1
             if count % 10 == 0:
