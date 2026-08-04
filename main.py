@@ -342,7 +342,10 @@ if __name__ == '__main__':
             #     attack_one(centerpoint, 13, attackinfo)
 
             count += 1
-            # gu.press('f5', presses=1)
+            if count % 10 == 0:
+                print('10회마다 새로고침')
+                gu.press('f5', presses=1)
+                count=0
 
 
 
