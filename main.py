@@ -7,6 +7,15 @@ import keyboard as k
 import time
 import threading
 import os.path
+import sys
+
+#이미지 폴더 경로 (콘솔/exec 실행이라 __file__ 이 없을 때는 argv[0] -> cwd 순으로 폴백)
+try:
+    _BASE_DIR = os.path.dirname(os.path.realpath(__file__))
+except NameError:
+    _BASE_DIR = os.path.dirname(os.path.realpath(sys.argv[0])) if sys.argv and sys.argv[0] else os.getcwd()
+IMAGE_DIR = _BASE_DIR + '\\' + 'image' + '\\'
+print('이미지 경로: ' + IMAGE_DIR)
 
 #최신 pyautogui 는 이미지 못 찾으면 None 대신 ImageNotFoundException 을 던짐
 #아래 코드 전체가 None 비교를 전제로 하므로 예전 동작(None 반환)으로 되돌림
@@ -250,7 +259,7 @@ def setattckinfo(centerpoint):
 
 #보상확인하기
 def checkrMp():
-    file_path = os.path.dirname(os.path.realpath(__file__)) + '\\' + 'image' + '\\'
+    file_path = IMAGE_DIR
     checkrmp = gu.locateCenterOnScreen(file_path + 'checkmp1.PNG', confidence=0.8)
     if checkrmp == None:
         print('파톰 완료')
@@ -263,7 +272,7 @@ def checkrMark():
     global ishunting
     global isture
     if ishunting == 0:
-        file_path = os.path.dirname(os.path.realpath(__file__)) + '\\' + 'image' + '\\'
+        file_path = IMAGE_DIR
         mark1 = gu.locateCenterOnScreen(file_path + 'mark1.PNG', confidence=0.8)
         mark2 = gu.locateCenterOnScreen(file_path + 'mark2.PNG', confidence=0.8)
         if mark1 != None:
@@ -283,23 +292,27 @@ def checkrMark():
 
 def setbuff10():
     time.sleep(1)
+    gu.press('f6', presses=1)
+    time.sleep(1)
+    gu.press('f7', presses=1)
+    time.sleep(1)
     gu.press('f9', presses=1)
 
     threading.Timer(1800, setbuff10).start()
 #피 확인
 def checkrHp():
     global isture
-    file_path = os.path.dirname(os.path.realpath(__file__)) + '\\' + 'image' + '\\'
+    file_path = IMAGE_DIR
     checkrmp = gu.locateCenterOnScreen(file_path + 'checkhp.PNG', confidence=0.8)
     if checkrmp != None:
         print('피 소모 완료 귀한!')
-        gu.press('f8', presses=1)
+        gu.press('f12', presses=1)
         isture=False
     threading.Timer(1, checkrHp).start()
 #변신
 def transform():
     gu.press('f11', presses=1)
-    file_path = os.path.dirname(os.path.realpath(__file__)) + '\\' + 'image' + '\\'
+    file_path = IMAGE_DIR
     lv80 = gu.locateCenterOnScreen(file_path + 'lv80.PNG', confidence=0.8)
     if lv80 != None:
         gu.moveTo(lv80)
