@@ -12,6 +12,8 @@ gu.FAILSAFE = False
 #아래 코드 전체가 None 비교를 전제로 하므로 예전 동작(None 반환)으로 되돌림
 gu.useImageNotFoundException(False)
 isattack = True
+#원 3단계 스텝(=반지름). 한 단계 높을수록 20씩 커짐
+STEPS = (50, 70, 90)
 #어택 마우스 셋팅
 def setattckinfo(centerpoint):
     gu.moveTo(centerpoint[0],centerpoint[1]-200)
@@ -37,56 +39,58 @@ def attack1(p,len,atkvalue):
     else:
         while True:
             if(isattack==True):
-                #시작지점
-                startPoint=[p[0]-(((len-1)/2)*50),p[1]-(((len-1)/2)*90)]
+                #원 3단계 - 안쪽부터 바깥쪽으로 반지름 20씩 키워가며 훑는다
+                for step in STEPS:
+                    #시작지점 (step+40 이면 세 원의 중심이 같은 지점에 유지됨)
+                    startPoint=[p[0]-(((len-1)/2)*step),p[1]-(((len-1)/2)*(step+40))]
 
-                #->
-                for i in range(0,len-1):
-                    gu.moveTo(startPoint[0], startPoint[1] + 400)
-                    startPoint[0]=startPoint[0]+50
-                    gu.moveTo(startPoint[0], startPoint[1])
-                    if (win32gui.GetCursorInfo()[1] == atkvalue):
-                        # gu.keyDown('ctrl')
-                        time.sleep(0.5)
-                        gu.doubleClick()
-                        # gu.keyUp('ctrl')
-                        cnt = 0
-                #아래로
-                for j in range(0,len-1):
-                    gu.moveTo(startPoint[0], startPoint[1] + 400)
-                    startPoint[1] = startPoint[1] + 50
-                    gu.moveTo(startPoint[0], startPoint[1])
-                    if (win32gui.GetCursorInfo()[1] == atkvalue):
-                        # gu.keyDown('ctrl')
-                        time.sleep(0.5)
-                        gu.doubleClick()
-                        # gu.keyUp('ctrl')
-                        cnt = 0
-                # <-
-                for i in range(0, len - 1):
-                    gu.moveTo(startPoint[0], startPoint[1] + 400)
-                    startPoint[0] = startPoint[0] - 50
-                    gu.moveTo(startPoint[0], startPoint[1])
-                    if (win32gui.GetCursorInfo()[1] == atkvalue):
-                        # print('공격')
-                        # gu.keyDown('ctrl')
-                        time.sleep(0.5)
-                        gu.doubleClick()
-                        # gu.keyUp('ctrl')
-                        cnt = 0
-                #위로
-                for j in range(0,len-1):
-                    gu.moveTo(startPoint[0], startPoint[1] + 400)
-                    startPoint[1] = startPoint[1] - 50
-                    gu.moveTo(startPoint[0], startPoint[1])
-                    if (win32gui.GetCursorInfo()[1] == atkvalue):
-                        # gu.keyDown('ctrl')
-                        time.sleep(0.5)
-                        gu.doubleClick()
-                        # gu.keyUp('ctrl')
-                        cnt = 0
+                    #->
+                    for i in range(0,len-1):
+                        gu.moveTo(startPoint[0], startPoint[1] + 400)
+                        startPoint[0]=startPoint[0]+step
+                        gu.moveTo(startPoint[0], startPoint[1])
+                        if (win32gui.GetCursorInfo()[1] == atkvalue):
+                            # gu.keyDown('ctrl')
+                            time.sleep(0.5)
+                            gu.doubleClick()
+                            # gu.keyUp('ctrl')
+                            cnt = 0
+                    #아래로
+                    for j in range(0,len-1):
+                        gu.moveTo(startPoint[0], startPoint[1] + 400)
+                        startPoint[1] = startPoint[1] + step
+                        gu.moveTo(startPoint[0], startPoint[1])
+                        if (win32gui.GetCursorInfo()[1] == atkvalue):
+                            # gu.keyDown('ctrl')
+                            time.sleep(0.5)
+                            gu.doubleClick()
+                            # gu.keyUp('ctrl')
+                            cnt = 0
+                    # <-
+                    for i in range(0, len - 1):
+                        gu.moveTo(startPoint[0], startPoint[1] + 400)
+                        startPoint[0] = startPoint[0] - step
+                        gu.moveTo(startPoint[0], startPoint[1])
+                        if (win32gui.GetCursorInfo()[1] == atkvalue):
+                            # print('공격')
+                            # gu.keyDown('ctrl')
+                            time.sleep(0.5)
+                            gu.doubleClick()
+                            # gu.keyUp('ctrl')
+                            cnt = 0
+                    #위로
+                    for j in range(0,len-1):
+                        gu.moveTo(startPoint[0], startPoint[1] + 400)
+                        startPoint[1] = startPoint[1] - step
+                        gu.moveTo(startPoint[0], startPoint[1])
+                        if (win32gui.GetCursorInfo()[1] == atkvalue):
+                            # gu.keyDown('ctrl')
+                            time.sleep(0.5)
+                            gu.doubleClick()
+                            # gu.keyUp('ctrl')
+                            cnt = 0
 
-                cnt +=1
+                    cnt +=1
 
 #피 확인
 def checkrHp():
