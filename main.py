@@ -205,6 +205,7 @@ def attack1(p,len,atkvalue):
     points  = _scanpoints(p, len)
     parkpos = (p[0], p[1] + 400)
     dirty   = False   #직전 프로브 히트 -> 커서가 공격모양으로 남아있음
+    cnt     = 0       #클릭 없이 헛돈 횟수
 
     while isture:
         if ishunting != 0:
@@ -212,6 +213,11 @@ def attack1(p,len,atkvalue):
             continue
 
         sc.run_pending()
+
+        cnt += 1
+        if cnt >= 10:         #10바퀴 동안 못 잡으면 f5
+            gu.press('f5', presses=1)
+            cnt = 0
 
         for (x, y) in points:
             if (not isture) or ishunting != 0:
@@ -226,6 +232,7 @@ def attack1(p,len,atkvalue):
                 gu.click()
                 gu.keyUp('ctrl')
                 dirty = True
+                cnt = 0                  #클릭했으면 카운트 초기화
                 break                    #가까운 좌표부터 다시 스캔
 #어택 마우스 셋팅
 def setattckinfo(centerpoint):
