@@ -192,7 +192,7 @@ def innerauto():
     #2~3. 이미지 찾고 클릭
     if not _findandclick(INNER_IMG1):
         print('innerauto 중단 - 스크립트 종료')
-        os._exit(1)
+        os._exit(0)
     time.sleep(1)
 
     #4. f1
@@ -201,7 +201,7 @@ def innerauto():
     #5~6. 이미지 찾고 클릭
     if not _findandclick(INNER_IMG2):
         print('innerauto 중단 - 스크립트 종료')
-        os._exit(1)
+        os._exit(0)
     time.sleep(1)
 
     #7. 시스템 종료 (매크로 프로세스만 즉시 종료)
