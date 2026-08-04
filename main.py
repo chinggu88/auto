@@ -28,7 +28,7 @@ isture=True
 PROBE_SETTLE = 0.025   # 커서 모양 갱신 대기 최대치(초)
 PROBE_STEP   = 0.003   # 폴링 간격(초)
 CTRL_DELAY   = 0.08    # ctrl 누른 뒤 클릭까지(초)
-STEPS        = (50, 70, 90)   # 원 3단계 스텝(=반지름). 한 단계 높을수록 20씩 커짐
+STEPS        = (70, 95, 120)  # 원 3단계 스텝(=반지름). 한 단계 높을수록 25씩 커짐
 
 #innerauto 튜닝값
 RETURN_WAIT  = 10      # f12 귀환 후 마을 로딩 대기(초)
@@ -132,14 +132,14 @@ def sendbuffchat():
     time.sleep(0.3)
     k.write('.버프', delay=0.05)         #유니코드로 직접 입력
     #유니코드 입력이 게임에서 안 먹히면 아래처럼 한/영 전환 + 두벌식 조합으로 대체
-    # k.press_and_release('hangul')
-    # time.sleep(0.2)
-    # gu.typewrite('.qjvm', interval=0.05)   # . + 버(qj) + 프(vm)
-    # k.press_and_release('hangul')
+    k.press_and_release('hangul')
+    time.sleep(0.2)
+    gu.typewrite('.qjvm', interval=0.05)   # . + 버(qj) + 프(vm)
+    k.press_and_release('hangul')
     time.sleep(0.3)
     gu.press('enter', presses=1)        #전송
 
-def setbuff10():
+def setbuff30():
     time.sleep(1)
     gu.press('f6', presses=1)
     time.sleep(1)
@@ -147,11 +147,17 @@ def setbuff10():
     time.sleep(1)
     gu.press('f9', presses=1)
     time.sleep(1)
+    sendbuffchat()
+
+    threading.Timer(1800, setbuff30).start()
+
+def setbuff10():
     gu.press('f10', presses=1)
     time.sleep(1)
     sendbuffchat()
 
-    threading.Timer(1800, setbuff10).start()
+    threading.Timer(300, setbuff10).start()
+
 #이미지 나올 때까지 재시도하고 찾으면 클릭. 끝내 못 찾으면 False
 def _findandclick(name):
     file_path = IMAGE_DIR
