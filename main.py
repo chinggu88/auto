@@ -132,8 +132,8 @@ def sendbuffchat():
     time.sleep(0.3)
     k.write('.버프', delay=0.05)         #유니코드로 직접 입력
     #유니코드 입력이 게임에서 안 먹히면 아래처럼 한/영 전환 + 두벌식 조합으로 대체
-    k.press_and_release('hangul')
-    time.sleep(0.2)
+    # k.press_and_release('hangul')
+    # time.sleep(0.2)
     gu.typewrite('.qjvm', interval=0.05)   # . + 버(qj) + 프(vm)
     k.press_and_release('hangul')
     time.sleep(0.3)
