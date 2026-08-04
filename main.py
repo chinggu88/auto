@@ -150,7 +150,7 @@ def attack(p,len,atkvalue):
             time.sleep(1)
             gu.doubleClick()
 
-            cnt = 0/누구 다나
+            cnt = 0
         # <-
         for i in range(0, len - 1):
             startPoint[0] = startPoint[0] - 50
