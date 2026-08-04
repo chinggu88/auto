@@ -140,6 +140,8 @@ def sendbuffchat():
     print('.버프 입력')
     gu.press('enter', presses=1)        #채팅창 열기
     time.sleep(0.3)
+    gu.press('.', presses=1)        #채팅창 열기
+    time.sleep(0.3)
     _togglehangul()                        #한글 입력 모드로 전환
     gu.typewrite('.qjvm', interval=0.05)   # . + 버(qj) + 프(vm)
     time.sleep(0.3)
@@ -248,6 +250,7 @@ if __name__ == '__main__':
 
     checkrHp()
     setbuff10()
+    setbuff30()
 
     print(attackinfo)
     while isture:
