@@ -58,6 +58,8 @@ SCAN_DIRS  = 16    # 방향 수. 16 이면 22.5도 간격
 SCAN_START = 70    # 1바퀴 반지름(px)
 SCAN_GAP   = 25    # 바퀴 간 간격(px). SCAN_ROUND 가 2 이상일 때만 쓰인다
 SCAN_ROUND = 1     # 총 바퀴 수 -> 반지름 70 한 단계만
+SCAN_OFFSET_Y = -38   # 스캔 중심의 y 보정(px). 음수면 위, 양수면 아래
+                      # 원본은 -40 이었고 어택포인트를 2px 내려서 -38
 
 BUFF_GAP    = 1    #버프 키 누른 뒤 대기(초)
 NOHIT_LIMIT = 5    #이 횟수만큼 헛돌면 새로고침
@@ -522,7 +524,7 @@ def runmacro():
         if KEY_REFRESH == None:
             log('새로고침키 미지정 - 새로고침 끔')
 
-        huntloop([CENTERPOINT[0], CENTERPOINT[1] - 40], atk)
+        huntloop([CENTERPOINT[0], CENTERPOINT[1] + SCAN_OFFSET_Y], atk)
     except Exception as e:
         log('매크로 오류 : ' + str(e))
     finally:
