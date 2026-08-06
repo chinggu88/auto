@@ -25,9 +25,9 @@ gu.useImageNotFoundException(False)
 # 게임 내 단축키 슬롯도 이 표대로 다시 세팅해야 한다
 #=====================================================================
 KEY_INNER     = 'f1'    #귀환 후 마무리 메뉴 (기존 f10)
-KEY_REFRESH   = 'f2'    #사냥 헛돌 때 새로고침 (기존 f5)
-KEY_TRANSFORM = 'f3'    #변신 (기존 f11)
-KEY_RETURN    = 'f4'    #귀환 (기존 f12)
+KEY_REFRESH   = 'f5'    #사냥 헛돌 때 새로고침 (기존 f5)
+KEY_TRANSFORM = 'f11'    #변신 (기존 f11)
+KEY_RETURN    = 'f12'    #귀환 (기존 f12)
 
 #버프 슬롯 : (트리거명, 키, 주기(초))  주기 0 = 비활성(타이머 자체를 안 검)
 BUFFS = [
@@ -43,7 +43,7 @@ BUFFS = [
 BUFFKEY = dict((n, key) for n, key, s in BUFFS)
 
 BUFF_GAP           = 1      #버프 키 누른 뒤 대기(초)
-NOHIT_LIMIT        = 10     #이 횟수만큼 헛돌면 새로고침
+NOHIT_LIMIT        = 5    #이 횟수만큼 헛돌면 새로고침
 TRANSFORM_INTERVAL = 1200   #변신 주기(초)
 HP_INTERVAL        = 1      #피 감시 주기(초)
 
@@ -94,7 +94,12 @@ def settrigger(name):
 PROBE_SETTLE = 0.025   # 커서 모양 갱신 대기 최대치(초)
 PROBE_STEP   = 0.003   # 폴링 간격(초)
 CTRL_DELAY   = 0.08    # ctrl 누른 뒤 클릭까지(초)
-STEPS        = (70, 95, 120)  # 원 3단계 스텝(=반지름). 한 단계 높을수록 25씩 커짐
+
+#서치 범위 : 센터포인트 기준 8방향을 SCAN_GAP 씩 넓혀가며 SCAN_ROUND 바퀴
+SCAN_START = 70    # 1바퀴 반지름(px)
+SCAN_GAP   = 25    # 바퀴 간 간격(px). 일정하게 벌어진다
+SCAN_ROUND = 3     # 총 바퀴 수 -> 70 / 95 / 120
+# STEPS      = (70, 95, 120)   #구버전 : 반지름을 직접 나열했음
 
 #innerauto 튜닝값
 RETURN_WAIT  = 10      # f4 귀환 후 마을 로딩 대기(초)
@@ -118,23 +123,26 @@ def _probe(x, y, atkvalue):
             return False
         time.sleep(PROBE_STEP)
 
-#정사각 둘레 좌표를 중심에서 가까운 순으로 미리 계산
-#steps 를 여러개 주면 반지름이 다른 원을 겹쳐서 다단계로 훑는다 (안쪽 원부터 스캔)
-def _scanpoints(p, ln, steps=STEPS):
-    half = (ln - 1) // 2
-    seen = set()
-    pts  = []
-    for step in steps:
-        for dx in range(-half, half + 1):
-            for dy in range(-half, half + 1):
-                if dx == 0 and dy == 0:
-                    continue
-                q = (p[0] + dx * step, p[1] + dy * step)
-                if q in seen:      #안쪽 원과 겹치는 좌표는 버림
-                    continue
-                seen.add(q)
-                pts.append(q)
-    pts.sort(key=lambda q: (q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2)
+#센터포인트 기준 8방향 (12시부터 시계방향으로 돈다)
+DIRS8 = [
+    ( 0, -1),   #위
+    ( 1, -1),   #오른쪽 위
+    ( 1,  0),   #오른쪽
+    ( 1,  1),   #오른쪽 아래
+    ( 0,  1),   #아래
+    (-1,  1),   #왼쪽 아래
+    (-1,  0),   #왼쪽
+    (-1, -1),   #왼쪽 위
+]
+
+#센터포인트 기준 8방향을 한 바퀴 다 돌고 나서 반지름을 SCAN_GAP 만큼 넓혀 다음 바퀴로 간다
+#구버전은 좌표를 거리순으로 재정렬해서 바퀴가 섞여 돌았음 (70축->95축->70대각->...)
+def _scanpoints(p):
+    pts = []
+    for i in range(SCAN_ROUND):
+        r = SCAN_START + SCAN_GAP * i     #1바퀴 70, 2바퀴 95, 3바퀴 120
+        for dx, dy in DIRS8:
+            pts.append((p[0] + dx * r, p[1] + dy * r))
     return pts
 
 #어택 마우스 셋팅
@@ -292,14 +300,13 @@ def checkrHp():
 #=====================================================================
 # 사냥 루프 (메인 스레드) - 용던
 #=====================================================================
-def huntloop(p, ln, atkvalue):
-    if (ln % 2 == 0):
-        print('len 홀수로 지정')
-        return
-
-    points  = _scanpoints(p, ln)
+def huntloop(p, atkvalue):
+    points  = _scanpoints(p)
     parkpos = (p[0], p[1] + 350)
     cnt     = 0       #클릭 없이 헛돈 횟수
+
+    print('서치 : 8방향 x ' + str(SCAN_ROUND) + '바퀴 (반지름 '
+          + str(SCAN_START) + ' 부터 ' + str(SCAN_GAP) + '씩), 총 ' + str(len(points)) + '점')
 
     settrigger('hunt')
     while ALIVE:
@@ -309,7 +316,7 @@ def huntloop(p, ln, atkvalue):
         # sc.run_pending()
 
         cnt += 1
-        if cnt >= NOHIT_LIMIT:         #10바퀴 동안 못 잡으면 새로고침
+        if cnt >= NOHIT_LIMIT:         #이 횟수만큼 헛돌면 새로고침
             gu.press(KEY_REFRESH, presses=1)
             cnt = 0
 
@@ -324,7 +331,7 @@ def huntloop(p, ln, atkvalue):
                 gu.click()
                 gu.keyUp('ctrl')
                 cnt = 0
-                break                       #가까운 좌표부터 다시 스캔
+                break                       #1바퀴 첫 방향부터 다시 스캔
 
 if __name__ == '__main__':
 
@@ -339,4 +346,4 @@ if __name__ == '__main__':
     checkrHp()               #피 감시
 
     #기존 스캔박스 위치 유지 (원본 시작점이 y로 40px 위에 잡혔음)
-    huntloop([centerpoint[0], centerpoint[1] - 40], 3, attackinfo)
+    huntloop([centerpoint[0], centerpoint[1] - 40], attackinfo)
