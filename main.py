@@ -2,7 +2,7 @@ import time
 import win32gui
 import win32api
 import pyautogui as gu
-import schedule as sc
+# import schedule as sc     #등록된 작업이 없어서 사용 안 함
 import keyboard as k
 import time
 import threading
@@ -15,14 +15,80 @@ try:
 except NameError:
     _BASE_DIR = os.path.dirname(os.path.realpath(sys.argv[0])) if sys.argv and sys.argv[0] else os.getcwd()
 IMAGE_DIR = _BASE_DIR + '\\' + 'image' + '\\'
-print('이미지 경로: ' + IMAGE_DIR)
 
 #최신 pyautogui 는 이미지 못 찾으면 None 대신 ImageNotFoundException 을 던짐
 #아래 코드 전체가 None 비교를 전제로 하므로 예전 동작(None 반환)으로 되돌림
 gu.useImageNotFoundException(False)
 
-ishunting =0
-isture=True
+#=====================================================================
+# 키 맵 : f5~f12 는 버프 전용이라 기능키는 f1~f4 로 내렸다
+# 게임 내 단축키 슬롯도 이 표대로 다시 세팅해야 한다
+#=====================================================================
+KEY_INNER     = 'f1'    #귀환 후 마무리 메뉴 (기존 f10)
+KEY_REFRESH   = 'f2'    #사냥 헛돌 때 새로고침 (기존 f5)
+KEY_TRANSFORM = 'f3'    #변신 (기존 f11)
+KEY_RETURN    = 'f4'    #귀환 (기존 f12)
+
+#버프 슬롯 : (트리거명, 키, 주기(초))  주기 0 = 비활성(타이머 자체를 안 검)
+BUFFS = [
+    ('buff1', 'f5',     0),
+    ('buff2', 'f6',  1800),
+    ('buff3', 'f7',  1800),
+    ('buff4', 'f8',     0),
+    ('buff5', 'f9',  1800),
+    ('buff6', 'f10',  300),
+    ('buff7', 'f11',    0),
+    ('buff8', 'f12',    0),
+]
+BUFFKEY = dict((n, key) for n, key, s in BUFFS)
+
+BUFF_GAP           = 1      #버프 키 누른 뒤 대기(초)
+NOHIT_LIMIT        = 10     #이 횟수만큼 헛돌면 새로고침
+TRANSFORM_INTERVAL = 1200   #변신 주기(초)
+HP_INTERVAL        = 1      #피 감시 주기(초)
+
+#=====================================================================
+# 트리거 : 한 순간에 하나만 True
+#  - TRIGGER 를 바꾸는 것도, 키/마우스를 쓰는 것도 메인 스레드뿐이다
+#  - 타이머 스레드는 PENDING 에 요청만 남기고 물러난다 (마우스 겹침 원천 차단)
+#=====================================================================
+ALIVE = True     #기존 isture. 메인 스레드만 쓴다
+
+TRIGGER = {'hunt': False, 'transform': False, 'return': False}
+for _n, _k, _s in BUFFS:
+    TRIGGER[_n] = False
+
+#처리 우선순위 : 귀환 > 변신 > 버프1..8
+ORDER = ['return', 'transform'] + [n for n, key, s in BUFFS]
+
+PENDING      = {}                 #타이머 스레드가 채우는 실행 요청
+PENDING_LOCK = threading.Lock()
+
+#타이머 스레드가 부르는 유일한 함수. 여기서는 절대 키/마우스를 건드리지 않는다
+def request(name):
+    with PENDING_LOCK:
+        PENDING[name] = True
+
+#대기 중인 요청이 있는지만 확인 (스캔 루프에서 빠르게 체크)
+def haspending():
+    with PENDING_LOCK:
+        return len(PENDING) > 0
+
+#우선순위 순으로 하나 꺼낸다
+def takepending():
+    with PENDING_LOCK:
+        for name in ORDER:
+            if PENDING.pop(name, False):
+                return name
+    return None
+
+#전체 False 로 밀고 name 만 True
+def settrigger(name):
+    for key in TRIGGER:
+        TRIGGER[key] = False
+    if name != None:
+        TRIGGER[name] = True
+    print('트리거 : ' + str(name))
 
 #탐색 튜닝값 (실기에서 조정)
 PROBE_SETTLE = 0.025   # 커서 모양 갱신 대기 최대치(초)
@@ -31,9 +97,9 @@ CTRL_DELAY   = 0.08    # ctrl 누른 뒤 클릭까지(초)
 STEPS        = (70, 95, 120)  # 원 3단계 스텝(=반지름). 한 단계 높을수록 25씩 커짐
 
 #innerauto 튜닝값
-RETURN_WAIT  = 10      # f12 귀환 후 마을 로딩 대기(초)
-INNER_IMG1   = 'inner1.PNG'   # f10 누른 뒤 찾을 이미지 (실제 파일명으로 교체)
-INNER_IMG2   = 'inner2.PNG'   # f1 누른 뒤 찾을 이미지 (실제 파일명으로 교체)
+RETURN_WAIT  = 10      # f4 귀환 후 마을 로딩 대기(초)
+INNER_IMG1   = 'inner1.PNG'   # f1 누른 뒤 찾을 이미지 (실제 파일명으로 교체)
+INNER_IMG2   = 'inner2.PNG'   # 이어서 찾을 이미지 (실제 파일명으로 교체)
 INNER_CONF   = 0.8     # 두 이미지 매칭 신뢰도
 INNER_TRY    = 10      # 이미지 못 찾을 때 재시도 횟수 (1초 간격)
 
@@ -71,46 +137,6 @@ def _scanpoints(p, ln, steps=STEPS):
     pts.sort(key=lambda q: (q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2)
     return pts
 
-#용던
-def attack1(p,len,atkvalue):
-    global isture
-    global ishunting
-    if(len%2 == 0):
-        print('len 홀수로 지정')
-        return
-
-    points  = _scanpoints(p, len)
-    parkpos = (p[0], p[1] + 350)
-    dirty   = False   #직전 프로브 히트 -> 커서가 공격모양으로 남아있음
-    cnt     = 0       #클릭 없이 헛돈 횟수
-
-    while isture:
-        if ishunting != 0:
-            time.sleep(0.2)   #풀스핀 방지
-            continue
-
-        sc.run_pending()
-
-        cnt += 1
-        if cnt >= 15:         #10바퀴 동안 못 잡으면 f5
-            gu.press('f5', presses=1)
-            cnt = 0
-
-        for (x, y) in points:
-            if (not isture) or ishunting != 0:
-                break
-            if 19:                    #히트 직후에만 커서 초기화
-                _movefast(parkpos[0], parkpos[1])
-                time.sleep(PROBE_SETTLE)
-                dirty = False
-            if _probe(x, y, atkvalue):
-                gu.keyDown('ctrl')
-                time.sleep(CTRL_DELAY)
-                gu.click()
-                gu.keyUp('ctrl')
-                dirty = True
-                cnt = 0
-                break                       #가까운 좌표부터 다시 스캔
 #어택 마우스 셋팅
 def setattckinfo(centerpoint):
     gu.moveTo(centerpoint[0],centerpoint[1]-200)
@@ -126,47 +152,24 @@ def setattckinfo(centerpoint):
 
 
 #한/영 전환. keyboard 라이브러리에 'hangul' 키 이름이 없어서 VK 코드를 직접 쏨
-VK_HANGUL       = 0x15
-KEYEVENTF_KEYUP = 0x0002
-
-def _togglehangul():
-    win32api.keybd_event(VK_HANGUL, 0, 0, 0)
-    time.sleep(0.05)
-    win32api.keybd_event(VK_HANGUL, 0, KEYEVENTF_KEYUP, 0)
-    time.sleep(0.2)
-
-#채팅창에 ".버프" 입력 (매크로 명령어)
-def sendbuffchat():
-    print('.버프 입력')
-    gu.press('enter', presses=1)        #채팅창 열기
-    time.sleep(0.3)
-    k.write('.버프', delay=0.05)        #유니코드로 직접 주입 (IME 안 거침)
-    time.sleep(0.3)
-    #한/영 토글이 게임 창에 안 먹혀서 .qjvm 이 그대로 찍힘. 아래 IME 방식은 보류
-    # _togglehangul()                        #한글 입력 모드로 전환
-    # gu.typewrite('.qjvm', interval=0.05)   # . + 버(qj) + 프(vm)
-    # time.sleep(0.3)
-    # _togglehangul()                        #영문 모드로 복구 (F키 단축키 보호)
-    gu.press('enter', presses=1)        #전송
-
-def setbuff30():
-    time.sleep(1)
-    gu.press('f6', presses=1)
-    time.sleep(1)
-    gu.press('f7', presses=1)
-    time.sleep(1)
-    gu.press('f9', presses=1)
-    time.sleep(1)
-    sendbuffchat()
-
-    threading.Timer(1800, setbuff30).start()
-
-def setbuff10():
-    gu.press('f10', presses=1)
-    time.sleep(1)
-    sendbuffchat()
-
-    threading.Timer(300, setbuff10).start()
+#채팅버프(.버프) 를 빼면서 같이 쉼. 나중에 채팅 입력이 필요하면 되살린다
+# VK_HANGUL       = 0x15
+# KEYEVENTF_KEYUP = 0x0002
+#
+# def _togglehangul():
+#     win32api.keybd_event(VK_HANGUL, 0, 0, 0)
+#     time.sleep(0.05)
+#     win32api.keybd_event(VK_HANGUL, 0, KEYEVENTF_KEYUP, 0)
+#     time.sleep(0.2)
+#
+# #채팅창에 ".버프" 입력 (매크로 명령어)
+# def sendbuffchat():
+#     print('.버프 입력')
+#     gu.press('enter', presses=1)        #채팅창 열기
+#     time.sleep(0.3)
+#     k.write('.버프', delay=0.05)        #유니코드로 직접 주입 (IME 안 거침)
+#     time.sleep(0.3)
+#     gu.press('enter', presses=1)        #전송
 
 #이미지 나올 때까지 재시도하고 찾으면 클릭. 끝내 못 찾으면 False
 def _findandclick(name):
@@ -182,48 +185,44 @@ def _findandclick(name):
     print('innerauto : ' + name + ' 못 찾음')
     return False
 
-#귀환 후 마무리 : f10 -> 이미지클릭 -> f1 -> 이미지클릭 -> 스크립트 종료
+#귀환 후 마무리 : f1 -> 이미지1 클릭 -> 이미지2 클릭 -> 스크립트 종료
 def innerauto():
     print('innerauto 시작')
 
-    #1. f10
-    gu.press('f10', presses=1)
+    #1. f1 로 메뉴 열기
+    gu.press(KEY_INNER, presses=1)
     time.sleep(1)
-    #2~3. 이미지 찾고 클릭
+    #2. 이미지1 찾고 클릭
     if not _findandclick(INNER_IMG1):
         print('innerauto 중단 - 스크립트 종료')
         os._exit(0)
     time.sleep(1)
 
-    #4. f1
-    gu.press('f1', presses=1)
-    time.sleep(1)
-    #5~6. 이미지 찾고 클릭
+    #3. 이미지2 찾고 클릭
     if not _findandclick(INNER_IMG2):
         print('innerauto 중단 - 스크립트 종료')
         os._exit(0)
     time.sleep(1)
 
-    #7. 시스템 종료 (매크로 프로세스만 즉시 종료)
+    #4. 시스템 종료 (매크로 프로세스만 즉시 종료)
     print('innerauto 완료 - 스크립트 종료')
     os._exit(0)
 
-#피 확인
-def checkrHp():
-    global isture
-    file_path = IMAGE_DIR
-    checkrmp = gu.locateCenterOnScreen(file_path + 'checkhp.PNG', confidence=0.8)
-    if checkrmp != None:
-        print('피 소모 완료 귀한!')
-        gu.press('f12', presses=1)
-        isture=False
-        time.sleep(RETURN_WAIT)   #귀환 완료 대기
-        innerauto()               #여기서 프로세스가 끝나므로 타이머 재등록 안함
-        return
-    threading.Timer(1, checkrHp).start()
+#=====================================================================
+# 실행부 : 전부 메인 스레드에서만 돈다
+#=====================================================================
+
+#버프 : F키 한 번
+def dobuff(name):
+    key = BUFFKEY[name]
+    print(name + ' 버프 : ' + key)
+    gu.press(key, presses=1)
+    time.sleep(BUFF_GAP)
+
 #변신
-def transform():
-    gu.press('f11', presses=1)
+def dotransform():
+    gu.press(KEY_TRANSFORM, presses=1)
+    time.sleep(1)
     file_path = IMAGE_DIR
     lv80 = gu.locateCenterOnScreen(file_path + 'lv80.PNG', confidence=0.8)
     if lv80 != None:
@@ -234,44 +233,110 @@ def transform():
             gu.moveTo(knight)
             gu.click()
 
-    threading.Timer(1200, transform).start()
+#귀환 : 여기서 프로세스가 끝난다
+def doreturn():
+    global ALIVE
+    gu.press(KEY_RETURN, presses=1)
+    ALIVE = False
+    time.sleep(RETURN_WAIT)   #귀환 완료 대기
+    innerauto()               #os._exit(0) 로 끝남
+
+#대기 중인 트리거 하나를 꺼내 실행. 실행했으면 True
+#사냥 트리거 False -> 해당 트리거 True -> 동작 -> 사냥 트리거 True 복귀
+def runpending():
+    name = takepending()
+    if name == None:
+        return False
+
+    settrigger(name)              #사냥 트리거는 여기서 자동으로 False
+    if name == 'return':
+        doreturn()
+    elif name == 'transform':
+        dotransform()
+    else:
+        dobuff(name)
+    settrigger('hunt')            #끝나면 사냥 트리거 복구
+    return True
+
+#=====================================================================
+# 타이머 : request() 와 재등록 외에는 아무것도 하지 않는다
+#=====================================================================
+
+def bufftimer(name, interval):
+    request(name)
+    threading.Timer(interval, bufftimer, args=(name, interval)).start()
+
+#활성 슬롯만 즉시 1회 요청하고 타이머 등록
+def startbuffs():
+    for name, key, interval in BUFFS:
+        if interval > 0:
+            request(name)
+            threading.Timer(interval, bufftimer, args=(name, interval)).start()
+        else:
+            print(name + '(' + key + ') 주기 0 - 비활성')
+
+def transformtimer():
+    request('transform')
+    threading.Timer(TRANSFORM_INTERVAL, transformtimer).start()
+
+#피 확인. 이미지 매칭은 입력을 안 건드리므로 스레드에서 해도 안전
+def checkrHp():
+    file_path = IMAGE_DIR
+    checkrmp = gu.locateCenterOnScreen(file_path + 'checkhp.PNG', confidence=0.8)
+    if checkrmp != None:
+        print('피 소모 완료 귀환!')
+        request('return')
+        return                #메인 루프가 처리하고 종료하므로 타이머 재등록 안 함
+    threading.Timer(HP_INTERVAL, checkrHp).start()
+
+#=====================================================================
+# 사냥 루프 (메인 스레드) - 용던
+#=====================================================================
+def huntloop(p, ln, atkvalue):
+    if (ln % 2 == 0):
+        print('len 홀수로 지정')
+        return
+
+    points  = _scanpoints(p, ln)
+    parkpos = (p[0], p[1] + 350)
+    cnt     = 0       #클릭 없이 헛돈 횟수
+
+    settrigger('hunt')
+    while ALIVE:
+        if runpending():       #버프/변신/귀환이 먼저. 처리했으면 처음부터
+            continue
+
+        # sc.run_pending()
+
+        cnt += 1
+        if cnt >= NOHIT_LIMIT:         #10바퀴 동안 못 잡으면 새로고침
+            gu.press(KEY_REFRESH, presses=1)
+            cnt = 0
+
+        for (x, y) in points:
+            if (not ALIVE) or haspending():   #버프 대기중이면 스캔 중단하고 바깥에서 처리
+                break
+            _movefast(parkpos[0], parkpos[1])   #커서 초기화 (park)
+            time.sleep(PROBE_SETTLE)
+            if _probe(x, y, atkvalue):
+                gu.keyDown('ctrl')
+                time.sleep(CTRL_DELAY)
+                gu.click()
+                gu.keyUp('ctrl')
+                cnt = 0
+                break                       #가까운 좌표부터 다시 스캔
 
 if __name__ == '__main__':
 
-    count = 1
-    attackinfo=[]
     centerpoint = [625, 480]
     #FAILSAFE 대체 : tab 으로 즉시 종료
     k.add_hotkey('tab', lambda: os._exit(0))
     attackinfo = setattckinfo(centerpoint)
-    transform()
     print(attackinfo)
 
-    checkrHp()
-    setbuff10()
-    setbuff30()
+    transformtimer()         #시작 시 변신 1회 요청 + 주기 타이머
+    startbuffs()             #활성 버프 슬롯 : 즉시 1회 요청 + 주기 타이머
+    checkrHp()               #피 감시
 
-    print(attackinfo)
-    while isture:
-        if ishunting == 0:
-            sc.run_pending()
-            #기존 스캔박스 위치 유지 (원본 시작점이 y로 40px 위에 잡혔음)
-            attack1([centerpoint[0], centerpoint[1] - 40], 3, attackinfo)
-
-            count += 1
-            if count % 10 == 0:
-                print('10회마다 새로고침')
-                gu.press('f5', presses=1)
-                count=0
-
-
-
-
-
-
-
-
-
-
-
-
+    #기존 스캔박스 위치 유지 (원본 시작점이 y로 40px 위에 잡혔음)
+    huntloop([centerpoint[0], centerpoint[1] - 40], 3, attackinfo)
