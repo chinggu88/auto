@@ -61,8 +61,13 @@ SCAN_ROUND = 1     # 총 바퀴 수 -> 반지름 70 한 단계만
 
 BUFF_GAP    = 1    #버프 키 누른 뒤 대기(초)
 NOHIT_LIMIT = 5    #이 횟수만큼 헛돌면 새로고침
-HP_INTERVAL = 1    #피 감시 주기(초)
+HP_INTERVAL = 1    #피/마크 감시 주기(초)
 START_DELAY = 3    #시작 버튼 누르고 게임 창 활성화할 시간(초)
+
+HP_IMG    = 'checkhp.PNG'   #피 부족 경고 UI
+HP_CONF   = 0.8
+MARK_IMG  = 'mark1.PNG'     #적대 혈맹 마크
+MARK_CONF = 0.55            #마크는 배경에 묻혀서 신뢰도를 낮게 잡는다 (구버전 oman.py 값)
 
 #=====================================================================
 # 로그 : 매크로 스레드에서 찍고 GUI 스레드가 꺼내 뿌린다
@@ -344,11 +349,19 @@ def checkrHp():
     if not ALIVE:
         return
     file_path = IMAGE_DIR
-    checkrmp = gu.locateCenterOnScreen(file_path + 'checkhp.PNG', confidence=0.8)
-    if checkrmp != None:
+
+    #1. 피 부족
+    if gu.locateCenterOnScreen(file_path + HP_IMG, confidence=HP_CONF) != None:
         log('피 소모 완료 귀환!')
         request('return')
         return                #매크로 루프가 처리하고 종료하므로 타이머 재등록 안 함
+
+    #2. 적대 혈맹 마크
+    if gu.locateCenterOnScreen(file_path + MARK_IMG, confidence=MARK_CONF) != None:
+        log('적대 마크 발견 (' + MARK_IMG + ') 귀환!')
+        request('return')
+        return
+
     _arm(HP_INTERVAL, checkrHp)
 
 #=====================================================================
