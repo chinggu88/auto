@@ -62,7 +62,9 @@ SCAN_OFFSET_Y = -38   # 스캔 중심의 y 보정(px). 음수면 위, 양수면 
                       # 원본은 -40 이었고 어택포인트를 2px 내려서 -38
 
 BUFF_GAP    = 1    #버프 키 누른 뒤 대기(초)
-NOHIT_LIMIT = 5    #이 횟수만큼 헛돌면 새로고침
+NOHIT_LIMIT = 5    #이 횟수만큼 헛돌면 새로고침 (칼질하면 초기화됨)
+LOOP_LIMIT  = 50   #공격 루프 최대 횟수. 채우면 새로고침
+                   #칼질을 계속 해도 안 줄고, 새로고침될 때만 초기화된다
 HP_INTERVAL = 1    #피/마크 감시 주기(초)
 START_DELAY = 3    #시작 버튼 누르고 게임 창 활성화할 시간(초)
 
@@ -372,7 +374,8 @@ def checkrHp():
 def huntloop(p, atkvalue):
     points  = _scanpoints(p)
     parkpos = (p[0], p[1] + 350)
-    cnt     = 0       #클릭 없이 헛돈 횟수
+    cnt     = 0       #클릭 없이 헛돈 횟수 (칼질하면 초기화)
+    loopcnt = 0       #공격 루프 누적 횟수 (새로고침될 때만 초기화)
 
     log('서치 : ' + str(SCAN_DIRS) + '방향 x ' + str(SCAN_ROUND) + '바퀴 (반지름 '
         + str(SCAN_START) + ('' if SCAN_ROUND == 1 else ' 부터 ' + str(SCAN_GAP) + '씩')
@@ -385,11 +388,16 @@ def huntloop(p, atkvalue):
 
         # sc.run_pending()
 
-        cnt += 1
-        if cnt >= NOHIT_LIMIT and KEY_REFRESH != None:   #이 횟수만큼 헛돌면 새로고침
-            log('새로고침 : ' + KEY_REFRESH)
+        cnt     += 1
+        loopcnt += 1
+        #헛돌았거나(cnt) 루프를 최대 횟수만큼 돌았으면(loopcnt) 새로고침
+        if KEY_REFRESH != None and (cnt >= NOHIT_LIMIT or loopcnt >= LOOP_LIMIT):
+            log('새로고침 : ' + KEY_REFRESH
+                + '  (헛돔 ' + str(cnt) + '/' + str(NOHIT_LIMIT)
+                + ', 누적 ' + str(loopcnt) + '/' + str(LOOP_LIMIT) + ')')
             gu.press(KEY_REFRESH, presses=1)
-            cnt = 0
+            cnt     = 0
+            loopcnt = 0       #누적 횟수는 여기서만 초기화된다
 
         for (x, y) in points:
             if (not ALIVE) or haspending():   #버프 대기중이면 스캔 중단하고 바깥에서 처리
