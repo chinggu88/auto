@@ -6,8 +6,11 @@ import pyautogui as gu
 import keyboard as k
 import time
 import threading
+import queue
 import os.path
 import sys
+import tkinter as tk
+from tkinter import ttk
 
 #이미지 폴더 경로 (콘솔/exec 실행이라 __file__ 이 없을 때는 argv[0] -> cwd 순으로 폴백)
 try:
@@ -21,45 +24,68 @@ IMAGE_DIR = _BASE_DIR + '\\' + 'image' + '\\'
 gu.useImageNotFoundException(False)
 
 #=====================================================================
-# 키 맵 : f5~f12 는 버프 전용이라 기능키는 f1~f4 로 내렸다
-# 게임 내 단축키 슬롯도 이 표대로 다시 세팅해야 한다
+# 고정 설정 (UI 에 안 올린 값들. 실기에서 조정)
 #=====================================================================
-KEY_INNER     = 'f1'    #귀환 후 마무리 메뉴 (기존 f10)
-KEY_REFRESH   = 'f5'    #사냥 헛돌 때 새로고침 (기존 f5)
-KEY_TRANSFORM = 'f11'    #변신 (기존 f11)
-KEY_RETURN    = 'f12'    #귀환 (기존 f12)
+CENTERPOINT = [625, 480]
+KEY_INNER   = 'f1'     #귀환 후 마무리 메뉴
 
-#버프 슬롯 : (트리거명, 키, 주기(초))  주기 0 = 비활성(타이머 자체를 안 검)
-BUFFS = [
-    ('buff1', 'f5',     0),
-    ('buff2', 'f6',  1800),
-    ('buff3', 'f7',  1800),
-    ('buff4', 'f8',     0),
-    ('buff5', 'f9',  1800),
-    ('buff6', 'f10',  300),
-    ('buff7', 'f11',    0),
-    ('buff8', 'f12',    0),
-]
-BUFFKEY = dict((n, key) for n, key, s in BUFFS)
+PROBE_SETTLE = 0.025   # 커서 모양 갱신 대기 최대치(초)
+PROBE_STEP   = 0.003   # 폴링 간격(초)
+CTRL_DELAY   = 0.08    # ctrl 누른 뒤 클릭까지(초)
 
-BUFF_GAP           = 1      #버프 키 누른 뒤 대기(초)
-NOHIT_LIMIT        = 5    #이 횟수만큼 헛돌면 새로고침
-TRANSFORM_INTERVAL = 1200   #변신 주기(초)
-HP_INTERVAL        = 1      #피 감시 주기(초)
+#서치 범위 : 센터포인트 기준 8방향을 SCAN_GAP 씩 넓혀가며 SCAN_ROUND 바퀴
+SCAN_START = 70    # 1바퀴 반지름(px)
+SCAN_GAP   = 25    # 바퀴 간 간격(px). 일정하게 벌어진다
+SCAN_ROUND = 3     # 총 바퀴 수 -> 70 / 95 / 120
+
+BUFF_GAP    = 1    #버프 키 누른 뒤 대기(초)
+NOHIT_LIMIT = 5    #이 횟수만큼 헛돌면 새로고침
+HP_INTERVAL = 1    #피 감시 주기(초)
+START_DELAY = 3    #시작 버튼 누르고 게임 창 활성화할 시간(초)
+
+RETURN_WAIT  = 10      # 귀환 후 마을 로딩 대기(초)
+INNER_IMG1   = 'inner1.PNG'   # 메뉴 열고 찾을 이미지 (실제 파일명으로 교체)
+INNER_IMG2   = 'inner2.PNG'   # 이어서 찾을 이미지 (실제 파일명으로 교체)
+INNER_CONF   = 0.8     # 두 이미지 매칭 신뢰도
+INNER_TRY    = 10      # 이미지 못 찾을 때 재시도 횟수 (1초 간격)
+
+#=====================================================================
+# 로그 : 매크로 스레드에서 찍고 GUI 스레드가 꺼내 뿌린다
+# tkinter 는 스레드 안전하지 않아서 위젯을 직접 건드리지 않는다
+#=====================================================================
+LOGQ = queue.Queue()
+
+def log(msg):
+    line = time.strftime('%H:%M:%S') + '  ' + str(msg)
+    try:
+        LOGQ.put_nowait(line)
+    except Exception:
+        pass
+    print(line)
+
+#=====================================================================
+# 런타임 설정 : GUI 가 시작 전에 채운다
+#=====================================================================
+FKEYS = ['f5', 'f6', 'f7', 'f8', 'f9', 'f10', 'f11', 'f12']
+
+BUFFS   = []      # [(트리거명, 키, 주기(초))]  주기 0 = 비활성
+BUFFKEY = {}      # 트리거명 -> 키
+
+KEY_REFRESH        = None   #사냥 헛돌 때 새로고침
+KEY_TRANSFORM      = None   #변신
+KEY_RETURN         = None   #귀환
+TRANSFORM_INTERVAL = 0      #변신 주기(초). 0 이면 변신 안 함
 
 #=====================================================================
 # 트리거 : 한 순간에 하나만 True
-#  - TRIGGER 를 바꾸는 것도, 키/마우스를 쓰는 것도 메인 스레드뿐이다
+#  - TRIGGER 를 바꾸는 것도, 키/마우스를 쓰는 것도 매크로 스레드뿐이다
 #  - 타이머 스레드는 PENDING 에 요청만 남기고 물러난다 (마우스 겹침 원천 차단)
+#  - GUI 스레드는 입력을 절대 보내지 않는다
 #=====================================================================
-ALIVE = True     #기존 isture. 메인 스레드만 쓴다
+ALIVE = False
 
 TRIGGER = {'hunt': False, 'transform': False, 'return': False}
-for _n, _k, _s in BUFFS:
-    TRIGGER[_n] = False
-
-#처리 우선순위 : 귀환 > 변신 > 버프1..8
-ORDER = ['return', 'transform'] + [n for n, key, s in BUFFS]
+ORDER   = ['return', 'transform']    #처리 우선순위 : 귀환 > 변신 > 버프1..8
 
 PENDING      = {}                 #타이머 스레드가 채우는 실행 요청
 PENDING_LOCK = threading.Lock()
@@ -88,25 +114,7 @@ def settrigger(name):
         TRIGGER[key] = False
     if name != None:
         TRIGGER[name] = True
-    print('트리거 : ' + str(name))
-
-#탐색 튜닝값 (실기에서 조정)
-PROBE_SETTLE = 0.025   # 커서 모양 갱신 대기 최대치(초)
-PROBE_STEP   = 0.003   # 폴링 간격(초)
-CTRL_DELAY   = 0.08    # ctrl 누른 뒤 클릭까지(초)
-
-#서치 범위 : 센터포인트 기준 8방향을 SCAN_GAP 씩 넓혀가며 SCAN_ROUND 바퀴
-SCAN_START = 70    # 1바퀴 반지름(px)
-SCAN_GAP   = 25    # 바퀴 간 간격(px). 일정하게 벌어진다
-SCAN_ROUND = 3     # 총 바퀴 수 -> 70 / 95 / 120
-# STEPS      = (70, 95, 120)   #구버전 : 반지름을 직접 나열했음
-
-#innerauto 튜닝값
-RETURN_WAIT  = 10      # f4 귀환 후 마을 로딩 대기(초)
-INNER_IMG1   = 'inner1.PNG'   # f1 누른 뒤 찾을 이미지 (실제 파일명으로 교체)
-INNER_IMG2   = 'inner2.PNG'   # 이어서 찾을 이미지 (실제 파일명으로 교체)
-INNER_CONF   = 0.8     # 두 이미지 매칭 신뢰도
-INNER_TRY    = 10      # 이미지 못 찾을 때 재시도 횟수 (1초 간격)
+    log('트리거 : ' + str(name))
 
 #pyautogui 를 거치지 않는 저수준 이동 (PAUSE 우회)
 def _movefast(x, y):
@@ -172,7 +180,7 @@ def setattckinfo(centerpoint):
 #
 # #채팅창에 ".버프" 입력 (매크로 명령어)
 # def sendbuffchat():
-#     print('.버프 입력')
+#     log('.버프 입력')
 #     gu.press('enter', presses=1)        #채팅창 열기
 #     time.sleep(0.3)
 #     k.write('.버프', delay=0.05)        #유니코드로 직접 주입 (IME 안 거침)
@@ -190,45 +198,49 @@ def _findandclick(name):
             gu.click()
             return True
         time.sleep(1)
-    print('innerauto : ' + name + ' 못 찾음')
+    log('innerauto : ' + name + ' 못 찾음')
     return False
 
 #귀환 후 마무리 : f1 -> 이미지1 클릭 -> 이미지2 클릭 -> 스크립트 종료
 def innerauto():
-    print('innerauto 시작')
+    log('innerauto 시작')
 
     #1. f1 로 메뉴 열기
     gu.press(KEY_INNER, presses=1)
     time.sleep(1)
     #2. 이미지1 찾고 클릭
     if not _findandclick(INNER_IMG1):
-        print('innerauto 중단 - 스크립트 종료')
+        log('innerauto 중단 - 스크립트 종료')
+        time.sleep(1)
         os._exit(0)
     time.sleep(1)
 
     #3. 이미지2 찾고 클릭
     if not _findandclick(INNER_IMG2):
-        print('innerauto 중단 - 스크립트 종료')
+        log('innerauto 중단 - 스크립트 종료')
+        time.sleep(1)
         os._exit(0)
     time.sleep(1)
 
     #4. 시스템 종료 (매크로 프로세스만 즉시 종료)
-    print('innerauto 완료 - 스크립트 종료')
+    log('innerauto 완료 - 스크립트 종료')
+    time.sleep(1)
     os._exit(0)
 
 #=====================================================================
-# 실행부 : 전부 메인 스레드에서만 돈다
+# 실행부 : 전부 매크로 스레드에서만 돈다
 #=====================================================================
 
 #버프 : F키 한 번
 def dobuff(name):
     key = BUFFKEY[name]
-    print(name + ' 버프 : ' + key)
+    log(name + ' 버프 : ' + key)
     gu.press(key, presses=1)
     time.sleep(BUFF_GAP)
 
 #변신
 def dotransform():
+    log('변신 : ' + str(KEY_TRANSFORM))
     gu.press(KEY_TRANSFORM, presses=1)
     time.sleep(1)
     file_path = IMAGE_DIR
@@ -240,10 +252,13 @@ def dotransform():
         if knight != None:
             gu.moveTo(knight)
             gu.click()
+    else:
+        log('변신 메뉴(lv80.PNG) 못 찾음')
 
 #귀환 : 여기서 프로세스가 끝난다
 def doreturn():
     global ALIVE
+    log('귀환 : ' + str(KEY_RETURN))
     gu.press(KEY_RETURN, presses=1)
     ALIVE = False
     time.sleep(RETURN_WAIT)   #귀환 완료 대기
@@ -271,6 +286,8 @@ def runpending():
 #=====================================================================
 
 def bufftimer(name, interval):
+    if not ALIVE:
+        return
     request(name)
     threading.Timer(interval, bufftimer, args=(name, interval)).start()
 
@@ -278,35 +295,38 @@ def bufftimer(name, interval):
 def startbuffs():
     for name, key, interval in BUFFS:
         if interval > 0:
+            log(name + '(' + key + ') 버프 ' + str(interval) + '초 주기')
             request(name)
             threading.Timer(interval, bufftimer, args=(name, interval)).start()
-        else:
-            print(name + '(' + key + ') 주기 0 - 비활성')
 
 def transformtimer():
+    if not ALIVE:
+        return
     request('transform')
     threading.Timer(TRANSFORM_INTERVAL, transformtimer).start()
 
 #피 확인. 이미지 매칭은 입력을 안 건드리므로 스레드에서 해도 안전
 def checkrHp():
+    if not ALIVE:
+        return
     file_path = IMAGE_DIR
     checkrmp = gu.locateCenterOnScreen(file_path + 'checkhp.PNG', confidence=0.8)
     if checkrmp != None:
-        print('피 소모 완료 귀환!')
+        log('피 소모 완료 귀환!')
         request('return')
-        return                #메인 루프가 처리하고 종료하므로 타이머 재등록 안 함
+        return                #매크로 루프가 처리하고 종료하므로 타이머 재등록 안 함
     threading.Timer(HP_INTERVAL, checkrHp).start()
 
 #=====================================================================
-# 사냥 루프 (메인 스레드) - 용던
+# 사냥 루프 (매크로 스레드) - 용던
 #=====================================================================
 def huntloop(p, atkvalue):
     points  = _scanpoints(p)
     parkpos = (p[0], p[1] + 350)
     cnt     = 0       #클릭 없이 헛돈 횟수
 
-    print('서치 : 8방향 x ' + str(SCAN_ROUND) + '바퀴 (반지름 '
-          + str(SCAN_START) + ' 부터 ' + str(SCAN_GAP) + '씩), 총 ' + str(len(points)) + '점')
+    log('서치 : 8방향 x ' + str(SCAN_ROUND) + '바퀴 (반지름 '
+        + str(SCAN_START) + ' 부터 ' + str(SCAN_GAP) + '씩), 총 ' + str(len(points)) + '점')
 
     settrigger('hunt')
     while ALIVE:
@@ -316,7 +336,8 @@ def huntloop(p, atkvalue):
         # sc.run_pending()
 
         cnt += 1
-        if cnt >= NOHIT_LIMIT:         #이 횟수만큼 헛돌면 새로고침
+        if cnt >= NOHIT_LIMIT and KEY_REFRESH != None:   #이 횟수만큼 헛돌면 새로고침
+            log('새로고침 : ' + KEY_REFRESH)
             gu.press(KEY_REFRESH, presses=1)
             cnt = 0
 
@@ -333,17 +354,233 @@ def huntloop(p, atkvalue):
                 cnt = 0
                 break                       #1바퀴 첫 방향부터 다시 스캔
 
+#=====================================================================
+# GUI 가 넘긴 설정을 전역에 반영
+#=====================================================================
+def applyconfig(seconds, roles):
+    #seconds : {키 -> 초},  roles : {'return'/'refresh'/'transform' -> 키 or None}
+    global BUFFS, BUFFKEY, TRIGGER, ORDER, PENDING
+    global KEY_RETURN, KEY_REFRESH, KEY_TRANSFORM, TRANSFORM_INTERVAL
+
+    KEY_RETURN    = roles.get('return')
+    KEY_REFRESH   = roles.get('refresh')
+    KEY_TRANSFORM = roles.get('transform')
+
+    TRANSFORM_INTERVAL = seconds.get(KEY_TRANSFORM, 0) if KEY_TRANSFORM else 0
+
+    #역할이 지정된 키는 버프 슬롯에서 뺀다
+    taken = set(v for v in roles.values() if v)
+    BUFFS = []
+    for i, key in enumerate(FKEYS):
+        if key in taken:
+            continue
+        BUFFS.append(('buff' + str(i + 1), key, seconds.get(key, 0)))
+    BUFFKEY = dict((n, key) for n, key, s in BUFFS)
+
+    TRIGGER = {'hunt': False, 'transform': False, 'return': False}
+    for n, key, s in BUFFS:
+        TRIGGER[n] = False
+    ORDER = ['return', 'transform'] + [n for n, key, s in BUFFS]
+    with PENDING_LOCK:
+        PENDING = {}
+
+#매크로 본체. GUI 스레드가 아니라 전용 스레드에서 돈다
+def runmacro():
+    global ALIVE
+    try:
+        for i in range(START_DELAY, 0, -1):
+            log('게임 창을 활성화하세요... ' + str(i))
+            time.sleep(1)
+
+        ALIVE = True
+        k.add_hotkey('tab', lambda: os._exit(0))   #FAILSAFE 대체 : tab 으로 즉시 종료
+        log('tab 키를 누르면 즉시 종료')
+
+        atk = setattckinfo(CENTERPOINT)
+        log('공격 커서 : ' + str(atk))
+
+        if KEY_TRANSFORM != None and TRANSFORM_INTERVAL > 0:
+            log('변신(' + KEY_TRANSFORM + ') ' + str(TRANSFORM_INTERVAL) + '초 주기')
+            transformtimer()
+        else:
+            log('변신 미지정 - 변신 끔')
+
+        startbuffs()
+
+        if KEY_RETURN != None:
+            log('귀환(' + KEY_RETURN + ') - 피 감시 시작')
+            checkrHp()
+        else:
+            log('귀환키 미지정 - 피 감시 끔')
+
+        if KEY_REFRESH == None:
+            log('새로고침키 미지정 - 새로고침 끔')
+
+        huntloop([CENTERPOINT[0], CENTERPOINT[1] - 40], atk)
+        log('사냥 루프 종료')
+    except Exception as e:
+        ALIVE = False
+        log('매크로 오류 : ' + str(e))
+
+#=====================================================================
+# GUI
+#=====================================================================
+ROLES = [('return', '귀환'), ('refresh', '새로고침'), ('transform', '변신')]
+
+class App:
+    def __init__(self, root):
+        self.root    = root
+        self.started = False
+        self.sec     = {}    #키 -> StringVar (주기)
+        self.entry   = {}    #키 -> Entry
+        self.note    = {}    #키 -> Label (주기 설명)
+        self.role    = {}    #(키, 역할) -> BooleanVar
+        self.check   = {}    #(키, 역할) -> Checkbutton
+
+        root.title('사냥 매크로')
+        root.protocol('WM_DELETE_WINDOW', lambda: os._exit(0))
+
+        #--- 키 설정 표 ---
+        box = ttk.LabelFrame(root, text='버프 키 설정 (f5 ~ f12)')
+        box.pack(fill='x', padx=10, pady=(10, 4))
+
+        ttk.Label(box, text='키',      width=6,  anchor='center').grid(row=0, column=0, padx=4, pady=4)
+        ttk.Label(box, text='주기(초)', width=10, anchor='center').grid(row=0, column=1, padx=4, pady=4)
+        for c, (rid, label) in enumerate(ROLES):
+            ttk.Label(box, text=label, width=9, anchor='center').grid(row=0, column=2 + c, padx=4, pady=4)
+        ttk.Label(box, text='', width=14).grid(row=0, column=5, padx=4)
+
+        for r, key in enumerate(FKEYS, start=1):
+            ttk.Label(box, text=key.upper(), width=6, anchor='center').grid(row=r, column=0, padx=4, pady=2)
+
+            var = tk.StringVar(value='0')
+            self.sec[key] = var
+            ent = ttk.Entry(box, textvariable=var, width=10, justify='center')
+            ent.grid(row=r, column=1, padx=4, pady=2)
+            self.entry[key] = ent
+
+            for c, (rid, label) in enumerate(ROLES):
+                bv = tk.BooleanVar(value=False)
+                self.role[(key, rid)] = bv
+                cb = ttk.Checkbutton(box, variable=bv,
+                                     command=lambda kk=key, rr=rid: self.onrole(kk, rr))
+                cb.grid(row=r, column=2 + c, padx=4, pady=2)
+                self.check[(key, rid)] = cb
+
+            nl = ttk.Label(box, text='버프 주기', width=14, foreground='#555')
+            nl.grid(row=r, column=5, padx=4, pady=2, sticky='w')
+            self.note[key] = nl
+
+        ttk.Label(root, foreground='#555',
+                  text='귀환 / 새로고침 / 변신 은 각각 키 하나에만 지정됩니다. '
+                       '체크한 키 중 변신만 주기를 씁니다.').pack(anchor='w', padx=12)
+
+        #--- 시작 버튼 ---
+        self.btn = ttk.Button(root, text='시작하기', command=self.onstart)
+        self.btn.pack(fill='x', padx=10, pady=8)
+
+        #--- 로그 ---
+        logbox = ttk.LabelFrame(root, text='로그')
+        logbox.pack(fill='both', expand=True, padx=10, pady=(0, 10))
+        self.text = tk.Text(logbox, height=16, width=72, state='disabled', wrap='none')
+        sb = ttk.Scrollbar(logbox, orient='vertical', command=self.text.yview)
+        self.text.configure(yscrollcommand=sb.set)
+        self.text.pack(side='left', fill='both', expand=True)
+        sb.pack(side='right', fill='y')
+
+        self.refreshrows()
+        self.drainlog()
+
+    #체크박스 하나가 켜지면 같은 역할의 다른 키, 같은 키의 다른 역할을 끈다
+    def onrole(self, key, rid):
+        if self.role[(key, rid)].get():
+            for other in FKEYS:
+                if other != key:
+                    self.role[(other, rid)].set(False)
+            for orid, label in ROLES:
+                if orid != rid:
+                    self.role[(key, orid)].set(False)
+        self.refreshrows()
+
+    def roleof(self, key):
+        for rid, label in ROLES:
+            if self.role[(key, rid)].get():
+                return rid
+        return None
+
+    #귀환/새로고침으로 잡힌 키는 주기 입력을 막는다. 변신은 주기를 쓴다
+    def refreshrows(self):
+        for key in FKEYS:
+            rid = self.roleof(key)
+            if rid == 'transform':
+                self.entry[key].configure(state='normal')
+                self.note[key].configure(text='변신 주기')
+            elif rid != None:
+                self.entry[key].configure(state='disabled')
+                self.note[key].configure(text='주기 없음')
+            else:
+                self.entry[key].configure(state='normal')
+                self.note[key].configure(text='버프 주기')
+
+    def lockui(self):
+        for key in FKEYS:
+            self.entry[key].configure(state='disabled')
+            for rid, label in ROLES:
+                self.check[(key, rid)].configure(state='disabled')
+        self.btn.configure(state='disabled', text='동작 중')
+
+    def onstart(self):
+        if self.started:
+            return
+
+        seconds = {}
+        for key in FKEYS:
+            raw = self.sec[key].get().strip()
+            if raw == '':
+                raw = '0'
+            if not raw.isdigit():
+                log('시작 실패 : ' + key.upper() + ' 주기는 0 이상 정수만 (' + raw + ')')
+                return
+            seconds[key] = int(raw)
+
+        roles = {}
+        for rid, label in ROLES:
+            roles[rid] = None
+            for key in FKEYS:
+                if self.role[(key, rid)].get():
+                    roles[rid] = key
+                    break
+
+        applyconfig(seconds, roles)
+
+        log('=== 설정 ===')
+        for rid, label in ROLES:
+            log('  ' + label + ' : ' + (roles[rid].upper() if roles[rid] else '미지정'))
+        act = [(n, key, s) for n, key, s in BUFFS if s > 0]
+        if act:
+            for n, key, s in act:
+                log('  버프 ' + key.upper() + ' : ' + str(s) + '초')
+        else:
+            log('  버프 : 없음')
+
+        self.started = True
+        self.lockui()
+        threading.Thread(target=runmacro, daemon=True).start()
+
+    #매크로 스레드가 넣은 로그를 GUI 스레드에서 꺼내 뿌린다
+    def drainlog(self):
+        try:
+            while True:
+                line = LOGQ.get_nowait()
+                self.text.configure(state='normal')
+                self.text.insert('end', line + '\n')
+                self.text.see('end')
+                self.text.configure(state='disabled')
+        except queue.Empty:
+            pass
+        self.root.after(100, self.drainlog)
+
 if __name__ == '__main__':
-
-    centerpoint = [625, 480]
-    #FAILSAFE 대체 : tab 으로 즉시 종료
-    k.add_hotkey('tab', lambda: os._exit(0))
-    attackinfo = setattckinfo(centerpoint)
-    print(attackinfo)
-
-    transformtimer()         #시작 시 변신 1회 요청 + 주기 타이머
-    startbuffs()             #활성 버프 슬롯 : 즉시 1회 요청 + 주기 타이머
-    checkrHp()               #피 감시
-
-    #기존 스캔박스 위치 유지 (원본 시작점이 y로 40px 위에 잡혔음)
-    huntloop([centerpoint[0], centerpoint[1] - 40], attackinfo)
+    root = tk.Tk()
+    App(root)
+    root.mainloop()
