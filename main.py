@@ -111,6 +111,7 @@ DEFAULT_ROLES = {
     'refresh':   'f5',
     'transform': 'f11',
 }
+DEFAULT_ATTACK = True    #공격(마우스 서치 + 칼질) 사용 여부
 
 BUFFS   = []      # [(트리거명, 키, 주기(초))]  주기 0 = 비활성
 BUFFKEY = {}      # 트리거명 -> 키
@@ -119,6 +120,7 @@ KEY_REFRESH        = None   #사냥 헛돌 때 새로고침
 KEY_TRANSFORM      = None   #변신
 KEY_RETURN         = None   #귀환
 TRANSFORM_INTERVAL = 0      #변신 주기(초). 0 이면 변신 안 함
+ATTACK_ON          = True   #공격 사용 여부. 끄면 버프/변신/감시만 돈다
 
 #=====================================================================
 # 트리거 : 한 순간에 하나만 True
@@ -377,13 +379,19 @@ def huntloop(p, atkvalue):
     cnt     = 0       #클릭 없이 헛돈 횟수 (칼질하면 초기화)
     loopcnt = 0       #공격 루프 누적 횟수 (새로고침될 때만 초기화)
 
-    log('서치 : ' + str(SCAN_DIRS) + '방향 x ' + str(SCAN_ROUND) + '바퀴 (반지름 '
-        + str(SCAN_START) + ('' if SCAN_ROUND == 1 else ' 부터 ' + str(SCAN_GAP) + '씩')
-        + '), 총 ' + str(len(points)) + '점')
+    if ATTACK_ON:
+        log('서치 : ' + str(SCAN_DIRS) + '방향 x ' + str(SCAN_ROUND) + '바퀴 (반지름 '
+            + str(SCAN_START) + ('' if SCAN_ROUND == 1 else ' 부터 ' + str(SCAN_GAP) + '씩')
+            + '), 총 ' + str(len(points)) + '점')
 
     settrigger('hunt')
     while ALIVE:
         if runpending():       #버프/변신/귀환이 먼저. 처리했으면 처음부터
+            continue
+
+        #공격 꺼짐 : 마우스를 아예 안 건드리고 버프/변신/감시만 돌린다
+        if not ATTACK_ON:
+            time.sleep(0.2)    #풀스핀 방지
             continue
 
         # sc.run_pending()
@@ -416,14 +424,15 @@ def huntloop(p, atkvalue):
 # 설정 저장 / 불러오기 (exe 옆 config.json)
 #=====================================================================
 
-#파일에서 읽어 (seconds, roles) 로 돌려준다. 없거나 깨졌으면 기본값
+#파일에서 읽어 (seconds, roles, attack) 로 돌려준다. 없거나 깨졌으면 기본값
 def loadconfig(path=None):
     if path == None:
         path = CONFIG_PATH
     seconds = dict(DEFAULT_SECONDS)
     roles   = dict(DEFAULT_ROLES)
+    attack  = DEFAULT_ATTACK
     if not os.path.isfile(path):
-        return seconds, roles, False
+        return seconds, roles, attack, False
 
     try:
         f = open(path, 'r', encoding='utf-8')
@@ -431,7 +440,7 @@ def loadconfig(path=None):
         f.close()
     except Exception as e:
         log('설정 불러오기 실패, 기본값 사용 : ' + str(e))
-        return seconds, roles, False
+        return seconds, roles, attack, False
 
     #모르는 키/이상한 값은 무시하고 아는 것만 받는다
     raw = data.get('seconds', {})
@@ -450,13 +459,17 @@ def loadconfig(path=None):
         roles[rid] = v if (v in FKEYS and v not in used) else None
         if roles[rid] != None:
             used.add(roles[rid])
-    return seconds, roles, True
 
-def saveconfig(seconds, roles, path=None):
+    if isinstance(data.get('attack'), bool):
+        attack = data['attack']
+    return seconds, roles, attack, True
+
+def saveconfig(seconds, roles, attack, path=None):
     if path == None:
         path = CONFIG_PATH
     data = {'seconds': dict((key, int(seconds.get(key, 0))) for key in FKEYS),
-            'roles':   dict((rid, roles.get(rid)) for rid in ('return', 'refresh', 'transform'))}
+            'roles':   dict((rid, roles.get(rid)) for rid in ('return', 'refresh', 'transform')),
+            'attack':  bool(attack)}
     try:
         f = open(path, 'w', encoding='utf-8')
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -469,11 +482,13 @@ def saveconfig(seconds, roles, path=None):
 #=====================================================================
 # GUI 가 넘긴 설정을 전역에 반영
 #=====================================================================
-def applyconfig(seconds, roles):
+def applyconfig(seconds, roles, attack=True):
     #seconds : {키 -> 초},  roles : {'return'/'refresh'/'transform' -> 키 or None}
+    #attack  : 공격 사용 여부
     global BUFFS, BUFFKEY, TRIGGER, ORDER, PENDING
-    global KEY_RETURN, KEY_REFRESH, KEY_TRANSFORM, TRANSFORM_INTERVAL
+    global KEY_RETURN, KEY_REFRESH, KEY_TRANSFORM, TRANSFORM_INTERVAL, ATTACK_ON
 
+    ATTACK_ON     = bool(attack)
     KEY_RETURN    = roles.get('return')
     KEY_REFRESH   = roles.get('refresh')
     KEY_TRANSFORM = roles.get('transform')
@@ -512,8 +527,13 @@ def runmacro():
             if runpending() or (not ALIVE):
                 return
 
-        atk = setattckinfo(CENTERPOINT)
-        log('공격 커서 : ' + str(atk))
+        #공격을 끄면 커서 캘리브레이션(이동+클릭)도 할 필요가 없다
+        atk = None
+        if ATTACK_ON:
+            atk = setattckinfo(CENTERPOINT)
+            log('공격 커서 : ' + str(atk))
+        else:
+            log('공격 끔 - 버프/변신/감시만 돕니다')
 
         if KEY_TRANSFORM != None and TRANSFORM_INTERVAL > 0:
             log('변신(' + KEY_TRANSFORM + ') ' + str(TRANSFORM_INTERVAL) + '초 주기')
@@ -602,6 +622,17 @@ class App:
                   text='귀환 / 새로고침 / 변신 은 각각 키 하나에만 지정됩니다. '
                        '체크한 키 중 변신만 주기를 씁니다.').pack(anchor='w', padx=12)
 
+        #--- 동작 설정 ---
+        optbox = ttk.LabelFrame(root, text='동작')
+        optbox.pack(fill='x', padx=10, pady=(8, 0))
+        self.attack = tk.BooleanVar(value=DEFAULT_ATTACK)
+        self.atkchk = ttk.Checkbutton(optbox, text='공격 사용 (마우스 서치 + 칼질)',
+                                      variable=self.attack)
+        self.atkchk.pack(anchor='w', padx=6, pady=4)
+        ttk.Label(optbox, foreground='#555',
+                  text='끄면 마우스를 아예 안 건드리고 버프 / 변신 / 피·마크 감시만 돕니다.'
+                  ).pack(anchor='w', padx=6, pady=(0, 4))
+
         #--- 저장 / 불러오기 / 기본값 ---
         cfgbar = ttk.Frame(root)
         cfgbar.pack(fill='x', padx=10, pady=(6, 0))
@@ -626,22 +657,23 @@ class App:
         sb.pack(side='right', fill='y')
 
         #저장된 설정이 있으면 그것으로, 없으면 기본 셋팅으로 시작
-        seconds, roles, found = loadconfig()
-        self.setform(seconds, roles)
+        seconds, roles, attack, found = loadconfig()
+        self.setform(seconds, roles, attack)
         self.drainlog()
         log(('설정 불러옴 : ' + CONFIG_PATH) if found else '저장된 설정 없음 - 기본 셋팅 사용')
 
     #--- 폼 <-> 값 ---
 
     #값을 위젯에 넣는다
-    def setform(self, seconds, roles):
+    def setform(self, seconds, roles, attack):
         for key in FKEYS:
             self.sec[key].set(str(seconds.get(key, 0)))
             for rid, label in ROLES:
                 self.role[(key, rid)].set(roles.get(rid) == key)
+        self.attack.set(bool(attack))
         self.refreshrows()
 
-    #위젯에서 값을 읽는다. 주기가 숫자가 아니면 (None, None) 을 돌려준다
+    #위젯에서 값을 읽는다. 주기가 숫자가 아니면 (None, None, None) 을 돌려준다
     def readform(self):
         seconds = {}
         for key in FKEYS:
@@ -650,7 +682,7 @@ class App:
                 raw = '0'
             if not raw.isdigit():
                 log('주기는 0 이상 정수만 : ' + key.upper() + ' = ' + raw)
-                return None, None
+                return None, None, None
             seconds[key] = int(raw)
 
         roles = {}
@@ -660,23 +692,23 @@ class App:
                 if self.role[(key, rid)].get():
                     roles[rid] = key
                     break
-        return seconds, roles
+        return seconds, roles, self.attack.get()
 
     def onsave(self):
-        seconds, roles = self.readform()
+        seconds, roles, attack = self.readform()
         if seconds == None:
             return
-        if saveconfig(seconds, roles):
+        if saveconfig(seconds, roles, attack):
             log('설정 저장 : ' + CONFIG_PATH)
 
     def onload(self):
-        seconds, roles, found = loadconfig()
-        self.setform(seconds, roles)
+        seconds, roles, attack, found = loadconfig()
+        self.setform(seconds, roles, attack)
         log(('설정 불러옴 : ' + CONFIG_PATH) if found
             else '저장된 설정 파일 없음 - 기본 셋팅으로 되돌림')
 
     def ondefault(self):
-        self.setform(dict(DEFAULT_SECONDS), dict(DEFAULT_ROLES))
+        self.setform(dict(DEFAULT_SECONDS), dict(DEFAULT_ROLES), DEFAULT_ATTACK)
         log('기본 셋팅으로 되돌림 (저장하려면 설정 저장)')
 
     #체크박스 하나가 켜지면 같은 역할의 다른 키, 같은 키의 다른 역할을 끈다
@@ -715,7 +747,7 @@ class App:
             self.entry[key].configure(state='disabled')
             for rid, label in ROLES:
                 self.check[(key, rid)].configure(state='disabled')
-        for b in (self.savebtn, self.loadbtn, self.defbtn):
+        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk):
             b.configure(state='disabled')
         self.btn.configure(state='disabled', text='동작 중  (tab = 정지)')
 
@@ -724,7 +756,7 @@ class App:
         for key in FKEYS:
             for rid, label in ROLES:
                 self.check[(key, rid)].configure(state='normal')
-        for b in (self.savebtn, self.loadbtn, self.defbtn):
+        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk):
             b.configure(state='normal')
         self.btn.configure(state='normal', text='시작하기')
         self.refreshrows()      #주기 입력칸은 역할에 따라 다시 결정
@@ -735,15 +767,16 @@ class App:
         if self.started:
             return
 
-        seconds, roles = self.readform()
+        seconds, roles, attack = self.readform()
         if seconds == None:
             log('시작 실패 - 주기 값을 확인하세요')
             return
 
-        saveconfig(seconds, roles)     #시작할 때 쓴 설정을 그대로 저장해둔다
-        applyconfig(seconds, roles)
+        saveconfig(seconds, roles, attack)   #시작할 때 쓴 설정을 그대로 저장해둔다
+        applyconfig(seconds, roles, attack)
 
         log('=== 설정 ===')
+        log('  공격 : ' + ('사용' if attack else '끔'))
         for rid, label in ROLES:
             log('  ' + label + ' : ' + (roles[rid].upper() if roles[rid] else '미지정'))
         act = [(n, key, s) for n, key, s in BUFFS if s > 0]
