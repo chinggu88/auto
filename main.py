@@ -53,11 +53,12 @@ PROBE_SETTLE = 0.025   # 커서 모양 갱신 대기 최대치(초)
 PROBE_STEP   = 0.003   # 폴링 간격(초)
 CTRL_DELAY   = 0.08    # ctrl 누른 뒤 클릭까지(초)
 
-#서치 범위 : 센터포인트 기준 SCAN_DIRS 방향을 SCAN_GAP 씩 넓혀가며 SCAN_ROUND 바퀴
+#서치 범위 : 센터포인트 기준 SCAN_DIRS 방향을, 반지름을 1배~SCAN_ROUND 배로 늘려가며 돈다
 SCAN_DIRS  = 16    # 방향 수. 16 이면 22.5도 간격
-SCAN_START = 70    # 1바퀴 반지름(px)
-SCAN_GAP   = 25    # 바퀴 간 간격(px). SCAN_ROUND 가 2 이상일 때만 쓰인다
-SCAN_ROUND = 1     # 총 바퀴 수 -> 반지름 70 한 단계만
+SCAN_START = 70    # 1배 반지름(px)
+SCAN_ROUND = 5     # 바퀴 수(배수). 5 면 70/140/210/280/350 다섯 거리를 돈다
+PARK_GAP   = 60    # 가장 바깥 바퀴보다 이만큼 더 아래를 파크 지점으로 잡는다
+                   # (파크 지점이 스캔점과 겹치면 커서 초기화가 안 된다)
 SCAN_OFFSET_Y = -38   # 스캔 중심의 y 보정(px). 음수면 위, 양수면 아래
                       # 원본은 -40 이었고 어택포인트를 2px 내려서 -38
 
@@ -210,13 +211,14 @@ def _dirs(n):
 
 DIRS = _dirs(SCAN_DIRS)
 
-#한 바퀴(SCAN_DIRS 방향)를 다 돌고 나서 반지름을 SCAN_GAP 만큼 넓혀 다음 바퀴로 간다
+#한 바퀴(SCAN_DIRS 방향)를 다 돌고 나서 반지름을 한 배수 늘려 다음 바퀴로 간다
+#안쪽부터 바깥으로 : 1배 -> 2배 -> ... -> SCAN_ROUND 배
 #모든 방향이 중심에서 같은 거리에 있다 (구버전은 정사각형이라 대각선이 1.4배 멀었음)
 def _scanpoints(p):
     pts  = []
     seen = set()
     for i in range(SCAN_ROUND):
-        r = SCAN_START + SCAN_GAP * i
+        r = SCAN_START * (i + 1)      #1배 70, 2배 140, 3배 210, 4배 280, 5배 350
         for dx, dy in DIRS:
             q = (int(round(p[0] + dx * r)), int(round(p[1] + dy * r)))
             if q in seen:      #반올림으로 겹치는 좌표는 버림
@@ -375,14 +377,16 @@ def checkrHp():
 #=====================================================================
 def huntloop(p, atkvalue):
     points  = _scanpoints(p)
-    parkpos = (p[0], p[1] + 350)
+    #파크는 가장 바깥 바퀴보다 더 아래. 안 그러면 5배 바퀴의 6시 점과 겹친다
+    parkpos = (p[0], p[1] + SCAN_START * SCAN_ROUND + PARK_GAP)
     cnt     = 0       #클릭 없이 헛돈 횟수 (칼질하면 초기화)
     loopcnt = 0       #공격 루프 누적 횟수 (새로고침될 때만 초기화)
 
     if ATTACK_ON:
-        log('서치 : ' + str(SCAN_DIRS) + '방향 x ' + str(SCAN_ROUND) + '바퀴 (반지름 '
-            + str(SCAN_START) + ('' if SCAN_ROUND == 1 else ' 부터 ' + str(SCAN_GAP) + '씩')
-            + '), 총 ' + str(len(points)) + '점')
+        radii = ','.join(str(SCAN_START * (i + 1)) for i in range(SCAN_ROUND))
+        log('서치 : ' + str(SCAN_DIRS) + '방향 x ' + str(SCAN_ROUND) + '바퀴'
+            + '  반지름 ' + radii + '  총 ' + str(len(points)) + '점')
+        log('파크 : ' + str(parkpos[0]) + ',' + str(parkpos[1]))
 
     settrigger('hunt')
     while ALIVE:
