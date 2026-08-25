@@ -16,5 +16,11 @@ pywin32==306
 # f5~f12 등 게임 스킬 키 입력
 keyboard==0.13.5
 
-# 각 스크립트에서 import 만 하고 main.py 에서만 run_pending() 호출
+# 소리 감지(WASAPI 루프백). 없어도 매크로는 돌고 소리 기능만 꺼진다
+PyAudioWPatch==0.2.12.7
+
+# 소리 분석(FFT). opencv-python 이 이미 끌고 오지만 명시해둔다
+numpy
+
+# 구버전 스크립트(oman/tell/turn/main2)에서만 쓴다. main.py 는 안 씀
 schedule==1.2.2

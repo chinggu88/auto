@@ -6,7 +6,7 @@ REM  결과물 : dist\lin_auto.exe
 REM ====================================================================
 
 echo [1/3] 필요한 패키지 설치
-pip install pyinstaller pyautogui pywin32 keyboard pillow opencv-python
+pip install pyinstaller pyautogui pywin32 keyboard pillow opencv-python PyAudioWPatch
 if errorlevel 1 goto fail
 
 echo.
