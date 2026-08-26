@@ -70,7 +70,7 @@ HP_INTERVAL = 1    #피/마크 감시 주기(초)
 START_DELAY = 3    #시작 버튼 누르고 게임 창 활성화할 시간(초)
 
 HP_IMG    = 'checkhp.PNG'   #피 부족 경고 UI
-HP_CONF   = 0.85
+HP_CONF   = 0.9
 MARK_IMG  = 'mark1.PNG'     #적대 혈맹 마크
 MARK_CONF = 0.7            #마크는 배경에 묻혀서 신뢰도를 낮게 잡는다 (구버전 oman.py 값)
 
