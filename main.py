@@ -63,7 +63,7 @@ SCAN_OFFSET_Y = -38   # 스캔 중심의 y 보정(px). 음수면 위, 양수면 
                       # 원본은 -40 이었고 어택포인트를 2px 내려서 -38
 
 BUFF_GAP    = 1    #버프 키 누른 뒤 대기(초)
-NOHIT_LIMIT = 5    #이 횟수만큼 헛돌면 새로고침 (칼질하면 초기화됨)
+NOHIT_LIMIT = 2    #이 횟수만큼 헛돌면 새로고침 (칼질하면 초기화됨)
 LOOP_LIMIT  = 50   #공격 루프 최대 횟수. 채우면 새로고침
                    #칼질을 계속 해도 안 줄고, 새로고침될 때만 초기화된다
 HP_INTERVAL = 1    #피/마크 감시 주기(초)
@@ -722,10 +722,11 @@ def huntloop(p, atkvalue):
         _movefast(parkpos[0], parkpos[1])   #커서 초기화 (park)
         time.sleep(PROBE_SETTLE)
         if _probe(x, y, atkvalue):
-            gu.keyDown('ctrl')
-            time.sleep(CTRL_DELAY)
+            #ctrl 강제공격은 뺐다. 그냥 클릭만 한다
+            # gu.keyDown('ctrl')
+            # time.sleep(CTRL_DELAY)
             gu.click()
-            gu.keyUp('ctrl')
+            # gu.keyUp('ctrl')
             cnt = 0
             if not FIGHT_READY:
                 idx = 0         #소리 감시가 없으면 예전처럼 1바퀴 첫 방향부터 다시 스캔
