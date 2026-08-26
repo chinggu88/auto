@@ -96,6 +96,8 @@ SND_BANDS   = [(0, 500), (500, 2000), (2000, 8000), (8000, 24000)]   #저/중/�
 #가를 곳은 -17 과 -7 사이다. dB 는 로그라서 가운데인 -12 를 잡으면 양쪽에 5dB 씩 여유가 남는다
 #(-40 은 몹한테 맞기만 해도 전투로 잡히고, -10 은 -7 에 너무 붙어서 내 칼질 중에 풀린다)
 SND_FIGHT_DB  = -12.0   #이 음량을 넘으면 전투중 후보
+SND_FIGHT_AVG = 0.5     #판정에 쓸 평균 창(초). 프레임(21ms) 하나로 재면 타격 스파이크에 놀아난다
+                        #로그에 찍히는 RMS 와 같은 방식(평균)으로 봐야 눈에 보이는 값으로 튜닝된다
 SND_FIGHT_ON  = 0.2     #이만큼 연속으로 넘으면 전투 시작(초). 짧게 잡아야 첫 타격에 바로 선다
 SND_FIGHT_OFF = 1.5     #이만큼 연속으로 조용해야 전투 끝(초)
                         #타격 사이 공백에 안 흔들리게 시작보다 훨씬 길게 준다
@@ -561,6 +563,8 @@ def soundwatch():
         forced    = False      #MAX 초과로 강제 해제된 상태인가 (한 번 조용해질 때까지 재진입 금지)
         loudsec   = 0.0        #연속으로 시끄러운 시간
         quietsec  = 0.0        #연속으로 조용한 시간
+        lvlbuf    = []         #판정용 RMS 이동평균 창
+        lvlmax    = max(1, int(SND_FIGHT_AVG / framesec))
         fightsec  = 0.0        #전투중으로 본 지 얼마나 됐나
 
         while ALIVE:
@@ -574,8 +578,17 @@ def soundwatch():
             prevmag = mag
 
             #--- 전투중 판정 ---
+            #프레임 하나가 아니라 SND_FIGHT_AVG 초 이동평균으로 본다
+            #  몹한테 맞기만 할 때(평균 -20dB)도 타격 순간 프레임은 임계 위로 튄다
+            #  그 스파이크 하나에 quietsec 가 리셋되면 게이트가 영영 안 풀린다
+            #평균을 쓰면 프레임 하나가 튀어도 창 전체는 거의 안 움직인다
+            lvlbuf.append(db)
+            if len(lvlbuf) > lvlmax:
+                lvlbuf.pop(0)
+            lvl = sum(lvlbuf) / len(lvlbuf)
+
             #시작은 짧게, 끝은 길게 잡는 히스테리시스. 타격 사이 공백에 게이트가 덜덜 떨지 않게 한다
-            if db > SND_FIGHT_DB:
+            if lvl > SND_FIGHT_DB:
                 loudsec  += framesec
                 quietsec  = 0.0
             else:
@@ -591,13 +604,13 @@ def soundwatch():
                     fight    = True
                     fightsec = 0.0
                     FIGHTING = True
-                    log('소리 : 전투 시작 (%.1fdB) - 칼질 탐지 멈춤' % db)
+                    log('소리 : 전투 시작 (평균 %.1fdB) - 칼질 탐지 멈춤' % lvl)
             else:
                 fightsec += framesec
                 if quietsec >= SND_FIGHT_OFF:
                     fight    = False
                     FIGHTING = False
-                    log('소리 : 전투 끝 (%.1fs) - 멈춘 자리에서 탐지 재개' % fightsec)
+                    log('소리 : 전투 끝 (평균 %.1fdB, %.1fs) - 멈춘 자리에서 탐지 재개' % (lvl, fightsec))
                 elif fightsec >= SND_FIGHT_MAX:
                     fight    = False
                     forced   = True
