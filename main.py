@@ -69,8 +69,11 @@ LOOP_LIMIT  = 50   #공격 루프 최대 횟수. 채우면 새로고침
 HP_INTERVAL = 1    #피/마크 감시 주기(초)
 START_DELAY = 3    #시작 버튼 누르고 게임 창 활성화할 시간(초)
 
-HP_IMG    = 'checkhp.PNG'   #피 부족 경고 UI
+HP_IMG    = 'checkhp.PNG'   #피 UI. 이게 '안 잡히면' 소진으로 보고 귀환한다
 HP_CONF   = 0.9
+HP_MISS   = 2      #연속으로 이 횟수만큼 못 찾으면 귀환 (HP_INTERVAL 이 1초면 2초)
+                   #1 로 두면 한 번만 놓쳐도 바로 귀환한다
+                   #화면이 가려지거나 매칭이 한 번 흔들려도 사냥이 끝나버리므로 여유를 준다
 MARK_IMG  = 'mark1.PNG'     #적대 혈맹 마크
 MARK_CONF = 0.7            #마크는 배경에 묻혀서 신뢰도를 낮게 잡는다 (구버전 oman.py 값)
 
@@ -166,6 +169,8 @@ ALIVE  = False
 HOTKEY = None     #tab 핫키 핸들. 정지할 때 떼어낸다
 
 #소리로 판단한 전투 상태. 소리 스레드가 쓰고 사냥 루프가 읽는다 (락 없이 bool 하나만 주고받는다)
+HPMISS      = 0       #피 UI 를 연속으로 못 찾은 횟수. checkrHp 가 타이머로 다시 뜨므로 전역에 둔다
+
 FIGHTING    = False   #True 면 칼질 아이콘 탐지를 멈춘다
 FIGHT_READY = False   #소리 감시가 실제로 도는 중인지. 루프백을 못 열면 False 라서 게이트가 통째로 꺼진다
 
@@ -479,15 +484,21 @@ def _tomono(raw, channels):
 
 #피 확인. 이미지 매칭은 입력을 안 건드리므로 스레드에서 해도 안전
 def checkrHp():
+    global HPMISS
     if not ALIVE:
         return
     file_path = IMAGE_DIR
 
-    #1. 피 부족
-    if gu.locateCenterOnScreen(file_path + HP_IMG, confidence=HP_CONF) != None:
-        log('피 소모 완료 귀환!')
-        request('return')
-        return                #매크로 루프가 처리하고 종료하므로 타이머 재등록 안 함
+    #1. 피 확인 : 판정이 반대다. 피 UI 가 '보이는' 게 정상이고 '사라지면' 소진이다
+    if gu.locateCenterOnScreen(file_path + HP_IMG, confidence=HP_CONF) == None:
+        HPMISS += 1
+        if HPMISS >= HP_MISS:
+            log('피 UI 미탐지 ' + str(HPMISS) + '회 - 피 소모 완료 귀환!')
+            request('return')
+            return            #매크로 루프가 처리하고 종료하므로 타이머 재등록 안 함
+        log('피 UI 미탐지 ' + str(HPMISS) + '/' + str(HP_MISS))
+    else:
+        HPMISS = 0            #한 번이라도 보이면 처음부터 다시 센다
 
     #2. 적대 혈맹 마크
     if gu.locateCenterOnScreen(file_path + MARK_IMG, confidence=MARK_CONF) != None:
@@ -831,7 +842,7 @@ def applyconfig(seconds, roles, attack=True, sound=False):
 #매크로 본체. GUI 스레드가 아니라 전용 스레드에서 돈다
 #끝나면(정지/오류) GUI 가 스레드 종료를 보고 시작 버튼을 다시 켠다
 def runmacro():
-    global ALIVE, HOTKEY
+    global ALIVE, HOTKEY, HPMISS
     try:
         ALIVE  = True
         HOTKEY = k.add_hotkey('tab', requeststop)
@@ -861,7 +872,9 @@ def runmacro():
         startbuffs()
 
         if KEY_RETURN != None:
-            log('귀환(' + KEY_RETURN + ') - 피 감시 시작')
+            log('귀환(' + KEY_RETURN + ') - 피 감시 시작 (피 UI 가 '
+                + str(HP_MISS) + '회 연속 안 보이면 귀환)')
+            HPMISS = 0        #이전 실행의 카운트가 남아 있으면 안 된다
             checkrHp()
         else:
             log('귀환키 미지정 - 피 감시 끔')
