@@ -70,7 +70,7 @@ HP_INTERVAL = 1    #피/마크 감시 주기(초)
 START_DELAY = 3    #시작 버튼 누르고 게임 창 활성화할 시간(초)
 
 HP_IMG    = 'checkhp.PNG'   #피 부족 경고 UI
-HP_CONF   = 0.9
+HP_CONF   = 0.85
 MARK_IMG  = 'mark1.PNG'     #적대 혈맹 마크
 MARK_CONF = 0.7            #마크는 배경에 묻혀서 신뢰도를 낮게 잡는다 (구버전 oman.py 값)
 
@@ -87,6 +87,17 @@ SND_REFRACT = 0.10     #온셋 불응기(초). 한 타격을 두 번 안 세게
 SND_HIST    = 43       #임계 계산에 쓰는 최근 프레임 수(약 1초)
 SND_MINDB   = -60.0    #이 음량보다 조용한 프레임은 온셋 후보에서 뺀다(무음 오탐 방지)
 SND_BANDS   = [(0, 500), (500, 2000), (2000, 8000), (8000, 24000)]   #저/중/고/초고
+
+#소리로 '전투중'을 판단해서 칼질 아이콘 탐지를 잠깐 세운다
+#관측값 : 가만히 있을 때 RMS 약 -99dB(무음), 칼질이 붙으면 -6 ~ -13dB 로 확 뜬다
+#     둘 사이가 80dB 넘게 벌어져서 임계를 중간에 잡으면 거의 안 헷갈린다
+SND_FIGHT_DB  = -40.0   #이 음량을 넘으면 전투중 후보
+SND_FIGHT_ON  = 0.2     #이만큼 연속으로 넘으면 전투 시작(초). 짧게 잡아야 첫 타격에 바로 선다
+SND_FIGHT_OFF = 1.5     #이만큼 연속으로 조용해야 전투 끝(초)
+                        #타격 사이 공백에 안 흔들리게 시작보다 훨씬 길게 준다
+SND_FIGHT_MAX = 30.0    #전투중이 이만큼 이어지면 강제 해제(초)
+                        #BGM 을 켜 두거나 다른 프로그램 소리가 계속 나면 영영 멈춰 있게 되므로
+FIGHT_POLL    = 0.1     #전투중일 때 사냥 루프가 쉬는 간격(초)
 
 #=====================================================================
 # 로그 : 매크로 스레드에서 찍고 GUI 스레드가 꺼내 뿌린다
@@ -147,6 +158,10 @@ SOUND_ON           = False  #소리 감지 사용 여부
 #=====================================================================
 ALIVE  = False
 HOTKEY = None     #tab 핫키 핸들. 정지할 때 떼어낸다
+
+#소리로 판단한 전투 상태. 소리 스레드가 쓰고 사냥 루프가 읽는다 (락 없이 bool 하나만 주고받는다)
+FIGHTING    = False   #True 면 칼질 아이콘 탐지를 멈춘다
+FIGHT_READY = False   #소리 감시가 실제로 도는 중인지. 루프백을 못 열면 False 라서 게이트가 통째로 꺼진다
 
 TRIGGER = {'hunt': False, 'stop': False, 'transform': False, 'return': False}
 ORDER   = ['stop', 'return', 'transform']   #처리 우선순위 : 정지 > 귀환 > 변신 > 버프
@@ -498,6 +513,7 @@ def _findloopback(pa):
     return None, '루프백 장치를 못 찾음'
 
 def soundwatch():
+    global FIGHTING, FIGHT_READY
     if not NUMPY_OK:
         log('소리 : numpy 가 없어서 끕니다')
         return
@@ -520,6 +536,9 @@ def soundwatch():
         st   = p.open(format=pa.paInt16, channels=ch, rate=rate, input=True,
                       input_device_index=dev['index'], frames_per_buffer=SND_FRAME)
         log('소리 : 루프백 = ' + str(dev.get('name')) + '  ' + str(rate) + 'Hz  ' + str(ch) + 'ch')
+        log('소리 : 전투 판정 %.0fdB 초과 %.1fs -> 시작, %.0fdB 이하 %.1fs -> 끝'
+            % (SND_FIGHT_DB, SND_FIGHT_ON, SND_FIGHT_DB, SND_FIGHT_OFF))
+        FIGHT_READY = True      #여기서부터 사냥 루프가 FIGHTING 을 믿는다
 
         det       = OnsetDetector(framesec=float(SND_FRAME) / rate)
         prevmag   = None
@@ -532,6 +551,14 @@ def soundwatch():
         sumrate   = []         #요약용 : 초당 온셋 이력
         sumdb     = []
 
+        #전투 판정 상태. 판단은 여기서만 하고 결과 bool 만 FIGHTING 에 실어 보낸다
+        framesec  = float(SND_FRAME) / rate
+        fight     = False      #지금 전투중으로 보는가
+        forced    = False      #MAX 초과로 강제 해제된 상태인가 (한 번 조용해질 때까지 재진입 금지)
+        loudsec   = 0.0        #연속으로 시끄러운 시간
+        quietsec  = 0.0        #연속으로 조용한 시간
+        fightsec  = 0.0        #전투중으로 본 지 얼마나 됐나
+
         while ALIVE:
             raw = st.read(SND_FRAME, exception_on_overflow=False)
             buf = _tomono(raw, ch)
@@ -541,6 +568,37 @@ def soundwatch():
             if det.push(_flux(mag, prevmag), db):
                 onsets += 1
             prevmag = mag
+
+            #--- 전투중 판정 ---
+            #시작은 짧게, 끝은 길게 잡는 히스테리시스. 타격 사이 공백에 게이트가 덜덜 떨지 않게 한다
+            if db > SND_FIGHT_DB:
+                loudsec  += framesec
+                quietsec  = 0.0
+            else:
+                quietsec += framesec
+                loudsec   = 0.0
+
+            if not fight:
+                if forced:
+                    #강제 해제된 뒤에는 한 번 조용해지기 전까지 다시 안 들어간다
+                    if quietsec >= SND_FIGHT_OFF:
+                        forced = False
+                elif loudsec >= SND_FIGHT_ON:
+                    fight    = True
+                    fightsec = 0.0
+                    FIGHTING = True
+                    log('소리 : 전투 시작 (%.1fdB) - 칼질 탐지 멈춤' % db)
+            else:
+                fightsec += framesec
+                if quietsec >= SND_FIGHT_OFF:
+                    fight    = False
+                    FIGHTING = False
+                    log('소리 : 전투 끝 (%.1fs) - 멈춘 자리에서 탐지 재개' % fightsec)
+                elif fightsec >= SND_FIGHT_MAX:
+                    fight    = False
+                    forced   = True
+                    FIGHTING = False
+                    log('소리 : 전투 %.0fs 초과 - 강제 해제하고 탐지 재개 (BGM 확인)' % fightsec)
 
             dbs.append(db)
             br = _bandratio(mag, rate)
@@ -554,7 +612,7 @@ def soundwatch():
                 bs    = '저%2d 중%2d 고%2d 초고%2d' % tuple(int(b / frames) for b in bands)
                 lvl   = max(0, min(10, int((avgdb + 60.0) / 6.0)))   #-60dB~0dB 를 0~10 칸으로
                 trig  = [key for key, v in TRIGGER.items() if v]
-                log('소리 [' + (trig[0] if trig else '-') + ']'
+                log('소리 [' + (trig[0] if trig else '-') + (' 전투' if fight else '') + ']'
                     + '  RMS %6.1fdB  온셋 %4.1f/s  ' % (avgdb, onsets / float(SND_LOG_SEC))
                     + bs + '  ' + '█' * lvl + '░' * (10 - lvl))
                 sumrate.append(onsets / float(SND_LOG_SEC))
@@ -589,6 +647,8 @@ def soundwatch():
                 p.terminate()
         except Exception:
             pass
+        FIGHT_READY = False
+        FIGHTING    = False      #소리가 죽어도 사냥 루프가 멈춰 있으면 안 된다
         log('소리 감시 종료')
 
 #=====================================================================
@@ -600,6 +660,7 @@ def huntloop(p, atkvalue):
     parkpos = (p[0], p[1] + SCAN_START * SCAN_ROUND + PARK_GAP)
     cnt     = 0       #클릭 없이 헛돈 횟수 (칼질하면 초기화)
     loopcnt = 0       #공격 루프 누적 횟수 (새로고침될 때만 초기화)
+    idx     = 0       #지금 볼 스캔점 번호. 전투로 멈췄다 이어 돌려고 while 밖에 둔다
 
     if ATTACK_ON:
         radii = ','.join(str(SCAN_START * (i + 1)) for i in range(SCAN_ROUND))
@@ -617,31 +678,41 @@ def huntloop(p, atkvalue):
             time.sleep(0.2)    #풀스핀 방지
             continue
 
+        #소리로 전투중이라고 보면 커서를 아예 안 건드린다
+        #idx 를 그대로 두므로 전투가 끝나면 멈춘 자리(중간)에서 이어서 돈다
+        if FIGHT_READY and FIGHTING:
+            time.sleep(FIGHT_POLL)
+            continue
+
         # sc.run_pending()
 
-        cnt     += 1
-        loopcnt += 1
-        #헛돌았거나(cnt) 루프를 최대 횟수만큼 돌았으면(loopcnt) 새로고침
-        if KEY_REFRESH != None and (cnt >= NOHIT_LIMIT or loopcnt >= LOOP_LIMIT):
-            log('새로고침 : ' + KEY_REFRESH
-                + '  (헛돔 ' + str(cnt) + '/' + str(NOHIT_LIMIT)
-                + ', 누적 ' + str(loopcnt) + '/' + str(LOOP_LIMIT) + ')')
-            gu.press(KEY_REFRESH, presses=1)
-            cnt     = 0
-            loopcnt = 0       #누적 횟수는 여기서만 초기화된다
+        x, y = points[idx]
+        idx += 1
 
-        for (x, y) in points:
-            if (not ALIVE) or haspending():   #버프 대기중이면 스캔 중단하고 바깥에서 처리
-                break
-            _movefast(parkpos[0], parkpos[1])   #커서 초기화 (park)
-            time.sleep(PROBE_SETTLE)
-            if _probe(x, y, atkvalue):
-                gu.keyDown('ctrl')
-                time.sleep(CTRL_DELAY)
-                gu.click()
-                gu.keyUp('ctrl')
-                cnt = 0
-                break                       #1바퀴 첫 방향부터 다시 스캔
+        if idx >= len(points):    #한 바퀴를 다 돌았다
+            idx      = 0
+            cnt     += 1
+            loopcnt += 1
+            #헛돌았거나(cnt) 루프를 최대 횟수만큼 돌았으면(loopcnt) 새로고침
+            if KEY_REFRESH != None and (cnt >= NOHIT_LIMIT or loopcnt >= LOOP_LIMIT):
+                log('새로고침 : ' + KEY_REFRESH
+                    + '  (헛돔 ' + str(cnt) + '/' + str(NOHIT_LIMIT)
+                    + ', 누적 ' + str(loopcnt) + '/' + str(LOOP_LIMIT) + ')')
+                gu.press(KEY_REFRESH, presses=1)
+                cnt     = 0
+                loopcnt = 0       #누적 횟수는 여기서만 초기화된다
+
+        _movefast(parkpos[0], parkpos[1])   #커서 초기화 (park)
+        time.sleep(PROBE_SETTLE)
+        if _probe(x, y, atkvalue):
+            gu.keyDown('ctrl')
+            time.sleep(CTRL_DELAY)
+            gu.click()
+            gu.keyUp('ctrl')
+            cnt = 0
+            if not FIGHT_READY:
+                idx = 0         #소리 감시가 없으면 예전처럼 1바퀴 첫 방향부터 다시 스캔
+                                #(소리가 있으면 곧 전투로 멈추고, 끝난 뒤 다음 점부터 이어 돈다)
 
 #=====================================================================
 # 설정 저장 / 불러오기 (exe 옆 config.json)
