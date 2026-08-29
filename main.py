@@ -53,27 +53,25 @@ PROBE_SETTLE = 0.025   # 커서 모양 갱신 대기 최대치(초)
 PROBE_STEP   = 0.003   # 폴링 간격(초)
 CTRL_DELAY   = 0.08    # ctrl 누른 뒤 클릭까지(초)
 
-#서치 범위 : 센터포인트 기준 SCAN_DIRS 방향을, 반지름을 1배~SCAN_ROUND 배로 늘려가며 돈다
+#서치 범위 : 센터포인트 기준 SCAN_DIRS 방향을, 반지름을 1배씩 늘려가며 돈다
 SCAN_DIRS  = 16    # 방향 수. 16 이면 22.5도 간격
 SCAN_START = 70    # 1배 반지름(px)
-SCAN_ROUND = 5     # 바퀴 수(배수). 5 면 70/140/210/280/350 다섯 거리를 돈다
+SCAN_NEAR  = 2     # 근거리일 때 바퀴 수 -> 반지름 70/140      (32점)
+SCAN_FAR   = 5     # 원거리일 때 바퀴 수 -> 반지름 70~350      (80점)
 PARK_GAP   = 60    # 가장 바깥 바퀴보다 이만큼 더 아래를 파크 지점으로 잡는다
                    # (파크 지점이 스캔점과 겹치면 커서 초기화가 안 된다)
+                   # 거리 설정과 무관하게 항상 SCAN_FAR 기준으로 잡아서 파크 자리를 고정한다
 SCAN_OFFSET_Y = -38   # 스캔 중심의 y 보정(px). 음수면 위, 양수면 아래
                       # 원본은 -40 이었고 어택포인트를 2px 내려서 -38
 
 BUFF_GAP    = 1    #버프 키 누른 뒤 대기(초)
-NOHIT_LIMIT = 2    #이 횟수만큼 헛돌면 새로고침 (칼질하면 초기화됨)
 LOOP_LIMIT  = 50   #공격 루프 최대 횟수. 채우면 새로고침
                    #칼질을 계속 해도 안 줄고, 새로고침될 때만 초기화된다
 HP_INTERVAL = 1    #피/마크 감시 주기(초)
 START_DELAY = 3    #시작 버튼 누르고 게임 창 활성화할 시간(초)
 
-HP_IMG    = 'checkhp.PNG'   #피 UI. 이게 '안 잡히면' 소진으로 보고 귀환한다
+HP_IMG    = 'checkhp.PNG'   #피 부족 경고 UI. 이게 '뜨면' 귀환한다
 HP_CONF   = 0.9
-HP_MISS   = 2      #연속으로 이 횟수만큼 못 찾으면 귀환 (HP_INTERVAL 이 1초면 2초)
-                   #1 로 두면 한 번만 놓쳐도 바로 귀환한다
-                   #화면이 가려지거나 매칭이 한 번 흔들려도 사냥이 끝나버리므로 여유를 준다
 MARK_IMG  = 'mark1.PNG'     #적대 혈맹 마크
 MARK_CONF = 0.7            #마크는 배경에 묻혀서 신뢰도를 낮게 잡는다 (구버전 oman.py 값)
 
@@ -115,7 +113,13 @@ DEFAULT_ROLES = {
     'refresh':   'f5',
     'transform': 'f11',
 }
-DEFAULT_ATTACK = True    #공격(마우스 서치 + 칼질) 사용 여부
+#옵션 기본값. 항목이 계속 늘어서 dict 하나로 묶는다 (config.json 에도 이 키 그대로 들어간다)
+DEFAULT_OPTS = {
+    'attack': True,     #공격(마우스 서치 + 칼질) 사용 여부
+    'range':  'near',   #칼 탐지 거리 : 'near'(근거리) / 'far'(원거리)
+    'nohit':  2,        #이 횟수만큼 헛돌면 새로고침
+}
+RANGES = [('near', '근거리'), ('far', '원거리')]   #표시 순서
 
 BUFFS   = []      # [(트리거명, 키, 주기(초))]  주기 0 = 비활성
 BUFFKEY = {}      # 트리거명 -> 키
@@ -125,6 +129,8 @@ KEY_TRANSFORM      = None   #변신
 KEY_RETURN         = None   #귀환
 TRANSFORM_INTERVAL = 0      #변신 주기(초). 0 이면 변신 안 함
 ATTACK_ON          = True   #공격 사용 여부. 끄면 버프/변신/감시만 돈다
+SCAN_ROUND         = SCAN_NEAR              #현재 탐지 거리의 바퀴 수
+NOHIT_LIMIT        = DEFAULT_OPTS['nohit']  #헛돌 때 새로고침까지의 횟수
 
 #=====================================================================
 # 트리거 : 한 순간에 하나만 True
@@ -135,9 +141,7 @@ ATTACK_ON          = True   #공격 사용 여부. 끄면 버프/변신/감시�
 ALIVE  = False
 HOTKEY = None     #tab 핫키 핸들. 정지할 때 떼어낸다
 
-HPMISS = 0        #피 UI 를 연속으로 못 찾은 횟수. checkrHp 가 타이머로 다시 뜨므로 전역에 둔다
-
-TRIGGER = {'hunt': False, 'stop': False, 'transform': False, 'return': False}
+TRIGGER ={'hunt': False, 'stop': False, 'transform': False, 'return': False}
 ORDER   = ['stop', 'return', 'transform']   #처리 우선순위 : 정지 > 귀환 > 변신 > 버프
 
 PENDING      = {}                 #타이머 스레드가 채우는 실행 요청
@@ -359,21 +363,15 @@ def transformtimer():
 
 #피 확인. 이미지 매칭은 입력을 안 건드리므로 스레드에서 해도 안전
 def checkrHp():
-    global HPMISS
     if not ALIVE:
         return
     file_path = IMAGE_DIR
 
-    #1. 피 확인 : 판정이 반대다. 피 UI 가 '보이는' 게 정상이고 '사라지면' 소진이다
-    if gu.locateCenterOnScreen(file_path + HP_IMG, confidence=HP_CONF) == None:
-        HPMISS += 1
-        if HPMISS >= HP_MISS:
-            log('피 UI 미탐지 ' + str(HPMISS) + '회 - 피 소모 완료 귀환!')
-            request('return')
-            return            #매크로 루프가 처리하고 종료하므로 타이머 재등록 안 함
-        log('피 UI 미탐지 ' + str(HPMISS) + '/' + str(HP_MISS))
-    else:
-        HPMISS = 0            #한 번이라도 보이면 처음부터 다시 센다
+    #1. 피 부족 경고 UI 가 '뜨면' 귀환
+    if gu.locateCenterOnScreen(file_path + HP_IMG, confidence=HP_CONF) != None:
+        log('피 소모 완료 귀환!')
+        request('return')
+        return                #매크로 루프가 처리하고 종료하므로 타이머 재등록 안 함
 
     #2. 적대 혈맹 마크
     if gu.locateCenterOnScreen(file_path + MARK_IMG, confidence=MARK_CONF) != None:
@@ -389,14 +387,16 @@ def checkrHp():
 def huntloop(p, atkvalue):
     points  = _scanpoints(p)
     #파크는 가장 바깥 바퀴보다 더 아래. 안 그러면 5배 바퀴의 6시 점과 겹친다
-    parkpos = (p[0], p[1] + SCAN_START * SCAN_ROUND + PARK_GAP)
+    #근거리로 좁혀도 파크 자리는 안 움직이게 SCAN_FAR 기준으로 고정한다
+    parkpos = (p[0], p[1] + SCAN_START * SCAN_FAR + PARK_GAP)
     cnt     = 0       #클릭 없이 헛돈 횟수 (칼질하면 초기화)
     loopcnt = 0       #공격 루프 누적 횟수 (새로고침될 때만 초기화)
     idx     = 0       #지금 볼 스캔점 번호. 전투로 멈췄다 이어 돌려고 while 밖에 둔다
 
     if ATTACK_ON:
         radii = ','.join(str(SCAN_START * (i + 1)) for i in range(SCAN_ROUND))
-        log('서치 : ' + str(SCAN_DIRS) + '방향 x ' + str(SCAN_ROUND) + '바퀴'
+        log('서치 : ' + ('근거리' if SCAN_ROUND <= SCAN_NEAR else '원거리')
+            + '  ' + str(SCAN_DIRS) + '방향 x ' + str(SCAN_ROUND) + '바퀴'
             + '  반지름 ' + radii + '  총 ' + str(len(points)) + '점')
         log('파크 : ' + str(parkpos[0]) + ',' + str(parkpos[1]))
 
@@ -443,15 +443,15 @@ def huntloop(p, atkvalue):
 # 설정 저장 / 불러오기 (exe 옆 config.json)
 #=====================================================================
 
-#파일에서 읽어 (seconds, roles, attack) 로 돌려준다. 없거나 깨졌으면 기본값
+#파일에서 읽어 (seconds, roles, opts) 로 돌려준다. 없거나 깨졌으면 기본값
 def loadconfig(path=None):
     if path == None:
         path = CONFIG_PATH
     seconds = dict(DEFAULT_SECONDS)
     roles   = dict(DEFAULT_ROLES)
-    attack  = DEFAULT_ATTACK
+    opts    = dict(DEFAULT_OPTS)
     if not os.path.isfile(path):
-        return seconds, roles, attack, False
+        return seconds, roles, opts, False
 
     try:
         f = open(path, 'r', encoding='utf-8')
@@ -459,7 +459,7 @@ def loadconfig(path=None):
         f.close()
     except Exception as e:
         log('설정 불러오기 실패, 기본값 사용 : ' + str(e))
-        return seconds, roles, attack, False
+        return seconds, roles, opts, False
 
     #모르는 키/이상한 값은 무시하고 아는 것만 받는다
     raw = data.get('seconds', {})
@@ -479,16 +479,27 @@ def loadconfig(path=None):
         if roles[rid] != None:
             used.add(roles[rid])
 
+    #옵션은 아는 키만, 값이 이상하면 기본값을 유지한다
     if isinstance(data.get('attack'), bool):
-        attack = data['attack']
-    return seconds, roles, attack, True
+        opts['attack'] = data['attack']
+    if data.get('range') in [r for r, label in RANGES]:
+        opts['range'] = data['range']
+    try:
+        v = int(data.get('nohit', opts['nohit']))
+        if v >= 1:
+            opts['nohit'] = v
+    except (TypeError, ValueError):
+        pass
+    return seconds, roles, opts, True
 
-def saveconfig(seconds, roles, attack, path=None):
+def saveconfig(seconds, roles, opts, path=None):
     if path == None:
         path = CONFIG_PATH
     data = {'seconds': dict((key, int(seconds.get(key, 0))) for key in FKEYS),
             'roles':   dict((rid, roles.get(rid)) for rid in ('return', 'refresh', 'transform')),
-            'attack':  bool(attack)}
+            'attack':  bool(opts.get('attack', DEFAULT_OPTS['attack'])),
+            'range':   str(opts.get('range',  DEFAULT_OPTS['range'])),
+            'nohit':   int(opts.get('nohit',  DEFAULT_OPTS['nohit']))}
     try:
         f = open(path, 'w', encoding='utf-8')
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -501,13 +512,18 @@ def saveconfig(seconds, roles, attack, path=None):
 #=====================================================================
 # GUI 가 넘긴 설정을 전역에 반영
 #=====================================================================
-def applyconfig(seconds, roles, attack=True):
+def applyconfig(seconds, roles, opts=None):
     #seconds : {키 -> 초},  roles : {'return'/'refresh'/'transform' -> 키 or None}
-    #attack  : 공격 사용 여부
+    #opts    : {'attack': bool, 'range': 'near'/'far', 'nohit': int}
     global BUFFS, BUFFKEY, TRIGGER, ORDER, PENDING
-    global KEY_RETURN, KEY_REFRESH, KEY_TRANSFORM, TRANSFORM_INTERVAL, ATTACK_ON
+    global KEY_RETURN, KEY_REFRESH, KEY_TRANSFORM, TRANSFORM_INTERVAL
+    global ATTACK_ON, SCAN_ROUND, NOHIT_LIMIT
 
-    ATTACK_ON     = bool(attack)
+    if opts == None:
+        opts = dict(DEFAULT_OPTS)
+    ATTACK_ON     = bool(opts.get('attack', DEFAULT_OPTS['attack']))
+    SCAN_ROUND    = SCAN_FAR if opts.get('range') == 'far' else SCAN_NEAR
+    NOHIT_LIMIT   = max(1, int(opts.get('nohit', DEFAULT_OPTS['nohit'])))
     KEY_RETURN    = roles.get('return')
     KEY_REFRESH   = roles.get('refresh')
     KEY_TRANSFORM = roles.get('transform')
@@ -533,7 +549,7 @@ def applyconfig(seconds, roles, attack=True):
 #매크로 본체. GUI 스레드가 아니라 전용 스레드에서 돈다
 #끝나면(정지/오류) GUI 가 스레드 종료를 보고 시작 버튼을 다시 켠다
 def runmacro():
-    global ALIVE, HOTKEY, HPMISS
+    global ALIVE, HOTKEY
     try:
         ALIVE  = True
         HOTKEY = k.add_hotkey('tab', requeststop)
@@ -563,9 +579,7 @@ def runmacro():
         startbuffs()
 
         if KEY_RETURN != None:
-            log('귀환(' + KEY_RETURN + ') - 피 감시 시작 (피 UI 가 '
-                + str(HP_MISS) + '회 연속 안 보이면 귀환)')
-            HPMISS = 0        #이전 실행의 카운트가 남아 있으면 안 된다
+            log('귀환(' + KEY_RETURN + ') - 피 감시 시작')
             checkrHp()
         else:
             log('귀환키 미지정 - 피 감시 끔')
@@ -647,13 +661,39 @@ class App:
         #--- 동작 설정 ---
         optbox = ttk.LabelFrame(root, text='동작')
         optbox.pack(fill='x', padx=10, pady=(8, 0))
-        self.attack = tk.BooleanVar(value=DEFAULT_ATTACK)
+        self.attack = tk.BooleanVar(value=DEFAULT_OPTS['attack'])
         self.atkchk = ttk.Checkbutton(optbox, text='공격 사용 (마우스 서치 + 칼질)',
                                       variable=self.attack)
         self.atkchk.pack(anchor='w', padx=6, pady=4)
         ttk.Label(optbox, foreground='#555',
                   text='끄면 마우스를 아예 안 건드리고 버프 / 변신 / 피·마크 감시만 돕니다.'
                   ).pack(anchor='w', padx=6, pady=(0, 4))
+
+        #--- 칼 탐지 거리 ---
+        rngrow = ttk.Frame(optbox)
+        rngrow.pack(fill='x', padx=6, pady=(6, 0))
+        ttk.Label(rngrow, text='칼 탐지 거리', width=12).pack(side='left')
+        self.range  = tk.StringVar(value=DEFAULT_OPTS['range'])
+        self.rngbtn = []
+        for rid, label in RANGES:
+            n  = SCAN_FAR if rid == 'far' else SCAN_NEAR
+            rb = ttk.Radiobutton(rngrow,
+                                 text='%s (%d~%dpx, %d점)'
+                                      % (label, SCAN_START, SCAN_START * n, SCAN_DIRS * n),
+                                 value=rid, variable=self.range)
+            rb.pack(side='left', padx=(0, 12))
+            self.rngbtn.append(rb)
+
+        #--- 새로고침 트리거 ---
+        nhrow = ttk.Frame(optbox)
+        nhrow.pack(fill='x', padx=6, pady=(4, 6))
+        ttk.Label(nhrow, text='새로고침 트리거', width=12).pack(side='left')
+        self.nohit = tk.StringVar(value=str(DEFAULT_OPTS['nohit']))
+        self.nhent = ttk.Entry(nhrow, textvariable=self.nohit, width=6, justify='center')
+        self.nhent.pack(side='left')
+        ttk.Label(nhrow, foreground='#555',
+                  text='  회 연속 헛돌면 새로고침 키를 누릅니다 (한 번이라도 잡으면 초기화)'
+                  ).pack(side='left')
 
         ttk.Label(optbox, foreground='#555',
                   text='타격음을 세어 로그에 찍기만 합니다. 매크로 동작은 안 바뀝니다. '
@@ -684,20 +724,22 @@ class App:
         sb.pack(side='right', fill='y')
 
         #저장된 설정이 있으면 그것으로, 없으면 기본 셋팅으로 시작
-        seconds, roles, attack, found = loadconfig()
-        self.setform(seconds, roles, attack)
+        seconds, roles, opts, found = loadconfig()
+        self.setform(seconds, roles, opts)
         self.drainlog()
         log(('설정 불러옴 : ' + CONFIG_PATH) if found else '저장된 설정 없음 - 기본 셋팅 사용')
 
     #--- 폼 <-> 값 ---
 
     #값을 위젯에 넣는다
-    def setform(self, seconds, roles, attack):
+    def setform(self, seconds, roles, opts):
         for key in FKEYS:
             self.sec[key].set(str(seconds.get(key, 0)))
             for rid, label in ROLES:
                 self.role[(key, rid)].set(roles.get(rid) == key)
-        self.attack.set(bool(attack))
+        self.attack.set(bool(opts.get('attack', DEFAULT_OPTS['attack'])))
+        self.range.set(str(opts.get('range',  DEFAULT_OPTS['range'])))
+        self.nohit.set(str(opts.get('nohit',  DEFAULT_OPTS['nohit'])))
         self.refreshrows()
 
     #위젯에서 값을 읽는다. 주기가 숫자가 아니면 (None, None, None) 을 돌려준다
@@ -712,6 +754,11 @@ class App:
                 return None, None, None
             seconds[key] = int(raw)
 
+        raw = self.nohit.get().strip()
+        if not raw.isdigit() or int(raw) < 1:
+            log('새로고침 트리거는 1 이상 정수만 : ' + raw)
+            return None, None, None
+
         roles = {}
         for rid, label in ROLES:
             roles[rid] = None
@@ -719,23 +766,26 @@ class App:
                 if self.role[(key, rid)].get():
                     roles[rid] = key
                     break
-        return seconds, roles, self.attack.get()
+        opts = {'attack': self.attack.get(),
+                'range':  self.range.get(),
+                'nohit':  int(raw)}
+        return seconds, roles, opts
 
     def onsave(self):
-        seconds, roles, attack = self.readform()
+        seconds, roles, opts = self.readform()
         if seconds == None:
             return
-        if saveconfig(seconds, roles, attack):
+        if saveconfig(seconds, roles, opts):
             log('설정 저장 : ' + CONFIG_PATH)
 
     def onload(self):
-        seconds, roles, attack, found = loadconfig()
-        self.setform(seconds, roles, attack)
+        seconds, roles, opts, found = loadconfig()
+        self.setform(seconds, roles, opts)
         log(('설정 불러옴 : ' + CONFIG_PATH) if found
             else '저장된 설정 파일 없음 - 기본 셋팅으로 되돌림')
 
     def ondefault(self):
-        self.setform(dict(DEFAULT_SECONDS), dict(DEFAULT_ROLES), DEFAULT_ATTACK)
+        self.setform(dict(DEFAULT_SECONDS), dict(DEFAULT_ROLES), dict(DEFAULT_OPTS))
         log('기본 셋팅으로 되돌림 (저장하려면 설정 저장)')
 
     #체크박스 하나가 켜지면 같은 역할의 다른 키, 같은 키의 다른 역할을 끈다
@@ -774,7 +824,7 @@ class App:
             self.entry[key].configure(state='disabled')
             for rid, label in ROLES:
                 self.check[(key, rid)].configure(state='disabled')
-        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk):
+        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.nhent) + tuple(self.rngbtn):
             b.configure(state='disabled')
         self.btn.configure(state='disabled', text='동작 중  (tab = 정지)')
 
@@ -783,7 +833,7 @@ class App:
         for key in FKEYS:
             for rid, label in ROLES:
                 self.check[(key, rid)].configure(state='normal')
-        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk):
+        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.nhent) + tuple(self.rngbtn):
             b.configure(state='normal')
         self.btn.configure(state='normal', text='시작하기')
         self.refreshrows()      #주기 입력칸은 역할에 따라 다시 결정
@@ -794,16 +844,19 @@ class App:
         if self.started:
             return
 
-        seconds, roles, attack = self.readform()
+        seconds, roles, opts = self.readform()
         if seconds == None:
             log('시작 실패 - 주기 값을 확인하세요')
             return
 
-        saveconfig(seconds, roles, attack)   #시작할 때 쓴 설정을 그대로 저장해둔다
-        applyconfig(seconds, roles, attack)
+        saveconfig(seconds, roles, opts)   #시작할 때 쓴 설정을 그대로 저장해둔다
+        applyconfig(seconds, roles, opts)
 
         log('=== 설정 ===')
-        log('  공격 : ' + ('사용' if attack else '끔'))
+        log('  공격 : ' + ('사용' if opts['attack'] else '끔'))
+        log('  칼 탐지 거리 : ' + dict(RANGES)[opts['range']]
+            + ' (반지름 ' + str(SCAN_START) + '~' + str(SCAN_START * SCAN_ROUND) + 'px)')
+        log('  새로고침 트리거 : ' + str(opts['nohit']) + '회 헛돌면')
         for rid, label in ROLES:
             log('  ' + label + ' : ' + (roles[rid].upper() if roles[rid] else '미지정'))
         act = [(n, key, s) for n, key, s in BUFFS if s > 0]
