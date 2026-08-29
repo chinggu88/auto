@@ -77,37 +77,6 @@ HP_MISS   = 2      #연속으로 이 횟수만큼 못 찾으면 귀환 (HP_INTER
 MARK_IMG  = 'mark1.PNG'     #적대 혈맹 마크
 MARK_CONF = 0.7            #마크는 배경에 묻혀서 신뢰도를 낮게 잡는다 (구버전 oman.py 값)
 
-#소리 감지 : 스피커로 나가는 소리를 루프백으로 받아 타격음(트랜지언트)을 센다
-#이번 단계는 로그만 찍는 계측이다. 판단이나 동작 연동은 안 한다
-SND_RATE    = 48000    #샘플레이트
-SND_FRAME   = 1024     #프레임 크기(48kHz 에서 약 21ms)
-SND_LOG_SEC = 1        #로그 주기(초)
-SND_SUM_SEC = 30       #요약 로그 주기(초)
-SND_K       = 5.0      #온셋 임계 = 이동 중앙값 + K * (MAD 로 추정한 표준편차)
-                       #합성 신호로 재본 값. 3 이면 소음에서 오탐이 늘고
-                       #8 이상이면 오탐은 없지만 실제 타격을 30% 넘게 놓친다
-SND_REFRACT = 0.10     #온셋 불응기(초). 한 타격을 두 번 안 세게
-SND_HIST    = 43       #임계 계산에 쓰는 최근 프레임 수(약 1초)
-SND_MINDB   = -60.0    #이 음량보다 조용한 프레임은 온셋 후보에서 뺀다(무음 오탐 방지)
-SND_BANDS   = [(0, 500), (500, 2000), (2000, 8000), (8000, 24000)]   #저/중/고/초고
-
-#소리로 '전투중'을 판단해서 칼질 아이콘 탐지를 잠깐 세운다
-#실측 RMS :
-#   몹 없음          약 -99dB (무음)
-#   몹만 나를 때림    -23 ~ -17dB   <- 탐지를 계속해야 한다. 그 몹을 쳐야 하니까
-#   서로 때림(내 칼질) 약 -7dB      <- 여기서만 탐지를 멈춘다
-#가를 곳은 -17 과 -7 사이다. dB 는 로그라서 가운데인 -12 를 잡으면 양쪽에 5dB 씩 여유가 남는다
-#(-40 은 몹한테 맞기만 해도 전투로 잡히고, -10 은 -7 에 너무 붙어서 내 칼질 중에 풀린다)
-SND_FIGHT_DB  = -12.0   #이 음량을 넘으면 전투중 후보
-SND_FIGHT_AVG = 0.5     #판정에 쓸 평균 창(초). 프레임(21ms) 하나로 재면 타격 스파이크에 놀아난다
-                        #로그에 찍히는 RMS 와 같은 방식(평균)으로 봐야 눈에 보이는 값으로 튜닝된다
-SND_FIGHT_ON  = 0.2     #이만큼 연속으로 넘으면 전투 시작(초). 짧게 잡아야 첫 타격에 바로 선다
-SND_FIGHT_OFF = 1.5     #이만큼 연속으로 조용해야 전투 끝(초)
-                        #타격 사이 공백에 안 흔들리게 시작보다 훨씬 길게 준다
-SND_FIGHT_MAX = 30.0    #전투중이 이만큼 이어지면 강제 해제(초)
-                        #BGM 을 켜 두거나 다른 프로그램 소리가 계속 나면 영영 멈춰 있게 되므로
-FIGHT_POLL    = 0.1     #전투중일 때 사냥 루프가 쉬는 간격(초)
-
 #=====================================================================
 # 로그 : 매크로 스레드에서 찍고 GUI 스레드가 꺼내 뿌린다
 # tkinter 는 스레드 안전하지 않아서 위젯을 직접 건드리지 않는다
@@ -147,7 +116,6 @@ DEFAULT_ROLES = {
     'transform': 'f11',
 }
 DEFAULT_ATTACK = True    #공격(마우스 서치 + 칼질) 사용 여부
-DEFAULT_SOUND  = False   #소리 감지 사용 여부 (추가 패키지가 필요해서 기본 꺼짐)
 
 BUFFS   = []      # [(트리거명, 키, 주기(초))]  주기 0 = 비활성
 BUFFKEY = {}      # 트리거명 -> 키
@@ -157,7 +125,6 @@ KEY_TRANSFORM      = None   #변신
 KEY_RETURN         = None   #귀환
 TRANSFORM_INTERVAL = 0      #변신 주기(초). 0 이면 변신 안 함
 ATTACK_ON          = True   #공격 사용 여부. 끄면 버프/변신/감시만 돈다
-SOUND_ON           = False  #소리 감지 사용 여부
 
 #=====================================================================
 # 트리거 : 한 순간에 하나만 True
@@ -168,11 +135,7 @@ SOUND_ON           = False  #소리 감지 사용 여부
 ALIVE  = False
 HOTKEY = None     #tab 핫키 핸들. 정지할 때 떼어낸다
 
-#소리로 판단한 전투 상태. 소리 스레드가 쓰고 사냥 루프가 읽는다 (락 없이 bool 하나만 주고받는다)
-HPMISS      = 0       #피 UI 를 연속으로 못 찾은 횟수. checkrHp 가 타이머로 다시 뜨므로 전역에 둔다
-
-FIGHTING    = False   #True 면 칼질 아이콘 탐지를 멈춘다
-FIGHT_READY = False   #소리 감시가 실제로 도는 중인지. 루프백을 못 열면 False 라서 게이트가 통째로 꺼진다
+HPMISS = 0        #피 UI 를 연속으로 못 찾은 횟수. checkrHp 가 타이머로 다시 뜨므로 전역에 둔다
 
 TRIGGER = {'hunt': False, 'stop': False, 'transform': False, 'return': False}
 ORDER   = ['stop', 'return', 'transform']   #처리 우선순위 : 정지 > 귀환 > 변신 > 버프
@@ -394,94 +357,6 @@ def transformtimer():
     request('transform')
     _arm(TRANSFORM_INTERVAL, transformtimer)
 
-#=====================================================================
-# 소리 분석 (DSP) : 오디오 장치와 분리해서 순수 계산만 한다
-#  - numpy 는 opencv-python 이 이미 끌고 오므로 추가 설치가 없다
-#  - 여기 있는 것들은 장치 없이도 돌아가야 한다 (합성 신호로 검증 가능)
-#=====================================================================
-try:
-    import numpy as _np
-    NUMPY_OK = True
-except ImportError:
-    NUMPY_OK = False
-
-#float 배열 -> dBFS. 무음이면 -120 으로 바닥을 깐다
-def _rms_db(buf):
-    if len(buf) == 0:
-        return -120.0
-    r = float(_np.sqrt(_np.mean(_np.square(buf))))
-    if r <= 1e-9:
-        return -120.0
-    return float(20.0 * _np.log10(r))
-
-#스펙트럴 플럭스 : 직전 프레임 대비 '늘어난 만큼만' 더한다
-#타격음처럼 갑자기 커지는 소리에만 뾰족하게 반응하고, 계속 나는 소리에는 둔하다
-def _flux(mag, prevmag):
-    if prevmag is None:
-        return 0.0
-    d = mag - prevmag
-    return float(_np.sum(d[d > 0]))
-
-#대역별 에너지 비율(%) 리스트. 타격음이 어느 대역에 사는지 보려고
-def _bandratio(mag, rate, bands=None):
-    if bands == None:
-        bands = SND_BANDS
-    n     = len(mag)
-    binhz = (rate * 0.5) / max(1, n - 1)
-    total = float(_np.sum(mag)) + 1e-12
-    out   = []
-    for lo, hi in bands:
-        a = int(lo / binhz)
-        b = min(n, int(hi / binhz) + 1)
-        out.append(100.0 * float(_np.sum(mag[a:b])) / total)
-    return out
-
-#플럭스 값을 받아 온셋(타격)인지 판정한다
-#임계를 고정값이 아니라 최근 프레임에서 계산해서 BGM/소음 크기가 달라져도 따라가게 한다
-#표준편차 대신 MAD(중앙값 절대편차)를 쓰는 이유 :
-#  타격이 이력 안에 들어가 있으면 그 스파이크가 표준편차를 부풀려서 임계가 같이 올라간다
-#  그러면 연타 중에 뒤쪽 타격을 놓친다. MAD 는 스파이크에 흔들리지 않는다
-class OnsetDetector:
-    def __init__(self, k=None, refract=None, hist=None, framesec=None, mindb=None):
-        self.k        = SND_K       if k       == None else k
-        self.refract  = SND_REFRACT if refract == None else refract
-        self.hist     = SND_HIST    if hist    == None else hist
-        self.mindb    = SND_MINDB   if mindb   == None else mindb
-        self.framesec = (float(SND_FRAME) / SND_RATE) if framesec == None else framesec
-        self.buf      = []
-        self.t        = 0.0      #프레임 시각(초). 실시간이 아니라 누적이라 테스트가 쉽다
-        self.last     = -1e9     #마지막 온셋 시각
-        self.prev     = 0.0      #직전 프레임 플럭스 (상승 중인지 보려고)
-
-    def push(self, flux, db=0.0):
-        self.t += self.framesec
-        hit = False
-        #최근 이력이 충분히 쌓이기 전에는 판정하지 않는다 (초반 오탐 방지)
-        #너무 조용한 프레임도 후보에서 뺀다 (완전 무음일 때 미세한 흔들림에 안 걸리게)
-        if len(self.buf) >= self.hist and db > self.mindb:
-            arr = _np.asarray(self.buf, dtype=_np.float64)
-            med = float(_np.median(arr))
-            mad = float(_np.median(_np.abs(arr - med))) * 1.4826   #표준편차 환산
-            thr = med + self.k * mad
-            #타격은 '치솟는' 소리다. 직전보다 커지는 순간만 잡으면
-            #소음이 높은 상태로 유지되는 구간(플래토)에서 헛집는 걸 줄일 수 있다
-            if flux > thr and flux > self.prev and (self.t - self.last) >= self.refract:
-                hit       = True
-                self.last = self.t
-        self.prev = flux
-        self.buf.append(flux)
-        if len(self.buf) > self.hist:
-            self.buf.pop(0)
-        return hit
-
-#int16 바이트 -> 모노 float 배열 (-1.0 ~ 1.0)
-def _tomono(raw, channels):
-    a = _np.frombuffer(raw, dtype=_np.int16).astype(_np.float32) / 32768.0
-    if channels > 1:
-        n = (len(a) // channels) * channels
-        a = a[:n].reshape(-1, channels).mean(axis=1)
-    return a
-
 #피 확인. 이미지 매칭은 입력을 안 건드리므로 스레드에서 해도 안전
 def checkrHp():
     global HPMISS
@@ -509,177 +384,6 @@ def checkrHp():
     _arm(HP_INTERVAL, checkrHp)
 
 #=====================================================================
-# 소리 감시 스레드
-#  - 키/마우스를 절대 안 건드린다. 숫자를 뽑아 로그만 찍는다
-#  - ALIVE 를 보고 스스로 끝난다. dostop() 은 손댈 필요 없다
-#  - 패키지가 없거나 장치를 못 열면 경고만 찍고 조용히 빠진다 (사냥은 계속 돈다)
-#=====================================================================
-
-#기본 스피커의 루프백 입력 장치를 찾는다. 못 찾으면 (None, None)
-def _findloopback(pa):
-    try:
-        return pa.get_default_wasapi_loopback(), None
-    except Exception:
-        pass
-    #구버전 PyAudioWPatch 폴백 : 루프백 장치를 직접 훑는다
-    try:
-        for dev in pa.get_loopback_device_info_generator():
-            return dev, None
-    except Exception as e:
-        return None, str(e)
-    return None, '루프백 장치를 못 찾음'
-
-def soundwatch():
-    global FIGHTING, FIGHT_READY
-    if not NUMPY_OK:
-        log('소리 : numpy 가 없어서 끕니다')
-        return
-    try:
-        import pyaudiowpatch as pa
-    except ImportError:
-        log('소리 : PyAudioWPatch 가 없어서 끕니다  (pip install PyAudioWPatch)')
-        return
-
-    p = st = None
-    try:
-        p        = pa.PyAudio()
-        dev, err = _findloopback(p)
-        if dev == None:
-            log('소리 : 루프백 장치를 못 엽니다 - ' + str(err))
-            return
-
-        rate = int(dev.get('defaultSampleRate', SND_RATE))
-        ch   = int(dev.get('maxInputChannels', 2)) or 2
-        st   = p.open(format=pa.paInt16, channels=ch, rate=rate, input=True,
-                      input_device_index=dev['index'], frames_per_buffer=SND_FRAME)
-        log('소리 : 루프백 = ' + str(dev.get('name')) + '  ' + str(rate) + 'Hz  ' + str(ch) + 'ch')
-        log('소리 : 전투 판정 %.0fdB 초과 %.1fs -> 시작, %.0fdB 이하 %.1fs -> 끝'
-            % (SND_FIGHT_DB, SND_FIGHT_ON, SND_FIGHT_DB, SND_FIGHT_OFF))
-        FIGHT_READY = True      #여기서부터 사냥 루프가 FIGHTING 을 믿는다
-
-        det       = OnsetDetector(framesec=float(SND_FRAME) / rate)
-        prevmag   = None
-        onsets    = 0          #로그 주기 동안의 온셋 수
-        dbs       = []         #로그 주기 동안의 RMS
-        bands     = [0.0] * len(SND_BANDS)
-        frames    = 0
-        nextlog   = time.time() + SND_LOG_SEC
-        nextsum   = time.time() + SND_SUM_SEC
-        sumrate   = []         #요약용 : 초당 온셋 이력
-        sumdb     = []
-
-        #전투 판정 상태. 판단은 여기서만 하고 결과 bool 만 FIGHTING 에 실어 보낸다
-        framesec  = float(SND_FRAME) / rate
-        fight     = False      #지금 전투중으로 보는가
-        forced    = False      #MAX 초과로 강제 해제된 상태인가 (한 번 조용해질 때까지 재진입 금지)
-        loudsec   = 0.0        #연속으로 시끄러운 시간
-        quietsec  = 0.0        #연속으로 조용한 시간
-        lvlbuf    = []         #판정용 RMS 이동평균 창
-        lvlmax    = max(1, int(SND_FIGHT_AVG / framesec))
-        fightsec  = 0.0        #전투중으로 본 지 얼마나 됐나
-
-        while ALIVE:
-            raw = st.read(SND_FRAME, exception_on_overflow=False)
-            buf = _tomono(raw, ch)
-            mag = _np.abs(_np.fft.rfft(buf * _np.hanning(len(buf))))
-            db  = _rms_db(buf)
-
-            if det.push(_flux(mag, prevmag), db):
-                onsets += 1
-            prevmag = mag
-
-            #--- 전투중 판정 ---
-            #프레임 하나가 아니라 SND_FIGHT_AVG 초 이동평균으로 본다
-            #  몹한테 맞기만 할 때(평균 -20dB)도 타격 순간 프레임은 임계 위로 튄다
-            #  그 스파이크 하나에 quietsec 가 리셋되면 게이트가 영영 안 풀린다
-            #평균을 쓰면 프레임 하나가 튀어도 창 전체는 거의 안 움직인다
-            lvlbuf.append(db)
-            if len(lvlbuf) > lvlmax:
-                lvlbuf.pop(0)
-            lvl = sum(lvlbuf) / len(lvlbuf)
-
-            #시작은 짧게, 끝은 길게 잡는 히스테리시스. 타격 사이 공백에 게이트가 덜덜 떨지 않게 한다
-            if lvl > SND_FIGHT_DB:
-                loudsec  += framesec
-                quietsec  = 0.0
-            else:
-                quietsec += framesec
-                loudsec   = 0.0
-
-            if not fight:
-                if forced:
-                    #강제 해제된 뒤에는 한 번 조용해지기 전까지 다시 안 들어간다
-                    if quietsec >= SND_FIGHT_OFF:
-                        forced = False
-                elif loudsec >= SND_FIGHT_ON:
-                    fight    = True
-                    fightsec = 0.0
-                    FIGHTING = True
-                    log('소리 : 전투 시작 (평균 %.1fdB) - 칼질 탐지 멈춤' % lvl)
-            else:
-                fightsec += framesec
-                if quietsec >= SND_FIGHT_OFF:
-                    fight    = False
-                    FIGHTING = False
-                    log('소리 : 전투 끝 (평균 %.1fdB, %.1fs) - 멈춘 자리에서 탐지 재개' % (lvl, fightsec))
-                elif fightsec >= SND_FIGHT_MAX:
-                    fight    = False
-                    forced   = True
-                    FIGHTING = False
-                    log('소리 : 전투 %.0fs 초과 - 강제 해제하고 탐지 재개 (BGM 확인)' % fightsec)
-
-            dbs.append(db)
-            br = _bandratio(mag, rate)
-            for i in range(len(bands)):
-                bands[i] += br[i]
-            frames += 1
-
-            now = time.time()
-            if now >= nextlog and frames > 0:
-                avgdb = sum(dbs) / len(dbs)
-                bs    = '저%2d 중%2d 고%2d 초고%2d' % tuple(int(b / frames) for b in bands)
-                lvl   = max(0, min(10, int((avgdb + 60.0) / 6.0)))   #-60dB~0dB 를 0~10 칸으로
-                trig  = [key for key, v in TRIGGER.items() if v]
-                log('소리 [' + (trig[0] if trig else '-') + (' 전투' if fight else '') + ']'
-                    + '  RMS %6.1fdB  온셋 %4.1f/s  ' % (avgdb, onsets / float(SND_LOG_SEC))
-                    + bs + '  ' + '█' * lvl + '░' * (10 - lvl))
-                sumrate.append(onsets / float(SND_LOG_SEC))
-                sumdb.append(avgdb)
-                onsets  = 0
-                frames  = 0
-                dbs     = []
-                bands   = [0.0] * len(SND_BANDS)
-                nextlog = now + SND_LOG_SEC
-
-            if now >= nextsum:
-                if sumrate:
-                    log('소리 요약 %ds : 온셋/s 평균 %.1f (%.0f~%.0f)  RMS 평균 %.1fdB (%.0f~%.0f)'
-                        % (SND_SUM_SEC,
-                           sum(sumrate) / len(sumrate), min(sumrate), max(sumrate),
-                           sum(sumdb) / len(sumdb), min(sumdb), max(sumdb)))
-                sumrate = []
-                sumdb   = []
-                nextsum = now + SND_SUM_SEC
-
-    except Exception as e:
-        log('소리 감시 오류 : ' + str(e))
-    finally:
-        try:
-            if st != None:
-                st.stop_stream()
-                st.close()
-        except Exception:
-            pass
-        try:
-            if p != None:
-                p.terminate()
-        except Exception:
-            pass
-        FIGHT_READY = False
-        FIGHTING    = False      #소리가 죽어도 사냥 루프가 멈춰 있으면 안 된다
-        log('소리 감시 종료')
-
-#=====================================================================
 # 사냥 루프 (매크로 스레드) - 용던
 #=====================================================================
 def huntloop(p, atkvalue):
@@ -704,12 +408,6 @@ def huntloop(p, atkvalue):
         #공격 꺼짐 : 마우스를 아예 안 건드리고 버프/변신/감시만 돌린다
         if not ATTACK_ON:
             time.sleep(0.2)    #풀스핀 방지
-            continue
-
-        #소리로 전투중이라고 보면 커서를 아예 안 건드린다
-        #idx 를 그대로 두므로 전투가 끝나면 멈춘 자리(중간)에서 이어서 돈다
-        if FIGHT_READY and FIGHTING:
-            time.sleep(FIGHT_POLL)
             continue
 
         # sc.run_pending()
@@ -739,9 +437,7 @@ def huntloop(p, atkvalue):
             gu.click()
             # gu.keyUp('ctrl')
             cnt = 0
-            if not FIGHT_READY:
-                idx = 0         #소리 감시가 없으면 예전처럼 1바퀴 첫 방향부터 다시 스캔
-                                #(소리가 있으면 곧 전투로 멈추고, 끝난 뒤 다음 점부터 이어 돈다)
+            idx = 0             #1바퀴 첫 방향부터 다시 스캔 (가까운 적 우선)
 
 #=====================================================================
 # 설정 저장 / 불러오기 (exe 옆 config.json)
@@ -754,9 +450,8 @@ def loadconfig(path=None):
     seconds = dict(DEFAULT_SECONDS)
     roles   = dict(DEFAULT_ROLES)
     attack  = DEFAULT_ATTACK
-    sound   = DEFAULT_SOUND
     if not os.path.isfile(path):
-        return seconds, roles, attack, sound, False
+        return seconds, roles, attack, False
 
     try:
         f = open(path, 'r', encoding='utf-8')
@@ -764,7 +459,7 @@ def loadconfig(path=None):
         f.close()
     except Exception as e:
         log('설정 불러오기 실패, 기본값 사용 : ' + str(e))
-        return seconds, roles, attack, sound, False
+        return seconds, roles, attack, False
 
     #모르는 키/이상한 값은 무시하고 아는 것만 받는다
     raw = data.get('seconds', {})
@@ -786,17 +481,14 @@ def loadconfig(path=None):
 
     if isinstance(data.get('attack'), bool):
         attack = data['attack']
-    if isinstance(data.get('sound'), bool):
-        sound = data['sound']
-    return seconds, roles, attack, sound, True
+    return seconds, roles, attack, True
 
-def saveconfig(seconds, roles, attack, sound, path=None):
+def saveconfig(seconds, roles, attack, path=None):
     if path == None:
         path = CONFIG_PATH
     data = {'seconds': dict((key, int(seconds.get(key, 0))) for key in FKEYS),
             'roles':   dict((rid, roles.get(rid)) for rid in ('return', 'refresh', 'transform')),
-            'attack':  bool(attack),
-            'sound':   bool(sound)}
+            'attack':  bool(attack)}
     try:
         f = open(path, 'w', encoding='utf-8')
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -809,14 +501,13 @@ def saveconfig(seconds, roles, attack, sound, path=None):
 #=====================================================================
 # GUI 가 넘긴 설정을 전역에 반영
 #=====================================================================
-def applyconfig(seconds, roles, attack=True, sound=False):
+def applyconfig(seconds, roles, attack=True):
     #seconds : {키 -> 초},  roles : {'return'/'refresh'/'transform' -> 키 or None}
-    #attack  : 공격 사용 여부,  sound : 소리 감지 사용 여부
+    #attack  : 공격 사용 여부
     global BUFFS, BUFFKEY, TRIGGER, ORDER, PENDING
-    global KEY_RETURN, KEY_REFRESH, KEY_TRANSFORM, TRANSFORM_INTERVAL, ATTACK_ON, SOUND_ON
+    global KEY_RETURN, KEY_REFRESH, KEY_TRANSFORM, TRANSFORM_INTERVAL, ATTACK_ON
 
     ATTACK_ON     = bool(attack)
-    SOUND_ON      = bool(sound)
     KEY_RETURN    = roles.get('return')
     KEY_REFRESH   = roles.get('refresh')
     KEY_TRANSFORM = roles.get('transform')
@@ -883,9 +574,6 @@ def runmacro():
             log('새로고침키 미지정 - 새로고침 끔')
 
         #소리 감시는 입력을 안 건드리므로 별도 스레드로 띄운다. ALIVE 보고 스스로 끝난다
-        if SOUND_ON:
-            threading.Thread(target=soundwatch, daemon=True).start()
-
         huntloop([CENTERPOINT[0], CENTERPOINT[1] + SCAN_OFFSET_Y], atk)
     except Exception as e:
         log('매크로 오류 : ' + str(e))
@@ -967,10 +655,6 @@ class App:
                   text='끄면 마우스를 아예 안 건드리고 버프 / 변신 / 피·마크 감시만 돕니다.'
                   ).pack(anchor='w', padx=6, pady=(0, 4))
 
-        self.sound  = tk.BooleanVar(value=DEFAULT_SOUND)
-        self.sndchk = ttk.Checkbutton(optbox, text='소리 감지 (로그만, PyAudioWPatch 필요)',
-                                      variable=self.sound)
-        self.sndchk.pack(anchor='w', padx=6, pady=(4, 0))
         ttk.Label(optbox, foreground='#555',
                   text='타격음을 세어 로그에 찍기만 합니다. 매크로 동작은 안 바뀝니다. '
                        '게임 BGM 을 끄면 신호가 깨끗해집니다.'
@@ -1000,24 +684,23 @@ class App:
         sb.pack(side='right', fill='y')
 
         #저장된 설정이 있으면 그것으로, 없으면 기본 셋팅으로 시작
-        seconds, roles, attack, sound, found = loadconfig()
-        self.setform(seconds, roles, attack, sound)
+        seconds, roles, attack, found = loadconfig()
+        self.setform(seconds, roles, attack)
         self.drainlog()
         log(('설정 불러옴 : ' + CONFIG_PATH) if found else '저장된 설정 없음 - 기본 셋팅 사용')
 
     #--- 폼 <-> 값 ---
 
     #값을 위젯에 넣는다
-    def setform(self, seconds, roles, attack, sound):
+    def setform(self, seconds, roles, attack):
         for key in FKEYS:
             self.sec[key].set(str(seconds.get(key, 0)))
             for rid, label in ROLES:
                 self.role[(key, rid)].set(roles.get(rid) == key)
         self.attack.set(bool(attack))
-        self.sound.set(bool(sound))
         self.refreshrows()
 
-    #위젯에서 값을 읽는다. 주기가 숫자가 아니면 (None, None, None, None) 을 돌려준다
+    #위젯에서 값을 읽는다. 주기가 숫자가 아니면 (None, None, None) 을 돌려준다
     def readform(self):
         seconds = {}
         for key in FKEYS:
@@ -1026,7 +709,7 @@ class App:
                 raw = '0'
             if not raw.isdigit():
                 log('주기는 0 이상 정수만 : ' + key.upper() + ' = ' + raw)
-                return None, None, None, None
+                return None, None, None
             seconds[key] = int(raw)
 
         roles = {}
@@ -1036,23 +719,23 @@ class App:
                 if self.role[(key, rid)].get():
                     roles[rid] = key
                     break
-        return seconds, roles, self.attack.get(), self.sound.get()
+        return seconds, roles, self.attack.get()
 
     def onsave(self):
-        seconds, roles, attack, sound = self.readform()
+        seconds, roles, attack = self.readform()
         if seconds == None:
             return
-        if saveconfig(seconds, roles, attack, sound):
+        if saveconfig(seconds, roles, attack):
             log('설정 저장 : ' + CONFIG_PATH)
 
     def onload(self):
-        seconds, roles, attack, sound, found = loadconfig()
-        self.setform(seconds, roles, attack, sound)
+        seconds, roles, attack, found = loadconfig()
+        self.setform(seconds, roles, attack)
         log(('설정 불러옴 : ' + CONFIG_PATH) if found
             else '저장된 설정 파일 없음 - 기본 셋팅으로 되돌림')
 
     def ondefault(self):
-        self.setform(dict(DEFAULT_SECONDS), dict(DEFAULT_ROLES), DEFAULT_ATTACK, DEFAULT_SOUND)
+        self.setform(dict(DEFAULT_SECONDS), dict(DEFAULT_ROLES), DEFAULT_ATTACK)
         log('기본 셋팅으로 되돌림 (저장하려면 설정 저장)')
 
     #체크박스 하나가 켜지면 같은 역할의 다른 키, 같은 키의 다른 역할을 끈다
@@ -1091,7 +774,7 @@ class App:
             self.entry[key].configure(state='disabled')
             for rid, label in ROLES:
                 self.check[(key, rid)].configure(state='disabled')
-        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.sndchk):
+        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk):
             b.configure(state='disabled')
         self.btn.configure(state='disabled', text='동작 중  (tab = 정지)')
 
@@ -1100,7 +783,7 @@ class App:
         for key in FKEYS:
             for rid, label in ROLES:
                 self.check[(key, rid)].configure(state='normal')
-        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.sndchk):
+        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk):
             b.configure(state='normal')
         self.btn.configure(state='normal', text='시작하기')
         self.refreshrows()      #주기 입력칸은 역할에 따라 다시 결정
@@ -1111,17 +794,16 @@ class App:
         if self.started:
             return
 
-        seconds, roles, attack, sound = self.readform()
+        seconds, roles, attack = self.readform()
         if seconds == None:
             log('시작 실패 - 주기 값을 확인하세요')
             return
 
-        saveconfig(seconds, roles, attack, sound)   #시작할 때 쓴 설정을 그대로 저장해둔다
-        applyconfig(seconds, roles, attack, sound)
+        saveconfig(seconds, roles, attack)   #시작할 때 쓴 설정을 그대로 저장해둔다
+        applyconfig(seconds, roles, attack)
 
         log('=== 설정 ===')
         log('  공격 : ' + ('사용' if attack else '끔'))
-        log('  소리 감지 : ' + ('사용' if sound else '끔'))
         for rid, label in ROLES:
             log('  ' + label + ' : ' + (roles[rid].upper() if roles[rid] else '미지정'))
         act = [(n, key, s) for n, key, s in BUFFS if s > 0]
