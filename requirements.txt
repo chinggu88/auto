@@ -18,3 +18,6 @@ keyboard==0.13.5
 
 # 구버전 스크립트(oman/tell/turn/main2)에서만 쓴다. main.py 는 안 씀
 schedule==1.2.2
+
+# 소리로 칼질을 감지할 때만 필요 (WASAPI 루프백 녹음). 없으면 소리 감지만 자동으로 꺼진다
+PyAudioWPatch==0.2.12.7
