@@ -9,6 +9,7 @@ import threading
 import queue
 import json
 import math
+import random
 import os.path
 import sys
 import tkinter as tk
@@ -52,6 +53,33 @@ CENTERPOINT = [625, 480]
 PROBE_SETTLE = 0.025   # 커서 모양 갱신 대기 최대치(초)
 PROBE_STEP   = 0.003   # 폴링 간격(초)
 CTRL_DELAY   = 0.08    # ctrl 누른 뒤 클릭까지(초)
+
+#=====================================================================
+# 사람처럼 움직이기
+#  SetCursorPos 는 중간 좌표 없이 순간이동한다. 사람 손은 그렇게 못 움직인다
+#  그래서 '눈에 띄는 이동' 에만 곡선 경로를 그리고, 스캔 프로브는 그대로 순간이동을 쓴다
+#  (프로브는 한 바퀴에 32~80번이라 경로를 그리면 사냥 속도가 몇 배로 느려진다)
+#=====================================================================
+NATURAL_ON   = True    #False 면 예전처럼 전부 순간이동 + 고정 타이밍으로 돌아간다
+
+MOVE_PX_SEC  = 2200.0  #이 속도로 거리에 비례해 이동 시간을 잡는다(px/초)
+MOVE_MIN_SEC = 0.05    #아무리 가까워도 이만큼은 쓴다
+MOVE_MAX_SEC = 0.30    #아무리 멀어도 이보다는 안 쓴다. 사냥 속도가 죽는다
+MOVE_STEP    = 0.010   #중간 좌표를 찍는 간격(초)
+MOVE_MIN_PT  = 8       #짧은 이동이라도 최소 이만큼은 나눠 찍는다
+                       #시간으로만 나누면 50px 이동이 3점이 돼서 여전히 순간이동처럼 보인다
+                       #파이썬 3.11 부터 윈도우 time.sleep 이 고해상도라 6ms 간격도 제대로 쉰다
+                       #(3.9 로 돌리면 15.6ms 로 뭉개진다. 그때는 총 이동시간만 맞고 점은 성겨진다)
+MOVE_BOW     = 0.15    #경로가 직선에서 벗어나는 정도(거리 대비)
+                       #0 이면 직선이라 오히려 티가 난다. 0.3 을 넘기면 손이 떨리는 것처럼 보인다
+MOVE_TIME_R  = (0.85, 1.25)   #이동 시간에 곱할 난수 범위. 매번 같은 속도로 가면 티가 난다
+
+CLICK_ADJ    = 7       #클릭 직전 미세 조정 폭(px). 사람은 목표를 한 번에 안 찍고 고쳐 잡는다
+CLICK_DELAY  = (0.04, 0.13)   #자리를 잡고 클릭하기까지(초)
+SCAN_JITTER  = 5       #스캔점 좌표를 매번 이만큼 흔든다(px)
+                       #격자가 완벽하면 사람이 만든 궤적일 수가 없다
+                       #덤으로 매 바퀴 조금씩 다른 픽셀을 훑어서 사각지대가 줄어든다
+PROBE_JITTER = (1.0, 1.6)     #PROBE_SETTLE 에 곱할 난수 범위. 대기 시간도 일정하면 안 된다
 
 #서치 범위 : 센터포인트 기준 SCAN_DIRS 방향을, 반지름을 1배씩 늘려가며 돈다
 SCAN_DIRS  = 16    # 방향 수. 16 이면 22.5도 간격
@@ -242,6 +270,62 @@ def settrigger(name):
 #pyautogui 를 거치지 않는 저수준 이동 (PAUSE 우회)
 def _movefast(x, y):
     win32api.SetCursorPos((int(x), int(y)))
+
+#가감속 곡선(smoothstep) : 시작과 끝은 느리고 가운데가 빠르다
+#사람이 마우스를 옮길 때 나오는 속도 모양이다. 등속으로 가면 기계처럼 보인다
+def _ease(t):
+    return t * t * (3.0 - 2.0 * t)
+
+#2차 베지에 곡선을 따라 이동한다
+#  - 제어점을 직선 중간에서 수직으로 밀어 활처럼 휜 경로를 만든다
+#  - 휘는 방향과 크기를 매번 난수로 바꾼다. 안 그러면 같은 두 점 사이가 항상 같은 궤적이 된다
+#  - 좌표는 가감속 곡선으로, 시간은 등간격으로 나눈다 -> 속도가 자연스럽게 변한다
+def _movehuman(x, y):
+    try:
+        sx, sy = win32api.GetCursorPos()
+    except Exception:
+        _movefast(x, y)
+        return
+    ex   = int(x)
+    ey   = int(y)
+    dx   = ex - sx
+    dy   = ey - sy
+    dist = math.hypot(dx, dy)
+    if dist < 3:                      #이미 거의 제자리면 곡선을 그릴 게 없다
+        _movefast(ex, ey)
+        return
+
+    dur  = min(MOVE_MAX_SEC, max(MOVE_MIN_SEC, dist / MOVE_PX_SEC))
+    dur *= random.uniform(*MOVE_TIME_R)
+    bow  = dist * MOVE_BOW * random.uniform(-1.0, 1.0)
+    mx   = (sx + ex) * 0.5 - dy / dist * bow
+    my   = (sy + ey) * 0.5 + dx / dist * bow
+
+    steps = max(MOVE_MIN_PT, int(dur / MOVE_STEP))
+    t0    = time.perf_counter()
+    for i in range(1, steps + 1):
+        t = _ease(i / float(steps))
+        u = 1.0 - t
+        win32api.SetCursorPos((int(round(u * u * sx + 2 * u * t * mx + t * t * ex)),
+                               int(round(u * u * sy + 2 * u * t * my + t * t * ey))))
+        #경과 시간 기준으로 잔다. 루프가 밀려도 전체 이동 시간이 늘어나지 않는다
+        gap = (t0 + dur * (i / float(steps))) - time.perf_counter()
+        if gap > 0:
+            time.sleep(gap)
+    _movefast(ex, ey)                 #반올림 오차를 없애고 정확히 목표에 놓는다
+
+#클릭 직전 자리잡기 + 클릭
+#미세 조정을 하다가 대상에서 벗어날 수 있으므로, 커서 모양을 다시 보고 어긋났으면 되돌린다
+#(원래 좌표는 _probe 가 공격 커서임을 확인한 자리라 확실하다)
+def _settleclick(x, y, atkvalue):
+    if NATURAL_ON:
+        _movehuman(x + random.randint(-CLICK_ADJ, CLICK_ADJ),
+                   y + random.randint(-CLICK_ADJ, CLICK_ADJ))
+        if win32gui.GetCursorInfo()[1] != atkvalue:
+            _movefast(x, y)
+            time.sleep(PROBE_STEP)
+        time.sleep(random.uniform(*CLICK_DELAY))
+    gu.click()
 
 #(x,y)로 이동 후 공격 커서인지 확인. 맞으면 즉시 True
 def _probe(x, y, atkvalue):
@@ -696,13 +780,18 @@ def huntloop(p, atkvalue):
                 cnt     = 0
                 loopcnt = 0       #누적 횟수는 여기서만 초기화된다
 
+        #격자를 그대로 찍지 않고 매번 조금씩 흔든다 (무비용)
+        if NATURAL_ON:
+            x += random.randint(-SCAN_JITTER, SCAN_JITTER)
+            y += random.randint(-SCAN_JITTER, SCAN_JITTER)
+
         _movefast(parkpos[0], parkpos[1])   #커서 초기화 (park)
-        time.sleep(PROBE_SETTLE)
+        time.sleep(PROBE_SETTLE * random.uniform(*PROBE_JITTER) if NATURAL_ON else PROBE_SETTLE)
         if _probe(x, y, atkvalue):
             #ctrl 강제공격은 뺐다. 그냥 클릭만 한다
             # gu.keyDown('ctrl')
             # time.sleep(CTRL_DELAY)
-            gu.click()
+            _settleclick(x, y, atkvalue)
             # gu.keyUp('ctrl')
             cnt = 0
             if not FIGHT_READY:
