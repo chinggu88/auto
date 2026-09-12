@@ -11,6 +11,7 @@ import json
 import math
 import random
 import os.path
+import glob
 import sys
 import tkinter as tk
 from tkinter import ttk
@@ -95,13 +96,15 @@ SCAN_OFFSET_Y = -38   # 스캔 중심의 y 보정(px). 음수면 위, 양수면 
 BUFF_GAP    = 1    #버프 키 누른 뒤 대기(초)
 LOOP_LIMIT  = 50   #공격 루프 최대 횟수. 채우면 새로고침
                    #칼질을 계속 해도 안 줄고, 새로고침될 때만 초기화된다
-HP_INTERVAL = 1    #피/마크 감시 주기(초)
+HP_INTERVAL = 2    #피/마크 감시 주기(초). 마크 이미지가 늘어서 1초는 빠듯해 2초로 잡음
 START_DELAY = 3    #시작 버튼 누르고 게임 창 활성화할 시간(초)
 
 HP_IMG    = 'checkhp.PNG'   #피 부족 경고 UI. 이게 '뜨면' 귀환한다
 HP_CONF   = 0.9
-MARK_IMG  = 'mark1.PNG'     #적대 혈맹 마크
+MARK_GLOB = 'mark*.PNG'    #적대 혈맹 마크. image 폴더에 있는 걸 전부 긁어온다
 MARK_CONF = 0.7            #마크는 배경에 묻혀서 신뢰도를 낮게 잡는다 (구버전 oman.py 값)
+                           #파일마다 따로 주고 싶으면 MARK_CONF_BY_FILE 에 적는다
+MARK_CONF_BY_FILE = {}     #예) {'mark3.PNG': 0.8} 처럼 파일명만 적으면 그 값이 우선
 
 #=====================================================================
 # 소리 감지 : 스피커로 나가는 소리를 루프백으로 받아 '내가 칼질 중'인지만 본다
@@ -595,6 +598,29 @@ class FightGate:
                 self.event  = 'forced'
         return self.fight
 
+#image 폴더에 들어있는 마크 이미지를 전부 긁어온다
+#  - 파일만 넣어두면 코드 수정 없이 감시 대상에 추가된다 (mark5.PNG 등)
+#  - 파일명 순으로 정렬해서 mark1, mark2 ... 순서로 본다
+#  - 한 번 읽고 캐시한다. 사냥 중에 폴더를 뒤지지 않기 위함
+MARK_FILES = None
+def markfiles():
+    global MARK_FILES
+    if MARK_FILES != None:
+        return MARK_FILES
+
+    found = glob.glob(IMAGE_DIR + MARK_GLOB) + glob.glob(IMAGE_DIR + 'mark*.png')
+    #윈도우 glob 은 대소문자를 안 가려서 같은 파일이 두 번 잡힌다. 파일명 기준으로 중복 제거
+    seen  = {}
+    for path in found:
+        seen[os.path.basename(path).lower()] = path
+    MARK_FILES = [seen[name] for name in sorted(seen.keys())]
+
+    if len(MARK_FILES) == 0:
+        log('마크 이미지 없음 : ' + IMAGE_DIR + MARK_GLOB + ' 에 파일이 하나도 없다')
+    else:
+        log('마크 이미지 ' + str(len(MARK_FILES)) + '개 : ' + ', '.join([os.path.basename(x) for x in MARK_FILES]))
+    return MARK_FILES
+
 #피 확인. 이미지 매칭은 입력을 안 건드리므로 스레드에서 해도 안전
 def checkrHp():
     if not ALIVE:
@@ -607,11 +633,15 @@ def checkrHp():
         request('return')
         return                #매크로 루프가 처리하고 종료하므로 타이머 재등록 안 함
 
-    #2. 적대 혈맹 마크
-    if gu.locateCenterOnScreen(file_path + MARK_IMG, confidence=MARK_CONF) != None:
-        log('적대 마크 발견 (' + MARK_IMG + ') 귀환!')
-        request('return')
-        return
+    #2. 적대 혈맹 마크. image 폴더에 있는 mark*.PNG 를 전부 돌린다
+    #   하나라도 걸리면 나머지는 볼 필요가 없으므로 바로 귀환
+    for markpath in markfiles():
+        markname = os.path.basename(markpath)
+        markconf = MARK_CONF_BY_FILE.get(markname, MARK_CONF)
+        if gu.locateCenterOnScreen(markpath, confidence=markconf) != None:
+            log('적대 마크 발견 (' + markname + ') 귀환!')
+            request('return')
+            return
 
     _arm(HP_INTERVAL, checkrHp)
 
