@@ -106,12 +106,17 @@ MARK_CONF = 0.7            #마크는 배경에 묻혀서 신뢰도를 낮게 �
                            #파일마다 따로 주고 싶으면 MARK_CONF_BY_FILE 에 적는다
 MARK_CONF_BY_FILE = {}     #예) {'mark3.PNG': 0.8} 처럼 파일명만 적으면 그 값이 우선
 
-#내 캐릭터 머리 위 마크는 적이 아니므로 무시한다
-#  - 캐릭터는 항상 화면 중앙(CENTERPOINT)에 있고, 마크는 그 위에 뜬다
-#  - 구버전 turn.py 가 mark4 를 x 600~650, y 346 에서 걸러냈으니 중앙에서 위로 약 134px
-#  - 이 점을 중심으로 MARK_SELF_RADIUS 안에 들어온 매칭은 버린다. 실기에서 로그 보고 맞출 것
-MARK_SELF_OFFSET = [0, -134]   #CENTERPOINT 기준 내 마크 위치 보정(px). 음수면 위
-MARK_SELF_RADIUS = 60          #이 거리(px) 안이면 내 마크로 본다. 0 이면 예외처리 끔
+#내 마크는 적이 아니므로 무시한다
+#  - 캐릭터는 항상 화면 중앙(CENTERPOINT)에 있다. 아래 자리들은 CENTERPOINT 기준 보정값(px)
+#  - 실측 : 내 마크가 (625, 852) 에 잡힘 -> 중앙에서 아래로 372
+#  - 구버전 turn.py 가 mark4 를 x 600~650, y 346 에서 걸러낸 흔적도 있어 위쪽 134 도 같이 둠
+#    (실기에서 안 잡히는 자리면 지워도 된다)
+#  - 자리마다 MARK_SELF_RADIUS 안에 들어온 매칭은 버린다. 귀환 로그의 좌표 보고 맞출 것
+MARK_SELF_OFFSETS = [
+    [0,  372],   #(625, 852) 실측
+    [0, -134],   #(625, 346) 머리 위. turn.py 값
+]
+MARK_SELF_RADIUS = 80          #이 거리(px) 안이면 내 마크로 본다. 0 이면 예외처리 끔
 
 #=====================================================================
 # 소리 감지 : 스피커로 나가는 소리를 루프백으로 받아 '내가 칼질 중'인지만 본다
@@ -628,13 +633,16 @@ def markfiles():
         log('마크 이미지 ' + str(len(MARK_FILES)) + '개 : ' + ', '.join([os.path.basename(x) for x in MARK_FILES]))
     return MARK_FILES
 
-#내 캐릭터 머리 위 자리인지. 마크 매칭 중심 (x, y) 를 받는다
+#내 마크 자리인지. 마크 매칭 중심 (x, y) 를 받아 MARK_SELF_OFFSETS 의 자리들과 거리를 잰다
 def isselfmark(x, y):
     if MARK_SELF_RADIUS <= 0:
         return False
-    sx = CENTERPOINT[0] + MARK_SELF_OFFSET[0]
-    sy = CENTERPOINT[1] + MARK_SELF_OFFSET[1]
-    return math.hypot(x - sx, y - sy) <= MARK_SELF_RADIUS
+    for off in MARK_SELF_OFFSETS:
+        sx = CENTERPOINT[0] + off[0]
+        sy = CENTERPOINT[1] + off[1]
+        if math.hypot(x - sx, y - sy) <= MARK_SELF_RADIUS:
+            return True
+    return False
 
 #마크 하나를 화면에서 찾는다. 내 캐릭터 자리에 뜬 건 건너뛰고,
 #그 밖에서 잡힌 첫 매칭의 중심 (x, y) 를 돌려준다. 없으면 None
