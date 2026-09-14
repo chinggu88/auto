@@ -172,6 +172,18 @@ def log(msg):
     except Exception:
         pass
 
+#초 -> '1시간 23분 45초'. 사냥 시간 로그용
+def fmtsec(sec):
+    sec = int(sec)
+    h = sec // 3600
+    m = (sec % 3600) // 60
+    ss = sec % 60
+    if h > 0:
+        return str(h) + '시간 ' + str(m) + '분 ' + str(ss) + '초'
+    if m > 0:
+        return str(m) + '분 ' + str(ss) + '초'
+    return str(ss) + '초'
+
 #=====================================================================
 # 런타임 설정 : GUI 가 시작 전에 채운다
 #=====================================================================
@@ -222,6 +234,8 @@ SOUND_ON           = DEFAULT_OPTS['sound']  #소리 감지 사용 여부
 #=====================================================================
 ALIVE  = False
 HOTKEY = None     #tab 핫키 핸들. 정지할 때 떼어낸다
+HUNT_START = None #사냥 루프에 들어간 시각(time.time()). 종료 때 사냥 시간을 찍는 데 쓴다
+                  #카운트다운/캘리브레이션은 사냥이 아니므로 huntloop 직전에 잡는다
 
 #소리로 판단한 칼질 상태. 소리 스레드가 쓰고 사냥 루프가 읽는다
 #bool 하나만 주고받으므로 락은 두지 않는다 (한 박자 늦게 읽어도 다음 프레임에 맞춰진다)
@@ -979,7 +993,7 @@ def applyconfig(seconds, roles, opts=None):
 #매크로 본체. GUI 스레드가 아니라 전용 스레드에서 돈다
 #끝나면(정지/오류) GUI 가 스레드 종료를 보고 시작 버튼을 다시 켠다
 def runmacro():
-    global ALIVE, HOTKEY
+    global ALIVE, HOTKEY, HUNT_START
     try:
         ALIVE  = True
         HOTKEY = k.add_hotkey('tab', requeststop)
@@ -1025,6 +1039,8 @@ def runmacro():
         else:
             log('소리 감지 끔 - 서치를 계속 돕니다')
 
+        HUNT_START = time.time()
+        log('사냥 시작')
         huntloop([CENTERPOINT[0], CENTERPOINT[1] + SCAN_OFFSET_Y], atk)
     except Exception as e:
         log('매크로 오류 : ' + str(e))
@@ -1032,6 +1048,13 @@ def runmacro():
         #정지든 오류든 여기로 온다. 타이머와 핫키를 반드시 걷어낸다
         ALIVE = False
         canceltimers()
+        #피 소모 귀환이든 tab 정지든, 사냥이 얼마나 돌았는지 남긴다
+        if HUNT_START != None:
+            log('사냥 시간 : ' + fmtsec(time.time() - HUNT_START)
+                + ' (' + time.strftime('%H:%M:%S', time.localtime(HUNT_START)) + ' 시작)')
+            HUNT_START = None
+        else:
+            log('사냥 시작 전 종료')
         if HOTKEY != None:
             try:
                 k.remove_hotkey(HOTKEY)
