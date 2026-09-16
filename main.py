@@ -221,7 +221,10 @@ KEY_REFRESH        = None   #사냥 헛돌 때 새로고침
 KEY_TRANSFORM      = None   #변신
 KEY_RETURN         = None   #귀환
 TRANSFORM_INTERVAL = 0      #변신 주기(초). 0 이면 변신 안 함
-ATTACK_ON          = True   #공격 사용 여부. 끄면 버프/변신/감시만 돈다
+ATTACK_ON          = True   #공격 사용 여부. 끄면 서치를 안 하고 수동 사냥 보조로 돈다
+                            #(사람이 마우스를 움직이고, 대상 위에 커서가 올라가면 휠 클릭만 대신 눌러준다)
+MANUAL_POLL        = 0.03   #수동 사냥 : 커서 모양을 보는 간격(초)
+MANUAL_CLICK_GAP   = 0.2    #수동 사냥 : 휠 클릭 한 번 누르고 다음 클릭까지 최소 간격(초). 연타 방지
 SCAN_ROUND         = SCAN_NEAR              #현재 탐지 거리의 바퀴 수
 NOHIT_LIMIT        = DEFAULT_OPTS['nohit']  #헛돌 때 새로고침까지의 횟수
 SOUND_ON           = DEFAULT_OPTS['sound']  #소리 감지 사용 여부
@@ -832,9 +835,14 @@ def huntloop(p, atkvalue):
         if runpending():       #버프/변신/귀환이 먼저. 처리했으면 처음부터
             continue
 
-        #공격 꺼짐 : 마우스를 아예 안 건드리고 버프/변신/감시만 돌린다
+        #공격 꺼짐 : 수동 사냥 보조. 커서는 안 움직이고, 사람이 올려둔 자리가 대상이면 휠 클릭만 누른다
+        #(구버전 main2.py 의 수동사냥 루프. 우클릭을 사람이 직접 안 눌러도 되게 한다)
         if not ATTACK_ON:
-            time.sleep(0.2)    #풀스핀 방지
+            if win32gui.GetCursorInfo()[1] == atkvalue:
+                gu.middleClick()
+                time.sleep(MANUAL_CLICK_GAP)
+            else:
+                time.sleep(MANUAL_POLL)
             continue
 
         #칼질 소리가 들리면 이미 몹을 잡고 있는 것이므로 커서를 아예 안 건드린다
@@ -1006,13 +1014,11 @@ def runmacro():
             if runpending() or (not ALIVE):
                 return
 
-        #공격을 끄면 커서 캘리브레이션(이동+클릭)도 할 필요가 없다
-        atk = None
-        if ATTACK_ON:
-            atk = setattckinfo(CENTERPOINT)
-            log('공격 커서 : ' + str(atk))
-        else:
-            log('공격 끔 - 버프/변신/감시만 돕니다')
+        #수동 사냥도 '대상 위인지' 를 커서 모양으로 보므로 공격을 꺼도 캘리브레이션은 한다
+        atk = setattckinfo(CENTERPOINT)
+        log('공격 커서 : ' + str(atk))
+        if not ATTACK_ON:
+            log('공격 끔 - 수동 사냥 : 대상 위에 커서를 올리면 휠 클릭을 대신 누릅니다')
 
         if KEY_TRANSFORM != None and TRANSFORM_INTERVAL > 0:
             log('변신(' + KEY_TRANSFORM + ') ' + str(TRANSFORM_INTERVAL) + '초 주기')
@@ -1126,7 +1132,8 @@ class App:
                                       variable=self.attack)
         self.atkchk.pack(anchor='w', padx=6, pady=4)
         ttk.Label(optbox, foreground='#555',
-                  text='끄면 마우스를 아예 안 건드리고 버프 / 변신 / 피·마크 감시만 돕니다.'
+                  text='끄면 서치를 안 하고 수동 사냥 보조로 돕니다 : 대상 위에 커서를 올리면 휠 클릭을 대신 누릅니다.\n'
+                       '버프 / 변신 / 피·마크 감시는 그대로 돕니다.'
                   ).pack(anchor='w', padx=6, pady=(0, 4))
 
         #--- 칼 탐지 거리 ---
