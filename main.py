@@ -204,7 +204,9 @@ DEFAULT_ROLES = {
     'return':    'f12',
     'refresh':   'f5',
     'transform': 'f11',
+    'skill':     'f6',    #공격스킬 - 공격 중에만 쿨타임이 돌고, 대상을 치고 나서 누른다
 }
+ROLE_IDS = ['return', 'refresh', 'transform', 'skill']   #config.json 에 저장하는 역할 목록
 #옵션 기본값. 항목이 계속 늘어서 dict 하나로 묶는다 (config.json 에도 이 키 그대로 들어간다)
 DEFAULT_OPTS = {
     'attack': True,     #공격(마우스 서치 + 칼질) 사용 여부
@@ -220,6 +222,10 @@ BUFFKEY = {}      # 트리거명 -> 키
 KEY_REFRESH        = None   #사냥 헛돌 때 새로고침
 KEY_TRANSFORM      = None   #변신
 KEY_RETURN         = None   #귀환
+KEY_SKILL          = None   #공격스킬. 대상을 클릭한 뒤 / 칼질 중에 쿨타임이 차 있으면 누른다
+SKILL_COOL         = 0      #공격스킬 쿨타임(초). 주기 칸 값. 0 이면 끔
+                            #타이머가 아니라 사냥 루프 안에서 '공격 중인 시간' 만 누적해서 잰다
+                            #-> 버프/변신으로 공격이 멈춘 동안, 공격을 껐을 때는 쿨타임도 같이 멈춘다
 TRANSFORM_INTERVAL = 0      #변신 주기(초). 0 이면 변신 안 함
 ATTACK_ON          = True   #공격 사용 여부. 끄면 서치를 안 하고 수동 사냥 보조로 돈다
                             #(사람이 마우스를 움직이고, 대상 위에 커서가 올라가면 휠 클릭만 대신 눌러준다)
@@ -823,6 +829,20 @@ def huntloop(p, atkvalue):
     loopcnt = 0       #공격 루프 누적 횟수 (새로고침될 때만 초기화)
     idx     = 0       #지금 볼 스캔점 번호. 전투로 멈췄다 이어 돌려고 while 밖에 둔다
 
+    #공격스킬 쿨타임. 실제 시계가 아니라 '공격 중이던 시간' 만 더한다
+    #시작할 때는 꽉 채워둬서 첫 대상을 치자마자 한 번 쓴다
+    skillon  = ATTACK_ON and KEY_SKILL != None and SKILL_COOL > 0
+    skillsec = float(SKILL_COOL)
+    tick     = time.perf_counter()   #마지막으로 쿨타임을 더한 시각
+
+    #쿨타임이 차 있으면 스킬을 누른다. 대상을 클릭한 직후와 칼질 중에만 부른다
+    def useskill(why):
+        if skillon and skillsec >= SKILL_COOL:
+            log('스킬 ' + KEY_SKILL.upper() + ' (' + why + ')')
+            gu.press(KEY_SKILL, presses=1)
+            return True
+        return False
+
     if ATTACK_ON:
         radii = ','.join(str(SCAN_START * (i + 1)) for i in range(SCAN_ROUND))
         log('서치 : ' + ('근거리' if SCAN_ROUND <= SCAN_NEAR else '원거리')
@@ -830,9 +850,13 @@ def huntloop(p, atkvalue):
             + '  반지름 ' + radii + '  총 ' + str(len(points)) + '점')
         log('파크 : ' + str(parkpos[0]) + ',' + str(parkpos[1]))
 
+    if skillon:
+        log('공격스킬 : ' + KEY_SKILL.upper() + '  쿨타임 ' + str(SKILL_COOL) + '초 (공격 중에만 흐름)')
+
     settrigger('hunt')
     while ALIVE:
         if runpending():       #버프/변신/귀환이 먼저. 처리했으면 처음부터
+            tick = time.perf_counter()   #버프/변신에 쓴 시간은 공격이 아니므로 쿨타임에서 뺀다
             continue
 
         #공격 꺼짐 : 수동 사냥 보조. 커서는 안 움직이고, 사람이 올려둔 자리가 대상이면 휠 클릭만 누른다
@@ -845,9 +869,16 @@ def huntloop(p, atkvalue):
                 time.sleep(MANUAL_POLL)
             continue
 
+        #여기부터가 공격 중. 지난 틱 이후 흐른 시간을 쿨타임에 더한다
+        now      = time.perf_counter()
+        skillsec += now - tick
+        tick      = now
+
         #칼질 소리가 들리면 이미 몹을 잡고 있는 것이므로 커서를 아예 안 건드린다
         #idx 를 그대로 두므로 소리가 끊기면 멈춘 자리(중간)에서 이어서 돈다
         if FIGHT_READY and FIGHTING:
+            if useskill('칼질 중'):      #몹을 잡는 중에 쿨이 차면 바로 쓴다
+                skillsec = 0.0
             time.sleep(FIGHT_POLL)
             continue
 
@@ -882,6 +913,8 @@ def huntloop(p, atkvalue):
             # time.sleep(CTRL_DELAY)
             _settleclick(x, y, atkvalue)
             # gu.keyUp('ctrl')
+            if useskill('공격 후'):      #대상을 치고 나서 쿨이 차 있으면 스킬
+                skillsec = 0.0
             cnt = 0
             if not FIGHT_READY:
                 idx = 0         #소리 감시가 없으면 예전처럼 1바퀴 첫 방향부터 다시 스캔
@@ -920,7 +953,7 @@ def loadconfig(path=None):
 
     raw = data.get('roles', {})
     used = set()
-    for rid in ('return', 'refresh', 'transform'):
+    for rid in ROLE_IDS:
         v = raw.get(rid)
         #같은 키가 두 역할에 겹치면 뒤엣것을 버린다
         roles[rid] = v if (v in FKEYS and v not in used) else None
@@ -946,7 +979,7 @@ def saveconfig(seconds, roles, opts, path=None):
     if path == None:
         path = CONFIG_PATH
     data = {'seconds': dict((key, int(seconds.get(key, 0))) for key in FKEYS),
-            'roles':   dict((rid, roles.get(rid)) for rid in ('return', 'refresh', 'transform')),
+            'roles':   dict((rid, roles.get(rid)) for rid in ROLE_IDS),
             'attack':  bool(opts.get('attack', DEFAULT_OPTS['attack'])),
             'range':   str(opts.get('range',  DEFAULT_OPTS['range'])),
             'nohit':   int(opts.get('nohit',  DEFAULT_OPTS['nohit'])),
@@ -964,10 +997,10 @@ def saveconfig(seconds, roles, opts, path=None):
 # GUI 가 넘긴 설정을 전역에 반영
 #=====================================================================
 def applyconfig(seconds, roles, opts=None):
-    #seconds : {키 -> 초},  roles : {'return'/'refresh'/'transform' -> 키 or None}
+    #seconds : {키 -> 초},  roles : {'return'/'refresh'/'transform'/'skill' -> 키 or None}
     #opts    : {'attack': bool, 'range': 'near'/'far', 'nohit': int, 'sound': bool}
     global BUFFS, BUFFKEY, TRIGGER, ORDER, PENDING
-    global KEY_RETURN, KEY_REFRESH, KEY_TRANSFORM, TRANSFORM_INTERVAL
+    global KEY_RETURN, KEY_REFRESH, KEY_TRANSFORM, TRANSFORM_INTERVAL, KEY_SKILL, SKILL_COOL
     global ATTACK_ON, SCAN_ROUND, NOHIT_LIMIT, SOUND_ON
 
     if opts == None:
@@ -979,8 +1012,10 @@ def applyconfig(seconds, roles, opts=None):
     KEY_RETURN    = roles.get('return')
     KEY_REFRESH   = roles.get('refresh')
     KEY_TRANSFORM = roles.get('transform')
+    KEY_SKILL     = roles.get('skill')
 
     TRANSFORM_INTERVAL = seconds.get(KEY_TRANSFORM, 0) if KEY_TRANSFORM else 0
+    SKILL_COOL         = seconds.get(KEY_SKILL, 0) if KEY_SKILL else 0
 
     #역할이 지정된 키는 버프 슬롯에서 뺀다
     taken = set(v for v in roles.values() if v)
@@ -1073,7 +1108,8 @@ def runmacro():
 #=====================================================================
 # GUI
 #=====================================================================
-ROLES = [('return', '귀환'), ('refresh', '새로고침'), ('transform', '변신')]
+ROLES = [('return', '귀환'), ('refresh', '새로고침'), ('transform', '변신'), ('skill', '공격스킬')]
+NOTE_COL = 2 + len(ROLES)   #역할 체크박스 다음 칸 = 주기 설명
 
 class App:
     def __init__(self, root):
@@ -1097,7 +1133,7 @@ class App:
         ttk.Label(box, text='주기(초)', width=10, anchor='center').grid(row=0, column=1, padx=4, pady=4)
         for c, (rid, label) in enumerate(ROLES):
             ttk.Label(box, text=label, width=9, anchor='center').grid(row=0, column=2 + c, padx=4, pady=4)
-        ttk.Label(box, text='', width=14).grid(row=0, column=5, padx=4)
+        ttk.Label(box, text='', width=14).grid(row=0, column=NOTE_COL, padx=4)
 
         for r, key in enumerate(FKEYS, start=1):
             ttk.Label(box, text=key.upper(), width=6, anchor='center').grid(row=r, column=0, padx=4, pady=2)
@@ -1117,7 +1153,7 @@ class App:
                 self.check[(key, rid)] = cb
 
             nl = ttk.Label(box, text='버프 주기', width=14, foreground='#555')
-            nl.grid(row=r, column=5, padx=4, pady=2, sticky='w')
+            nl.grid(row=r, column=NOTE_COL, padx=4, pady=2, sticky='w')
             self.note[key] = nl
 
         ttk.Label(root, foreground='#555',
@@ -1281,13 +1317,16 @@ class App:
                 return rid
         return None
 
-    #귀환/새로고침으로 잡힌 키는 주기 입력을 막는다. 변신은 주기를 쓴다
+    #귀환/새로고침으로 잡힌 키는 주기 입력을 막는다. 변신은 주기를, 공격스킬은 쿨타임을 쓴다
     def refreshrows(self):
         for key in FKEYS:
             rid = self.roleof(key)
             if rid == 'transform':
                 self.entry[key].configure(state='normal')
                 self.note[key].configure(text='변신 주기')
+            elif rid == 'skill':
+                self.entry[key].configure(state='normal')
+                self.note[key].configure(text='스킬 쿨타임 (공격 중만)')
             elif rid != None:
                 self.entry[key].configure(state='disabled')
                 self.note[key].configure(text='주기 없음')
