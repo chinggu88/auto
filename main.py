@@ -110,14 +110,14 @@ START_DELAY = 3    #시작 버튼 누르고 게임 창 활성화할 시간(초)
 
 HP_IMG    = 'checkhp.PNG'   #피 부족 경고 UI. 이게 '뜨면' 귀환한다
 HP_CONF   = 0.9
-MARK_GLOB = 'mark*.bmp'    #적대 혈맹 마크. image 폴더의 bmp 만 긁어온다 (png 는 안 본다)
-MARK_CONF = 0.9            #마크 신뢰도. 마스크 방식에서는 '그림 부분의 색이 얼마나 같은가' 라서
-                           #예전 0.7 과 의미가 다르다. 0.9 = 평균 색 오차 10% 이내
+MARK_GLOB = 'mark*.PNG'    #적대 혈맹 마크. image 폴더의 png 만 긁어온다 (bmp 는 안 본다)
+                           #게임 화면에서 직접 캡처한 그림을 쓴다
+MARK_CONF = 0.9            #마크 신뢰도. 캡처본이라 높게 잡는다. 진짜 마크를 놓치면 0.8 까지 내려볼 것
                            #파일마다 따로 주고 싶으면 MARK_CONF_BY_FILE 에 적는다
-MARK_BG_TOL = 25           #이 값 이하로 어두운 픽셀은 '검정 배경 = 투명' 으로 보고 매칭에서 뺀다
-                           #혈맹문장 원본 BMP 는 검정이 게임에서 투명으로 렌더링되기 때문
-                           #0 이면 마스크를 끄고 검정까지 그대로 비교한다
-MARK_CONF_BY_FILE = {}     #예) {'mark3.bmp': 0.8} 처럼 파일명만 적으면 그 값이 우선
+MARK_CONF_BY_FILE = {}     #예) {'mark3.PNG': 0.8} 처럼 파일명만 적으면 그 값이 우선
+MARK_BG_TOL = 0            #검정 배경을 투명으로 보고 매칭에서 뺄 때의 기준값
+                           #화면 캡처는 배경이 투명이 아니므로 0(끔) 으로 둔다
+                           #혈맹문장 원본 BMP 를 쓸 때만 25 정도로 켜면 된다
 MARK_MAX  = 3              #mark1 ~ mark(이 번호) 까지만 본다. 0 이면 폴더에 있는 걸 전부
                            #번호가 없거나 범위를 넘는 파일(mark4.bmp 등)은 폴더에 있어도 건너뛴다
 
@@ -654,9 +654,9 @@ class FightGate:
                 self.event  = 'forced'
         return self.fight
 
-#image 폴더에 들어있는 마크 이미지(bmp)를 긁어온다
-#  - MARK_MAX 까지만 본다. mark4.bmp 를 폴더에 둬도 MARK_MAX 가 3 이면 안 본다
-#  - 같은 이름의 png 가 옆에 있어도 무시한다. bmp 만 본다
+#image 폴더에 들어있는 마크 이미지(png)를 긁어온다
+#  - MARK_MAX 까지만 본다. mark4.PNG 를 폴더에 둬도 MARK_MAX 가 3 이면 안 본다
+#  - 같은 이름의 bmp 가 옆에 있어도 무시한다. png 만 본다
 #  - 번호 순으로 정렬해서 mark1, mark2 ... 순서로 본다 (mark10 이 mark2 앞에 오지 않게)
 #  - 한 번 읽고 캐시한다. 사냥 중에 폴더를 뒤지지 않기 위함
 MARK_FILES = None
@@ -675,7 +675,7 @@ def markfiles():
     if MARK_FILES != None:
         return MARK_FILES
 
-    found = glob.glob(IMAGE_DIR + MARK_GLOB) + glob.glob(IMAGE_DIR + 'mark*.BMP')
+    found = glob.glob(IMAGE_DIR + MARK_GLOB) + glob.glob(IMAGE_DIR + 'mark*.png')
     #윈도우 glob 은 대소문자를 안 가려서 같은 파일이 두 번 잡힌다. 파일명 기준으로 중복 제거
     seen = {}
     for path in found:
@@ -745,7 +745,8 @@ def screengrab():
 #마크 하나를 화면에서 찾는다. 내 캐릭터 자리에 뜬 건 건너뛰고,
 #그 밖에서 잡힌 가장 잘 맞는 매칭의 중심 (x, y) 를 돌려준다. 없으면 None
 def findmark(hay, path, conf):
-    if not MASK_OK or hay is None:
+    #마스크를 끄면(화면 캡처를 쓸 때) 예전 방식이 더 낫다. 밝기 변화에 덜 흔들린다
+    if MARK_BG_TOL <= 0 or not MASK_OK or hay is None:
         return _findmark_old(path, conf)
 
     needle, mask, cnt = _marktpl(path)
@@ -806,7 +807,8 @@ def _checkrHp():
     #2. 적대 혈맹 마크. image 폴더에 있는 mark*.bmp 를 전부 돌린다
     #   하나라도 걸리면 나머지는 볼 필요가 없으므로 바로 귀환
     marks = markfiles()
-    hay   = screengrab() if (MASK_OK and len(marks) > 0) else None   #화면은 한 장만 찍는다
+    #마스크를 쓸 때만 화면을 한 장 찍어 돌려쓴다. 예전 방식은 자기가 알아서 찍는다
+    hay   = screengrab() if (MARK_BG_TOL > 0 and MASK_OK and len(marks) > 0) else None
     for markpath in marks:
         markname = os.path.basename(markpath)
         markconf = MARK_CONF_BY_FILE.get(markname, MARK_CONF)
