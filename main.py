@@ -12,6 +12,15 @@ import math
 import random
 import os.path
 import glob
+import traceback
+
+#마크 매칭에 쓴다. 없으면 예전 방식(pyautogui)으로 조용히 물러난다
+try:
+    import numpy
+    import cv2
+    MASK_OK = True
+except Exception:
+    MASK_OK = False
 import sys
 import tkinter as tk
 from tkinter import ttk
@@ -102,8 +111,12 @@ START_DELAY = 3    #시작 버튼 누르고 게임 창 활성화할 시간(초)
 HP_IMG    = 'checkhp.PNG'   #피 부족 경고 UI. 이게 '뜨면' 귀환한다
 HP_CONF   = 0.9
 MARK_GLOB = 'mark*.bmp'    #적대 혈맹 마크. image 폴더의 bmp 만 긁어온다 (png 는 안 본다)
-MARK_CONF = 0.7            #마크는 배경에 묻혀서 신뢰도를 낮게 잡는다 (구버전 oman.py 값)
+MARK_CONF = 0.9            #마크 신뢰도. 마스크 방식에서는 '그림 부분의 색이 얼마나 같은가' 라서
+                           #예전 0.7 과 의미가 다르다. 0.9 = 평균 색 오차 10% 이내
                            #파일마다 따로 주고 싶으면 MARK_CONF_BY_FILE 에 적는다
+MARK_BG_TOL = 25           #이 값 이하로 어두운 픽셀은 '검정 배경 = 투명' 으로 보고 매칭에서 뺀다
+                           #혈맹문장 원본 BMP 는 검정이 게임에서 투명으로 렌더링되기 때문
+                           #0 이면 마스크를 끄고 검정까지 그대로 비교한다
 MARK_CONF_BY_FILE = {}     #예) {'mark3.bmp': 0.8} 처럼 파일명만 적으면 그 값이 우선
 MARK_MAX  = 3              #mark1 ~ mark(이 번호) 까지만 본다. 0 이면 폴더에 있는 걸 전부
                            #번호가 없거나 범위를 넘는 파일(mark4.bmp 등)은 폴더에 있어도 건너뛴다
@@ -285,6 +298,7 @@ def canceltimers():
 def request(name):
     with PENDING_LOCK:
         PENDING[name] = True
+    log('요청 등록 : ' + str(name))      #사냥 루프가 이걸 꺼내 실행한다
 
 #대기 중인 요청이 있는지만 확인 (스캔 루프에서 빠르게 체크)
 def haspending():
@@ -297,6 +311,11 @@ def takepending():
         for name in ORDER:
             if PENDING.pop(name, False):
                 return name
+        #ORDER 에 없는 이름으로 요청이 들어오면 영원히 안 꺼내진다. 그 경우를 잡아낸다
+        if len(PENDING) > 0:
+            stuck = ', '.join(sorted(PENDING.keys()))
+            PENDING.clear()
+            log('처리 못 한 요청 버림 : ' + stuck + '  (ORDER = ' + ', '.join(ORDER) + ')')
     return None
 
 #전체 False 로 밀고 name 만 True
@@ -688,11 +707,73 @@ def isselfmark(x, y):
             return True
     return False
 
+#마크 템플릿 캐시 : 경로 -> (그림 float32, 마스크 float32, 마스크 픽셀수)
+#혈맹문장 BMP 는 검정이 게임에서 투명으로 렌더링된다. 그 검정까지 비교하면
+#'어두운 네모' 를 찾는 꼴이라 배경에서 오탐이 쏟아진다. 그래서 검정을 마스크로 빼고 본다
+_MARK_TPL = {}
+
+def _marktpl(path):
+    tpl = _MARK_TPL.get(path)
+    if tpl != None:
+        return tpl
+    #cv2.imread 는 한글 경로에서 None 을 돌려준다. fromfile + imdecode 로 우회한다
+    img = cv2.imdecode(numpy.fromfile(path, dtype=numpy.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        log('마크 이미지를 못 읽음 : ' + path)
+        tpl = (None, None, 0)
+    else:
+        if MARK_BG_TOL > 0:
+            keep = (img.max(axis=2) > MARK_BG_TOL)      #검정이 아닌 = 실제 그림
+        else:
+            keep = numpy.ones(img.shape[:2], dtype=bool)
+        cnt = int(keep.sum())
+        if cnt == 0:
+            log('마크 이미지가 전부 배경색 : ' + os.path.basename(path))
+            tpl = (None, None, 0)
+        else:
+            mask = numpy.dstack([keep.astype('float32')] * 3)
+            tpl  = (img.astype('float32'), mask, cnt)
+            log('마크 ' + os.path.basename(path) + ' : 그림 ' + str(cnt)
+                + '/' + str(keep.size) + 'px 만 비교 (검정 배경 제외)')
+    _MARK_TPL[path] = tpl
+    return tpl
+
+#지금 화면을 BGR float32 로 한 장 찍는다. 마크 여러 개를 한 장으로 돌리기 위함
+def screengrab():
+    return numpy.array(gu.screenshot().convert('RGB'))[:, :, ::-1].astype('float32')
+
 #마크 하나를 화면에서 찾는다. 내 캐릭터 자리에 뜬 건 건너뛰고,
-#그 밖에서 잡힌 첫 매칭의 중심 (x, y) 를 돌려준다. 없으면 None
-#  - locateCenterOnScreen 은 첫 매칭 하나만 주므로 내 마크가 먼저 잡히면 적 마크를 놓친다
-#    그래서 locateAllOnScreen 으로 전부 받아서 거른다
-def findmark(path, conf):
+#그 밖에서 잡힌 가장 잘 맞는 매칭의 중심 (x, y) 를 돌려준다. 없으면 None
+def findmark(hay, path, conf):
+    if not MASK_OK or hay is None:
+        return _findmark_old(path, conf)
+
+    needle, mask, cnt = _marktpl(path)
+    if needle is None:
+        return None
+
+    #마스크 밖(검정)은 빼고, 남은 픽셀의 색 차이만 본다
+    #TM_SQDIFF 는 (차이 x 마스크)^2 의 합이라 마스크 픽셀만 더해진다
+    res = cv2.matchTemplate(hay, needle, cv2.TM_SQDIFF, mask=mask)
+    res = numpy.where(numpy.isfinite(res), res, numpy.inf)      #마스크가 0 인 자리는 버린다
+    #픽셀당 평균 오차로 바꿔서 0~1 점수로 만든다. 1.0 이면 그림이 완전히 같다
+    score = 1.0 - numpy.sqrt(numpy.clip(res, 0, None) / (cnt * 3.0)) / 255.0
+
+    ys, xs = numpy.where(score >= conf)
+    if len(xs) == 0:
+        return None
+    h, w = needle.shape[0], needle.shape[1]
+    #잘 맞는 것부터 본다. 내 마크 자리면 건너뛰고 다음 후보로
+    for i in numpy.argsort(-score[ys, xs]):
+        x = int(xs[i]) + w // 2
+        y = int(ys[i]) + h // 2
+        if isselfmark(x, y):
+            continue
+        return (x, y)
+    return None
+
+#cv2/numpy 가 없을 때 쓰는 예전 방식. 검정 배경까지 그대로 비교한다
+def _findmark_old(path, conf):
     for box in gu.locateAllOnScreen(path, confidence=conf):
         x = box.left + box.width  // 2
         y = box.top  + box.height // 2
@@ -705,6 +786,15 @@ def findmark(path, conf):
 def checkrHp():
     if not ALIVE:
         return
+    try:
+        _checkrHp()
+    except Exception as e:
+        #타이머 스레드에서 터지면 stderr 이 없는 exe 에서는 아무 말 없이 감시가 끊긴다
+        log('피/마크 감시 오류 : ' + str(e))
+        log(traceback.format_exc())
+        _arm(HP_INTERVAL, checkrHp)      #한 번 터졌다고 감시를 놓지는 않는다
+
+def _checkrHp():
     file_path = IMAGE_DIR
 
     #1. 피 부족 경고 UI 가 '뜨면' 귀환
@@ -715,10 +805,12 @@ def checkrHp():
 
     #2. 적대 혈맹 마크. image 폴더에 있는 mark*.bmp 를 전부 돌린다
     #   하나라도 걸리면 나머지는 볼 필요가 없으므로 바로 귀환
-    for markpath in markfiles():
+    marks = markfiles()
+    hay   = screengrab() if (MASK_OK and len(marks) > 0) else None   #화면은 한 장만 찍는다
+    for markpath in marks:
         markname = os.path.basename(markpath)
         markconf = MARK_CONF_BY_FILE.get(markname, MARK_CONF)
-        found = findmark(markpath, markconf)
+        found = findmark(hay, markpath, markconf)
         if found != None:
             log('적대 마크 발견 (' + markname + ' @ ' + str(found[0]) + ',' + str(found[1]) + ') 귀환!')
             request('return')
@@ -1106,6 +1198,7 @@ def runmacro():
         huntloop([CENTERPOINT[0], CENTERPOINT[1] + SCAN_OFFSET_Y], atk)
     except Exception as e:
         log('매크로 오류 : ' + str(e))
+        log(traceback.format_exc())      #어디서 터졌는지 알아야 고친다
     finally:
         #정지든 오류든 여기로 온다. 타이머와 핫키를 반드시 걷어낸다
         ALIVE = False
