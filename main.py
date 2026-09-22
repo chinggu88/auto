@@ -101,10 +101,12 @@ START_DELAY = 3    #시작 버튼 누르고 게임 창 활성화할 시간(초)
 
 HP_IMG    = 'checkhp.PNG'   #피 부족 경고 UI. 이게 '뜨면' 귀환한다
 HP_CONF   = 0.9
-MARK_GLOB = 'mark*.PNG'    #적대 혈맹 마크. image 폴더에 있는 걸 전부 긁어온다
+MARK_GLOB = 'mark*.bmp'    #적대 혈맹 마크. image 폴더의 bmp 만 긁어온다 (png 는 안 본다)
 MARK_CONF = 0.7            #마크는 배경에 묻혀서 신뢰도를 낮게 잡는다 (구버전 oman.py 값)
                            #파일마다 따로 주고 싶으면 MARK_CONF_BY_FILE 에 적는다
-MARK_CONF_BY_FILE = {}     #예) {'mark3.PNG': 0.8} 처럼 파일명만 적으면 그 값이 우선
+MARK_CONF_BY_FILE = {}     #예) {'mark3.bmp': 0.8} 처럼 파일명만 적으면 그 값이 우선
+MARK_MAX  = 3              #mark1 ~ mark(이 번호) 까지만 본다. 0 이면 폴더에 있는 걸 전부
+                           #번호가 없거나 범위를 넘는 파일(mark4.bmp 등)은 폴더에 있어도 건너뛴다
 
 #내 마크는 적이 아니므로 무시한다
 #  - 캐릭터는 항상 화면 중앙(CENTERPOINT)에 있다. 아래 자리들은 CENTERPOINT 기준 보정값(px)
@@ -633,27 +635,46 @@ class FightGate:
                 self.event  = 'forced'
         return self.fight
 
-#image 폴더에 들어있는 마크 이미지를 전부 긁어온다
-#  - 파일만 넣어두면 코드 수정 없이 감시 대상에 추가된다 (mark5.PNG 등)
-#  - 파일명 순으로 정렬해서 mark1, mark2 ... 순서로 본다
+#image 폴더에 들어있는 마크 이미지(bmp)를 긁어온다
+#  - MARK_MAX 까지만 본다. mark4.bmp 를 폴더에 둬도 MARK_MAX 가 3 이면 안 본다
+#  - 같은 이름의 png 가 옆에 있어도 무시한다. bmp 만 본다
+#  - 번호 순으로 정렬해서 mark1, mark2 ... 순서로 본다 (mark10 이 mark2 앞에 오지 않게)
 #  - 한 번 읽고 캐시한다. 사냥 중에 폴더를 뒤지지 않기 위함
 MARK_FILES = None
+
+#'mark3.bmp' -> 3. 번호가 없으면 None
+def marknum(name):
+    digits = ''
+    for ch in os.path.splitext(name)[0][len('mark'):]:
+        if not ch.isdigit():
+            break
+        digits += ch
+    return int(digits) if digits != '' else None
+
 def markfiles():
     global MARK_FILES
     if MARK_FILES != None:
         return MARK_FILES
 
-    found = glob.glob(IMAGE_DIR + MARK_GLOB) + glob.glob(IMAGE_DIR + 'mark*.png')
+    found = glob.glob(IMAGE_DIR + MARK_GLOB) + glob.glob(IMAGE_DIR + 'mark*.BMP')
     #윈도우 glob 은 대소문자를 안 가려서 같은 파일이 두 번 잡힌다. 파일명 기준으로 중복 제거
-    seen  = {}
+    seen = {}
     for path in found:
-        seen[os.path.basename(path).lower()] = path
-    MARK_FILES = [seen[name] for name in sorted(seen.keys())]
+        name = os.path.basename(path)
+        num  = marknum(name.lower())
+        if num == None:                       #mark.bmp, markold.bmp 같은 건 건너뛴다
+            continue
+        if MARK_MAX > 0 and num > MARK_MAX:   #MARK_MAX 를 넘는 번호는 안 본다
+            continue
+        seen[num] = path
+    MARK_FILES = [seen[num] for num in sorted(seen.keys())]
 
+    limit = ('mark1~' + str(MARK_MAX)) if MARK_MAX > 0 else '전부'
     if len(MARK_FILES) == 0:
-        log('마크 이미지 없음 : ' + IMAGE_DIR + MARK_GLOB + ' 에 파일이 하나도 없다')
+        log('마크 이미지 없음 : ' + IMAGE_DIR + MARK_GLOB + ' (' + limit + ') 에 파일이 하나도 없다')
     else:
-        log('마크 이미지 ' + str(len(MARK_FILES)) + '개 : ' + ', '.join([os.path.basename(x) for x in MARK_FILES]))
+        log('마크 이미지 ' + str(len(MARK_FILES)) + '개 (' + limit + ') : '
+            + ', '.join([os.path.basename(x) for x in MARK_FILES]))
     return MARK_FILES
 
 #내 마크 자리인지. 마크 매칭 중심 (x, y) 를 받아 MARK_SELF_OFFSETS 의 자리들과 거리를 잰다
@@ -692,7 +713,7 @@ def checkrHp():
         request('return')
         return                #매크로 루프가 처리하고 종료하므로 타이머 재등록 안 함
 
-    #2. 적대 혈맹 마크. image 폴더에 있는 mark*.PNG 를 전부 돌린다
+    #2. 적대 혈맹 마크. image 폴더에 있는 mark*.bmp 를 전부 돌린다
     #   하나라도 걸리면 나머지는 볼 필요가 없으므로 바로 귀환
     for markpath in markfiles():
         markname = os.path.basename(markpath)
