@@ -112,7 +112,7 @@ HP_IMG    = 'checkhp.PNG'   #피 부족 경고 UI. 이게 '뜨면' 귀환한다
 HP_CONF   = 0.9
 MARK_GLOB = 'mark*.PNG'    #적대 혈맹 마크. image 폴더의 png 만 긁어온다 (bmp 는 안 본다)
                            #게임 화면에서 직접 캡처한 그림을 쓴다
-MARK_CONF = 0.9            #마크 신뢰도. 캡처본이라 높게 잡는다. 진짜 마크를 놓치면 0.8 까지 내려볼 것
+MARK_CONF = 0.7            #마크 신뢰도. 진짜 마크를 놓치면 더 내려볼 것
                            #파일마다 따로 주고 싶으면 MARK_CONF_BY_FILE 에 적는다
 MARK_CONF_BY_FILE = {}     #예) {'mark3.PNG': 0.8} 처럼 파일명만 적으면 그 값이 우선
 MARK_BG_TOL = 0            #검정 배경을 투명으로 보고 매칭에서 뺄 때의 기준값
