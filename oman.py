@@ -13,16 +13,16 @@ gu.FAILSAFE = False
 gu.useImageNotFoundException(False)
 isattack = True
 #원 3단계 스텝(=반지름). 한 단계 높을수록 20씩 커짐
-STEPS = (50, 70, 90)
+STEPS = (56, 79, 101)
 #어택 마우스 셋팅
 def setattckinfo(centerpoint):
-    gu.moveTo(centerpoint[0],centerpoint[1]-200)
+    gu.moveTo(centerpoint[0],centerpoint[1]-225)
     time.sleep(0.1)
     gu.click()
     time.sleep(0.1)
     gu.keyDown('ctrl')
     time.sleep(1)
-    gu.moveTo(centerpoint[0],centerpoint[1]-210)
+    gu.moveTo(centerpoint[0],centerpoint[1]-236)
     info = win32gui.GetCursorInfo()[1]
     time.sleep(0.1)
     gu.keyUp('ctrl')
@@ -42,11 +42,11 @@ def attack1(p,len,atkvalue):
                 #원 3단계 - 안쪽부터 바깥쪽으로 반지름 20씩 키워가며 훑는다
                 for step in STEPS:
                     #시작지점 (step+40 이면 세 원의 중심이 같은 지점에 유지됨)
-                    startPoint=[p[0]-(((len-1)/2)*step),p[1]-(((len-1)/2)*(step+40))]
+                    startPoint=[p[0]-(((len-1)/2)*step),p[1]-(((len-1)/2)*(step+45))]
 
                     #->
                     for i in range(0,len-1):
-                        gu.moveTo(startPoint[0], startPoint[1] + 400)
+                        gu.moveTo(startPoint[0], startPoint[1] + 450)
                         startPoint[0]=startPoint[0]+step
                         gu.moveTo(startPoint[0], startPoint[1])
                         if (win32gui.GetCursorInfo()[1] == atkvalue):
@@ -57,7 +57,7 @@ def attack1(p,len,atkvalue):
                             cnt = 0
                     #아래로
                     for j in range(0,len-1):
-                        gu.moveTo(startPoint[0], startPoint[1] + 400)
+                        gu.moveTo(startPoint[0], startPoint[1] + 450)
                         startPoint[1] = startPoint[1] + step
                         gu.moveTo(startPoint[0], startPoint[1])
                         if (win32gui.GetCursorInfo()[1] == atkvalue):
@@ -68,7 +68,7 @@ def attack1(p,len,atkvalue):
                             cnt = 0
                     # <-
                     for i in range(0, len - 1):
-                        gu.moveTo(startPoint[0], startPoint[1] + 400)
+                        gu.moveTo(startPoint[0], startPoint[1] + 450)
                         startPoint[0] = startPoint[0] - step
                         gu.moveTo(startPoint[0], startPoint[1])
                         if (win32gui.GetCursorInfo()[1] == atkvalue):
@@ -80,7 +80,7 @@ def attack1(p,len,atkvalue):
                             cnt = 0
                     #위로
                     for j in range(0,len-1):
-                        gu.moveTo(startPoint[0], startPoint[1] + 400)
+                        gu.moveTo(startPoint[0], startPoint[1] + 450)
                         startPoint[1] = startPoint[1] - step
                         gu.moveTo(startPoint[0], startPoint[1])
                         if (win32gui.GetCursorInfo()[1] == atkvalue):
@@ -183,8 +183,8 @@ def checkrMark():
             print(isattack)
     # if mark4 != None:
     #     # if mark2[0] <= 633:
-    #     if mark4[0] <= 600 & mark4[0] >= 650:
-    #         if mark4[1] != 346:
+    #     if mark4[0] <= 675 & mark4[0] >= 731:
+    #         if mark4[1] != 389:
     #             gu.press('f8', presses=1)
     #             isattack = False
     #             print('혈마크 감지4')
@@ -193,7 +193,7 @@ def checkrMark():
     threading.Timer(4, checkrMark).start()
 if __name__ == '__main__':
     # file_path = os.path.dirname(os.path.realpath(__file__)) + '\\' + 'image' + '\\'
-    centerpoint = [625, 480]
+    centerpoint = [720, 540]
     attackinfo = setattckinfo(centerpoint)
     # checkrMark()
     transform()
