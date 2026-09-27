@@ -83,7 +83,7 @@ if __name__ == '__main__':
     file_path = os.path.dirname(os.path.realpath(__file__)) + '\\' + 'image' + '\\'
     # checkrMp(file_path)
     #칼모양셋팅
-    centerpoint = [625, 480]
+    centerpoint = [720, 540]
     attackinfo = setattckinfo(centerpoint)
 
     # checkrMp()
