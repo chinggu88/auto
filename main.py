@@ -103,6 +103,9 @@ SCAN_OFFSET_Y = -38   # 스캔 중심의 y 보정(px). 음수면 위, 양수면 
                       # 원본은 -40 이었고 어택포인트를 2px 내려서 -38
 
 BUFF_GAP    = 1    #버프 키 누른 뒤 대기(초)
+CHAT_CMD      = '.버프'   #채팅창에 넣는 매크로 명령어
+CHAT_INTERVAL = 1200      #채팅버프 주기(초). 20분
+CHAT_GAP      = 0.3       #엔터 -> 입력 -> 엔터 사이 대기(초)
 LOOP_LIMIT  = 50   #공격 루프 최대 횟수. 채우면 새로고침
                    #칼질을 계속 해도 안 줄고, 새로고침될 때만 초기화된다
 HP_INTERVAL = 2    #피/마크 감시 주기(초). 마크 이미지가 늘어서 1초는 빠듯해 2초로 잡음
@@ -267,8 +270,8 @@ FIGHTING    = False   #True 면 마우스 서치를 멈춘다
 FIGHT_READY = False   #소리 감시가 실제로 도는 중인지
                       #루프백을 못 열면 False 라서 게이트가 통째로 꺼지고 예전처럼 계속 서치한다
 
-TRIGGER ={'hunt': False, 'stop': False, 'transform': False, 'return': False}
-ORDER   = ['stop', 'return', 'transform']   #처리 우선순위 : 정지 > 귀환 > 변신 > 버프
+TRIGGER ={'hunt': False, 'stop': False, 'transform': False, 'return': False, 'chatbuff': False}
+ORDER   = ['stop', 'return', 'transform', 'chatbuff']   #처리 우선순위 : 정지 > 귀환 > 변신 > 채팅버프 > 버프
 
 PENDING      = {}                 #타이머 스레드가 채우는 실행 요청
 PENDING_LOCK = threading.Lock()
@@ -439,7 +442,8 @@ def setattckinfo(centerpoint):
 
 
 #한/영 전환. keyboard 라이브러리에 'hangul' 키 이름이 없어서 VK 코드를 직접 쏨
-#채팅버프(.버프) 를 빼면서 같이 쉼. 나중에 채팅 입력이 필요하면 되살린다
+#채팅버프는 k.write 로 유니코드를 바로 넣어서 IME 를 안 타므로 아직 쉼
+#게임이 IME 를 거쳐야만 글자를 받는다면 dochatbuff() 앞뒤에서 되살린다
 # VK_HANGUL       = 0x15
 # KEYEVENTF_KEYUP = 0x0002
 #
@@ -448,15 +452,6 @@ def setattckinfo(centerpoint):
 #     time.sleep(0.05)
 #     win32api.keybd_event(VK_HANGUL, 0, KEYEVENTF_KEYUP, 0)
 #     time.sleep(0.2)
-#
-# #채팅창에 ".버프" 입력 (매크로 명령어)
-# def sendbuffchat():
-#     log('.버프 입력')
-#     gu.press('enter', presses=1)        #채팅창 열기
-#     time.sleep(0.3)
-#     k.write('.버프', delay=0.05)        #유니코드로 직접 주입 (IME 안 거침)
-#     time.sleep(0.3)
-#     gu.press('enter', presses=1)        #전송
 
 #=====================================================================
 # 실행부 : 전부 매크로 스레드에서만 돈다
@@ -467,6 +462,16 @@ def dobuff(name):
     key = BUFFKEY[name]
     log(name + ' 버프 : ' + key)
     gu.press(key, presses=1)
+    time.sleep(BUFF_GAP)
+
+#채팅버프 : 엔터로 채팅창을 열고 '.버프' 를 쳐서 엔터로 보낸다
+def dochatbuff():
+    log('채팅버프 : ' + CHAT_CMD)
+    gu.press('enter', presses=1)          #채팅창 열기
+    time.sleep(CHAT_GAP)
+    k.write(CHAT_CMD, delay=0.05)         #유니코드로 직접 주입 (IME 안 거침)
+    time.sleep(CHAT_GAP)
+    gu.press('enter', presses=1)          #전송
     time.sleep(BUFF_GAP)
 
 #변신
@@ -520,6 +525,8 @@ def runpending():
         return True
     if name == 'transform':
         dotransform()
+    elif name == 'chatbuff':
+        dochatbuff()
     else:
         dobuff(name)
     settrigger('hunt')            #끝나면 사냥 트리거 복구
@@ -548,6 +555,13 @@ def transformtimer():
         return
     request('transform')
     _arm(TRANSFORM_INTERVAL, transformtimer)
+
+#채팅버프(.버프) : 20분마다. F키를 안 쓰므로 버프 슬롯과 따로 돈다
+def chatbufftimer():
+    if not ALIVE:
+        return
+    request('chatbuff')
+    _arm(CHAT_INTERVAL, chatbufftimer)
 
 #=====================================================================
 # 소리 분석 (DSP) : 오디오 장치와 분리해서 순수 계산만 한다
@@ -1141,10 +1155,10 @@ def applyconfig(seconds, roles, opts=None):
         BUFFS.append(('buff' + str(i + 1), key, seconds.get(key, 0)))
     BUFFKEY = dict((n, key) for n, key, s in BUFFS)
 
-    TRIGGER = {'hunt': False, 'stop': False, 'transform': False, 'return': False}
+    TRIGGER = {'hunt': False, 'stop': False, 'transform': False, 'return': False, 'chatbuff': False}
     for n, key, s in BUFFS:
         TRIGGER[n] = False
-    ORDER = ['stop', 'return', 'transform'] + [n for n, key, s in BUFFS]
+    ORDER = ['stop', 'return', 'transform', 'chatbuff'] + [n for n, key, s in BUFFS]
     with PENDING_LOCK:
         PENDING = {}
 
@@ -1177,6 +1191,9 @@ def runmacro():
             log('변신 미지정 - 변신 끔')
 
         startbuffs()
+
+        log('채팅버프(' + CHAT_CMD + ') ' + str(CHAT_INTERVAL) + '초 주기')
+        chatbufftimer()
 
         if KEY_RETURN != None:
             log('귀환(' + KEY_RETURN + ') - 피 감시 시작')
