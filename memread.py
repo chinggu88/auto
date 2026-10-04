@@ -554,12 +554,14 @@ class Mem(object):
             return False
         self.ptrsz = 4 if small else 8
 
-        #파이썬 비트수와 대상 비트수가 다르면 주소가 안 맞을 수 있다
-        pybits = 64 if ctypes.sizeof(ctypes.c_void_p) == 8 else 32
+        #64비트 파이썬으로 32비트 프로세스를 읽는 건 문제가 없다.
+        #주소가 4GB 안에 들어가고 API 도 전부 WOW64 를 지원한다.
+        #깨지는 건 반대 방향뿐이다 : 32비트 파이썬은 64비트 대상의 4GB 위를 못 본다
+        pybits  = 64 if ctypes.sizeof(ctypes.c_void_p) == 8 else 32
         tgtbits = 32 if small else 64
-        if pybits != tgtbits:
-            self.log('경고 : 파이썬 ' + str(pybits) + '비트 / 대상 ' + str(tgtbits)
-                     + '비트. 같은 비트수 파이썬으로 돌리는 게 안전하다')
+        if pybits == 32 and tgtbits == 64:
+            self.log('경고 : 32비트 파이썬으로 64비트 대상을 읽고 있다.'
+                     + ' 4GB 위 주소를 못 보므로 64비트 파이썬으로 돌려야 한다')
 
         modname = str(self.cfg.get('module', want)).lower()
         base    = 0
