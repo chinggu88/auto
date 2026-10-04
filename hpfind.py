@@ -5,10 +5,16 @@
 #  HP 숫자를 몰라도 된다. 게임 창에 들어가 있는 채로 키만 누르면 된다 :
 #
 #    1) 게임 창을 클릭한다
-#    2) 몹한테 맞아서 HP 를 줄인다  ->  [insert] 를 누른다
-#    3) 또 맞는다                   ->  [insert]
-#    4) 또 맞는다                   ->  [insert]
+#    2) 몹한테 맞아서 HP 를 줄인다  ->  [1] 을 누른다
+#    3) 또 맞는다                   ->  [1]
+#    4) 또 맞는다                   ->  [1]
 #    5) 끝. mem.json 이 저장되고, HP 가 맞게 읽히는지 바로 보여준다
+#
+#    중단하려면 [2]
+#
+#  키를 바꾸려면 :  python hpfind.py --key 1 --quit 2
+#  (누른 키는 게임에도 같이 들어간다. 게임에서 1번이 스킬/아이템 슬롯이면
+#   그것도 같이 눌리므로, 거슬리면 --key insert 처럼 안 쓰는 키로 바꾼다)
 #
 #  왜 이게 되는가 :
 #    처음에 메모리를 통째로 기록해두고, 맞을 때마다 "직전보다 줄어든 자리" 만 남긴다.
@@ -34,8 +40,8 @@ TYPES    = ['u32', 'u16']
 ROUNDS   = 8        #최대 몇 번까지 반복할지. 보통 3번이면 몇 개로 줄어든다
 ENOUGH   = 3        #후보가 이 수 이하로 줄면 그만한다
 NEAR     = 128      #hp_max 를 찾을 때 hp 주변 몇 바이트를 볼지
-KEY_NEXT = 'insert'
-KEY_QUIT = 'end'
+KEY_NEXT = '1'      #다음 단계. --key 로 바꿀 수 있다
+KEY_QUIT = '2'      #중단.     --quit 로 바꿀 수 있다
 
 
 def say(s=''):
@@ -43,8 +49,34 @@ def say(s=''):
     sys.stdout.flush()
 
 
+def arg(name, default=None):
+    if name in sys.argv:
+        i = sys.argv.index(name)
+        if i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+    return default
+
+
 def line():
     say('=' * 66)
+
+
+#키 이름이 쓸 수 있는 것인지 미리 본다.
+#스냅샷을 다 뜬 뒤에 터지면 그 작업이 통째로 날아가므로 시작 전에 검사한다
+def checkkeys():
+    import keyboard as k
+    for name, label in ((KEY_NEXT, '--key'), (KEY_QUIT, '--quit')):
+        try:
+            k.is_pressed(name)
+        except Exception as e:
+            say("키 이름 '" + str(name) + "' 를 쓸 수 없다 (" + label + ') : ' + str(e))
+            say('  숫자는 1 2 3, 그 밖에 insert / end / home / f1 같은 이름을 쓴다')
+            say('  (키패드 숫자가 아니라 글자 위 숫자열을 말한다)')
+            return False
+    if KEY_NEXT == KEY_QUIT:
+        say('진행 키와 중단 키가 같다 : ' + str(KEY_NEXT))
+        return False
+    return True
 
 
 #게임 창에 있는 채로 누를 수 있게 전역 키를 기다린다.
@@ -144,10 +176,19 @@ def verify(m, seconds=12):
 
 
 def run():
+    global KEY_NEXT, KEY_QUIT
+    KEY_NEXT = arg('--key', KEY_NEXT)
+    KEY_QUIT = arg('--quit', KEY_QUIT)
+
     line()
     say(' HP 주소 자동 찾기')
     line()
     say()
+    say('진행 키 : [%s]    중단 키 : [%s]' % (KEY_NEXT.upper(), KEY_QUIT.upper()))
+    say('  (게임 창에 있는 채로 눌러도 됩니다. 다른 키로 바꾸려면 --key / --quit)')
+    say()
+    if not checkkeys():
+        return
     say('mem.json : ' + mp.MEM_PATH)
     if not mp.MEM_FOUND:
         say('mem.json 이 없다. 먼저 memprobe.py 와 같은 폴더에 두어야 한다')
