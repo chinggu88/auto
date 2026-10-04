@@ -575,26 +575,71 @@ def showcands(m, kind, cands, limit=30):
     say()
     say('남은 후보 : ' + str(len(cands)) + '개')
     if len(cands) == 0:
-        say('  너무 많이 좁혔다. scan.dat 를 지우고 --find 부터 다시 한다')
+        say()
+        say('  너무 많이 좁혔다. 조건이 틀렸을 가능성이 크다.')
+        say('  (예: 안 줄었는데 --next less 를 했거나, HP 숫자를 잘못 읽었거나)')
+        say('  scan.dat 를 지우고 --find 부터 다시 한다 :')
+        say('      del scan.dat')
+        say('      python memprobe.py --find <지금 HP> --type any')
         return
+
     if len(cands) > limit:
-        say('  (앞 %d개만 표시. 게임에서 값을 바꾸고 --next 로 더 좁힌다)' % limit)
+        say('  (앞 %d개만 표시)' % limit)
     say()
     say('  %-18s %-12s %s' % ('절대주소', '값', 'mem.json 에 넣을 base (상대값)'))
     for addr, val in cands[:limit]:
         rva = addr - m.base
         mark = '0x%X' % rva if 0 <= rva < (1 << 32) else '(모듈 밖 - 포인터 필요)'
         say('  0x%-16X %-12d %s' % (addr, val, mark))
+
+    #--- 다음에 칠 명령을 그대로 보여준다 ---
+    #'--next <새값>' 처럼 빈칸으로 두면 뭘 쳐야 할지 알 수가 없다. 통째로 찍어준다
     say()
-    if len(cands) <= limit:
-        say('후보가 몇 개 안 남았으면, 게임에서 HP 를 바꾸고 --next <새값> 으로 한 번 더')
-        say('확인한 뒤 살아남은 주소를 쓴다. 그 다음 mem.json 의 chains 에 이렇게 적는다 :')
-        a, v = cands[0]
+    say('=' * 66)
+    if len(cands) > 3:
+        say('아직 후보가 많다. 게임에서 HP 를 바꿔서 더 좁힌다')
+        say('=' * 66)
+        say()
+        say('  1) 몹한테 맞아서 HP 를 떨어뜨린다')
+        say('  2) 바뀐 HP 숫자를 읽고 아래 중 하나를 친다 :')
+        say()
+        say('       새 HP 가 예를 들어 1850 이면')
+        say('           python memprobe.py --next 1850')
+        say()
+        say('       숫자를 못 읽겠으면 (줄어든 것만 남기기)')
+        say('           python memprobe.py --next less')
+        say()
+        say('  3) 후보가 3개 이하로 줄 때까지 1~2 를 반복한다')
+        say('     (회복했을 때는 --next more, 안 변했을 때는 --next same)')
+        return
+
+    say('후보가 거의 다 좁혀졌다')
+    say('=' * 66)
+    say()
+    say('마지막 확인 : HP 를 한 번 더 바꾸고 아래를 쳐서 살아남는지 본다')
+    say('    python memprobe.py --next less        (맞아서 줄었을 때)')
+    say('    python memprobe.py --next more        (회복해서 늘었을 때)')
+    say()
+    say('살아남으면 mem.json 의 chains 를 이렇게 고친다 :')
+    say()
+    a, v = cands[0]
+    rva  = a - m.base
+    say('    "hp":     { "base": "0x%X", "offsets": [], "type": "%s" },' % (rva, kind))
+    if len(cands) > 1:
+        b = cands[1][0] - m.base
+        say('    "hp_max": { "base": "0x%X", "offsets": [], "type": "%s" },' % (b, kind))
         say('')
-        say('    "hp": { "base": "0x%X", "offsets": [], "type": "%s" },'
-            % (a - m.base, kind))
+        say('  (hp 와 hp_max 중 어느 쪽이 어느 쪽인지는 --watch 로 보면 바로 안다.')
+        say('   맞을 때 변하는 쪽이 hp, 안 변하는 쪽이 hp_max 다)')
+    else:
         say('')
-        say('그리고 python memprobe.py --watch hp 로 값이 따라 움직이는지 본다')
+        say('  hp_max 는 보통 hp 바로 옆에 있다. --watch 로 hp 를 확인한 뒤')
+        say('  그 주소에서 ±2, ±4 한 값을 hp_max 로 넣어보면 대개 맞는다')
+    say()
+    say('고친 파일 위치 : ' + MEM_PATH)
+    say()
+    say('다 적었으면 값이 따라 움직이는지 본다 :')
+    say('    python memprobe.py --watch hp,hp_max')
 
 
 def dofind(pid, kind, spec):
