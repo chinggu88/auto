@@ -6,3 +6,10 @@ sound_rec/
 
 # 학습 데이터는 저장소에 넣지 않는다
 dataset/
+
+# 주소 검색 중간 결과 (memprobe --find/--next). 실행할 때마다 새로 만들어진다
+scan.dat
+
+# 화면 녹화는 저장소에 넣지 않는다
+화면 기록*.mov
+*.mov

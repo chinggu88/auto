@@ -35,6 +35,21 @@ PROCESS_QUERY_INFORMATION = 0x0400
 #QUERY_LIMITED 는 보호된 프로세스에서도 열릴 때가 있어 폴백으로 쓴다
 PROCESS_QUERY_LIMITED     = 0x1000
 
+#VirtualQueryEx 용 상수
+MEM_COMMIT  = 0x1000
+MEM_PRIVATE = 0x20000
+MEM_IMAGE   = 0x1000000
+MEM_MAPPED  = 0x40000
+
+PAGE_NOACCESS = 0x01
+PAGE_GUARD    = 0x100
+#값이 바뀌는 데이터는 반드시 쓰기 가능한 영역에 있다. 읽기 전용 영역은 안 뒤져도 된다
+WRITABLE = (0x04,        #PAGE_READWRITE
+            0x08,        #PAGE_WRITECOPY
+            0x40,        #PAGE_EXECUTE_READWRITE
+            0x80)        #PAGE_EXECUTE_WRITECOPY
+READABLE = WRITABLE + (0x02, 0x20)      #+ PAGE_READONLY, PAGE_EXECUTE_READ
+
 TH32CS_SNAPPROCESS = 0x00000002
 TH32CS_SNAPMODULE   = 0x00000008
 TH32CS_SNAPMODULE32 = 0x00000010
@@ -58,6 +73,17 @@ if IS_WIN:
                     ('pcPriClassBase',      ctypes.c_long),
                     ('dwFlags',             wt.DWORD),
                     ('szExeFile',           ctypes.c_char * MAX_PATH)]
+
+    #MEMORY_BASIC_INFORMATION. 필드를 자연 정렬로 두면 32/64비트 양쪽 레이아웃이
+    #그대로 맞는다 (64비트의 __alignment 자리는 패딩으로 채워진다)
+    class MBI(ctypes.Structure):
+        _fields_ = [('BaseAddress',       ctypes.c_void_p),
+                    ('AllocationBase',    ctypes.c_void_p),
+                    ('AllocationProtect', wt.DWORD),
+                    ('RegionSize',        ctypes.c_size_t),
+                    ('State',             wt.DWORD),
+                    ('Protect',           wt.DWORD),
+                    ('Type',              wt.DWORD)]
 
     class MODULEENTRY32(ctypes.Structure):
         _fields_ = [('dwSize',        wt.DWORD),
@@ -118,6 +144,10 @@ if IS_WIN:
     k32.Module32First.restype   = wt.BOOL
     k32.Module32Next.argtypes   = [wt.HANDLE, ctypes.POINTER(MODULEENTRY32)]
     k32.Module32Next.restype    = wt.BOOL
+
+    k32.VirtualQueryEx.argtypes = [wt.HANDLE, wt.LPCVOID,
+                                   ctypes.POINTER(MBI), ctypes.c_size_t]
+    k32.VirtualQueryEx.restype  = ctypes.c_size_t
 
     WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, wt.HWND, wt.LPARAM)
     u32.EnumWindows.argtypes = [WNDENUMPROC, wt.LPARAM]
@@ -184,6 +214,60 @@ def guards(pid):
                 found.append(name)
                 break
     return found
+
+
+#읽을 수 있는 메모리 영역 목록. [(시작주소, 크기), ...]
+#  writable=True 면 쓰기 가능한 영역만 (값이 변하는 데이터는 전부 여기 있다)
+#  정렬되지 않은 거대한 영역을 통째로 읽으면 실패하므로, 쓰는 쪽에서 쪼개 읽는다
+def regions(h, writable=True, maxaddr=None):
+    _needwin()
+    out  = []
+    addr = 0
+    mbi  = MBI()
+    size = ctypes.sizeof(MBI)
+    #32비트 대상이면 4GB 위는 볼 필요가 없다
+    top  = maxaddr if maxaddr else (1 << 47)
+
+    while addr < top:
+        got = k32.VirtualQueryEx(wt.HANDLE(h), ctypes.c_void_p(addr),
+                                 ctypes.byref(mbi), size)
+        if got == 0:
+            break
+        base = int(mbi.BaseAddress or 0)
+        rsz  = int(mbi.RegionSize or 0)
+        if rsz <= 0:
+            break
+
+        prot = int(mbi.Protect)
+        want = WRITABLE if writable else READABLE
+        if (int(mbi.State) == MEM_COMMIT
+                and (prot & PAGE_GUARD) == 0
+                and prot != PAGE_NOACCESS
+                and (prot & 0xFF) in want
+                and int(mbi.Type) in (MEM_PRIVATE, MEM_IMAGE)):
+            out.append((base, rsz))
+
+        addr = base + rsz
+    return out
+
+
+#큰 영역을 조각내어 읽는다. 읽히는 조각만 (시작주소, bytes) 로 돌려준다
+#중간에 못 읽는 페이지가 섞여 있어도 나머지는 건진다
+def readchunks(h, base, size, chunk=1 << 20):
+    pos = 0
+    while pos < size:
+        n   = min(chunk, size - pos)
+        raw = readmem(h, base + pos, n)
+        if raw != None:
+            yield base + pos, raw
+        elif n > 4096:
+            #통째로 실패하면 페이지 단위로 다시 시도한다
+            for q in range(0, n, 4096):
+                m = min(4096, n - q)
+                r = readmem(h, base + pos + q, m)
+                if r != None:
+                    yield base + pos + q, r
+        pos += n
 
 
 #=====================================================================
@@ -595,6 +679,33 @@ class Mem(object):
     #여러 개를 한 번에. 하나라도 못 읽으면 그 키는 None
     def values(self, names):
         return dict((n, self.value(n)) for n in names)
+
+    #체인 하나가 지금 어떤 상태인지 사람 말로 설명한다.
+    #'값이 None' 이라는 결과만으로는 '아직 주소를 안 넣었다' 와 '넣었는데 못 읽는다' 가
+    #구분되지 않는다. 그 둘은 할 일이 완전히 다르므로 반드시 갈라서 알려줘야 한다
+    #돌려주는 것 : (쓸만한가, 설명)
+    def explain(self, name):
+        if self.cfg == None:
+            return False, 'mem.json 을 안 읽었다'
+        spec = (self.cfg.get('chains') or {}).get(name)
+        if spec == None:
+            return False, "mem.json 의 chains 에 '" + name + "' 항목 자체가 없다"
+        if num(spec.get('base')) == None:
+            return False, 'chains.' + name + '.base 가 비어 있다 - 아직 주소를 안 넣었다'
+        if self.h == None:
+            return False, '클라이언트에 안 붙었다'
+
+        addr = self.resolve(spec)
+        if addr == None:
+            return False, ('base/offsets 를 따라가다 실패했다'
+                           + ' (base=' + str(spec.get('base'))
+                           + ', offsets=' + str(spec.get('offsets')) + ')')
+        kind = str(spec.get('type', 'u32'))
+        size = num(spec.get('len'), 64) if kind == 'str' else FMT[kind][1]
+        if readmem(self.h, addr, size) == None:
+            return False, ('주소 0x%X 를 못 읽는다' % addr
+                           + ' - 모듈 베이스 0x%X 기준 상대값이 맞는지 확인' % self.base)
+        return True, '정상 (0x%X, %s)' % (addr, kind)
 
     #--- HP / MP ---
 

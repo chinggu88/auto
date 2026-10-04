@@ -13,6 +13,21 @@
 #   python memprobe.py --watch hp,mp --sec 0.5    감시 주기 바꾸기
 #   python memprobe.py --objs                     객체 목록 덤프
 #
+#주소 찾기 (CheatEngine 없이. 읽기만 하고 게임 메모리에 쓰지 않는다) :
+#
+#   python memprobe.py --find 1234,2500 --fg   HP 1234, HP최대 2500 일 때
+#                                              둘이 붙어 있는 자리를 한 번에 찾는다
+#   python memprobe.py --find 1234 --fg        값 하나로 찾기
+#   python memprobe.py --next 1100 --fg        맞아서 HP 가 1100 이 됐을 때 좁히기
+#   python memprobe.py --next less --fg        값은 모르지만 줄었을 때
+#   python memprobe.py --next more --fg        회복해서 늘었을 때
+#   python memprobe.py --next same --fg        안 변했을 때
+#   python memprobe.py --cands                 지금 남은 후보 보기
+#   python memprobe.py --find 123 --type u16   2바이트 값으로 찾기 (기본은 u32)
+#
+#   후보는 scan.dat 에 저장된다. 처음부터 다시 하려면 그 파일을 지운다.
+#   HP 와 HP최대를 같이 아는 경우 --find <hp>,<hpmax> 가 압도적으로 빠르다
+#
 #듀얼클라(게임 2창)면 Lin.exe 가 2개라 이름만으로는 구분이 안 된다. 아래 중 하나로 고른다 :
 #
 #   python memprobe.py --fg              쓸 게임 창을 맨 앞에 두면 3초 뒤 그 창에 붙는다
@@ -283,6 +298,228 @@ def diag(pid, name, modname):
 
 
 #=====================================================================
+# 값 검색 (CheatEngine 없이 주소를 찾는다)
+#   읽기 전용이다. 게임 메모리에 아무것도 쓰지 않는다
+#   후보 목록은 scan.dat 에 저장되고, --next 로 계속 좁혀 나간다
+#=====================================================================
+
+SCAN_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'scan.dat')
+SCAN_MAGIC = b'MSCAN2\n'
+
+
+#후보 저장 : [(주소, 값), ...]
+def savecands(kind, cands):
+    import struct
+    with open(SCAN_PATH, 'wb') as f:
+        f.write(SCAN_MAGIC)
+        k = kind.encode('ascii')
+        f.write(struct.pack('<B', len(k)) + k)
+        f.write(struct.pack('<Q', len(cands)))
+        for a, v in cands:
+            f.write(struct.pack('<Qq', a, v))
+
+
+def loadcands():
+    import struct
+    if not os.path.isfile(SCAN_PATH):
+        return None, []
+    try:
+        with open(SCAN_PATH, 'rb') as f:
+            if f.read(len(SCAN_MAGIC)) != SCAN_MAGIC:
+                return None, []
+            n    = struct.unpack('<B', f.read(1))[0]
+            kind = f.read(n).decode('ascii')
+            cnt  = struct.unpack('<Q', f.read(8))[0]
+            out  = []
+            for _ in range(cnt):
+                out.append(struct.unpack('<Qq', f.read(16)))
+        return kind, out
+    except Exception as e:
+        say('scan.dat 읽기 실패 : ' + str(e))
+        return None, []
+
+
+#'u32' -> (struct 포맷, 바이트수, 정렬)
+def kindinfo(kind):
+    fmt, size = mr.FMT[kind]
+    return fmt, size, size
+
+
+#지금 메모리에서 kind 타입으로 value 와 같은 자리를 전부 찾는다
+#pair 가 있으면 'value 바로 뒤 win 바이트 안에 pair 도 있는' 자리만 남긴다
+def scanall(m, kind, value, pair=None, win=64):
+    import struct
+    fmt, size, align = kindinfo(kind)
+    try:
+        needle = struct.pack(fmt, value)
+    except struct.error:
+        say('%s 타입에 안 들어가는 값이다 : %d' % (kind, value))
+        return None
+
+    pneedle = None
+    if pair != None:
+        try:
+            pneedle = struct.pack(fmt, pair)
+        except struct.error:
+            say('%s 타입에 안 들어가는 값이다 : %d' % (kind, pair))
+            return None
+
+    regs  = mr.regions(m.h, writable=True,
+                       maxaddr=(1 << 32) if m.ptrsz == 4 else None)
+    total = sum(r[1] for r in regs)
+    say('검색 영역 %d개, %.1f MB' % (len(regs), total / 1048576.0))
+
+    cands = []
+    done  = 0
+    for base, size_r in regs:
+        for at, raw in mr.readchunks(m.h, base, size_r):
+            pos = raw.find(needle)
+            while pos >= 0:
+                addr = at + pos
+                if addr % align == 0:
+                    if pneedle == None:
+                        cands.append((addr, value))
+                    else:
+                        #짝이 가까이 있는지 본다 (hp 와 hp최대는 보통 붙어 있다)
+                        tail = raw[pos + size: pos + size + win]
+                        q = tail.find(pneedle)
+                        if q >= 0 and (addr + size + q) % align == 0:
+                            cands.append((addr, value))
+                pos = raw.find(needle, pos + 1)
+                if len(cands) > 2000000:
+                    say('후보가 너무 많다(200만 초과). 더 특이한 값으로 다시 찾는다')
+                    return None
+        done += size_r
+    return cands
+
+
+#이미 있는 후보만 다시 읽어 좁힌다. how : 숫자 / less / more / same / changed
+def narrow(m, kind, cands, how):
+    import struct
+    fmt, size, align = kindinfo(kind)
+    want = None
+    if how not in ('less', 'more', 'same', 'changed'):
+        try:
+            want = int(how, 0)
+        except ValueError:
+            say("--next 는 숫자 또는 less / more / same / changed 다 : " + how)
+            return None
+
+    out = []
+    for addr, old in cands:
+        raw = mr.readmem(m.h, addr, size)
+        if raw == None:
+            continue
+        cur = struct.unpack(fmt, raw)[0]
+        if want != None:
+            if cur == want:
+                out.append((addr, cur))
+        elif how == 'less' and cur < old:
+            out.append((addr, cur))
+        elif how == 'more' and cur > old:
+            out.append((addr, cur))
+        elif how == 'same' and cur == old:
+            out.append((addr, cur))
+        elif how == 'changed' and cur != old:
+            out.append((addr, cur))
+    return out
+
+
+#후보를 보여준다. 적어지면 mem.json 에 그대로 붙여 넣을 줄까지 만들어 준다
+def showcands(m, kind, cands, limit=30):
+    say()
+    say('남은 후보 : ' + str(len(cands)) + '개')
+    if len(cands) == 0:
+        say('  너무 많이 좁혔다. scan.dat 를 지우고 --find 부터 다시 한다')
+        return
+    if len(cands) > limit:
+        say('  (앞 %d개만 표시. 게임에서 값을 바꾸고 --next 로 더 좁힌다)' % limit)
+    say()
+    say('  %-18s %-12s %s' % ('절대주소', '값', 'mem.json 에 넣을 base (상대값)'))
+    for addr, val in cands[:limit]:
+        rva = addr - m.base
+        mark = '0x%X' % rva if 0 <= rva < (1 << 32) else '(모듈 밖 - 포인터 필요)'
+        say('  0x%-16X %-12d %s' % (addr, val, mark))
+    say()
+    if len(cands) <= limit:
+        say('후보가 몇 개 안 남았으면, 게임에서 HP 를 바꾸고 --next <새값> 으로 한 번 더')
+        say('확인한 뒤 살아남은 주소를 쓴다. 그 다음 mem.json 의 chains 에 이렇게 적는다 :')
+        a, v = cands[0]
+        say('')
+        say('    "hp": { "base": "0x%X", "offsets": [], "type": "%s" },'
+            % (a - m.base, kind))
+        say('')
+        say('그리고 python memprobe.py --watch hp 로 값이 따라 움직이는지 본다')
+
+
+def dofind(pid, kind, spec):
+    m = mr.Mem(MEM_PATH, say)
+    if not m.attach(pid):
+        say('붙기 실패 : ' + str(m.err))
+        return
+    try:
+        pair = None
+        if ',' in spec:
+            a, b = spec.split(',', 1)
+            value, pair = int(a.strip(), 0), int(b.strip(), 0)
+            say('값 %d 바로 뒤에 %d 가 붙어 있는 자리를 찾는다 (%s)'
+                % (value, pair, kind))
+            say('  HP 와 HP최대는 보통 구조체 안에서 붙어 있어서, 둘을 같이 주면')
+            say('  한 번에 후보가 몇 개로 줄어든다')
+        else:
+            value = int(spec.strip(), 0)
+            say('값 %d 를 찾는다 (%s)' % (value, kind))
+        say()
+
+        t0 = time.time()
+        cands = scanall(m, kind, value, pair)
+        if cands == None:
+            return
+        say('걸린 시간 %.1f초' % (time.time() - t0))
+        savecands(kind, cands)
+        showcands(m, kind, cands)
+        if len(cands) > 30:
+            say('게임에서 HP 를 바꾼 뒤 :  python memprobe.py --next <새 HP 값> --fg')
+    finally:
+        m.detach()
+
+
+def donext(pid, how):
+    kind, cands = loadcands()
+    if kind == None or len(cands) == 0:
+        say('이전 검색 결과(scan.dat)가 없다. 먼저 --find 로 찾는다')
+        return
+    m = mr.Mem(MEM_PATH, say)
+    if not m.attach(pid):
+        say('붙기 실패 : ' + str(m.err))
+        return
+    try:
+        say('이전 후보 ' + str(len(cands)) + '개를 ' + how + ' 로 좁힌다 (' + kind + ')')
+        out = narrow(m, kind, cands, how)
+        if out == None:
+            return
+        savecands(kind, out)
+        showcands(m, kind, out)
+    finally:
+        m.detach()
+
+
+def docands(pid):
+    kind, cands = loadcands()
+    if kind == None:
+        say('scan.dat 가 없다. 먼저 --find 로 찾는다')
+        return
+    m = mr.Mem(MEM_PATH, say)
+    if not m.attach(pid):
+        say('붙기 실패 : ' + str(m.err))
+        return
+    try:
+        showcands(m, kind, cands)
+    finally:
+        m.detach()
+
+
+#=====================================================================
 # 값 감시
 #=====================================================================
 
@@ -290,6 +527,43 @@ def watch(names, sec, pid):
     m = mr.Mem(MEM_PATH, say)
     if not m.attach(pid):
         say('붙기 실패 : ' + str(m.err))
+        return
+
+    #--- 감시 전 점검 ---
+    #그냥 돌리면 '--' 만 줄줄이 찍히는데, 그것만으로는 아직 주소를 안 넣은 건지
+    #넣었는데 못 읽는 건지 알 수가 없다. 돌기 전에 항목별로 상태를 한 번씩 찍는다
+    say()
+    say('점검 :')
+    DERIVED = ('hp%', 'mp%', 'pos')
+    real    = [n for n in names if n not in DERIVED]
+    good    = 0
+    for n in real:
+        okay, why = m.explain(n)
+        say('  %-10s %s' % (n, ('OK   ' if okay else '안 됨 ') + why))
+        if okay:
+            good += 1
+
+    if len(real) > 0 and good == 0:
+        say()
+        say('=' * 66)
+        say('읽을 수 있는 항목이 하나도 없다. 감시를 시작하지 않는다')
+        say('=' * 66)
+        say()
+        blank = [n for n in real
+                 if mr.num(((m.cfg.get('chains') or {}).get(n) or {}).get('base')) == None]
+        if len(blank) == len(real):
+            say('아직 mem.json 에 주소를 안 넣었다. 이 도구는 주소를 "찾아주는" 게 아니라')
+            say('이미 넣어둔 주소를 "읽어서 보여주는" 도구다.')
+            say()
+            say('mem.json 을 메모장으로 열어 chains 를 이렇게 채워야 한다 :')
+            say('')
+            say('    "hp":     { "base": "0x1234AB", "offsets": [], "type": "u32" },')
+            say('    "hp_max": { "base": "0x1234AF", "offsets": [], "type": "u32" },')
+            say('')
+            say('  base 는 절대주소가 아니라 모듈 베이스(0x%X) 기준 상대값이다 :' % m.base)
+            say('      상대값 = CheatEngine 에서 찾은 절대주소 - 0x%X' % m.base)
+            say('  type 은 4바이트면 u32, 2바이트면 u16 으로 적는다.')
+        say()
         return
 
     say()
@@ -300,7 +574,7 @@ def watch(names, sec, pid):
     #체인에 없는 이름을 적었으면 미리 알려준다
     known = list((m.cfg.get('chains') or {}).keys())
     for n in names:
-        if n not in known and n not in ('hp%', 'mp%', 'pos'):
+        if n not in known and n not in DERIVED:
             say("  ! '" + n + "' 는 mem.json 의 chains 에 없다. 아는 것 : "
                 + ', '.join(known))
 
@@ -389,6 +663,25 @@ def main():
 
     pid = pickpid()
     if pid == -1:            #--pid / --fg 가 잘못됐다
+        return
+
+    kind = arg('--type', 'u32')
+    if kind not in mr.FMT:
+        say('--type 은 ' + ', '.join(sorted(mr.FMT)) + ' 중 하나여야 한다 : ' + kind)
+        return
+
+    f = arg('--find')
+    if f:
+        dofind(pid, kind, f)
+        return
+
+    n = arg('--next')
+    if n:
+        donext(pid, n)
+        return
+
+    if has('--cands'):
+        docands(pid)
         return
 
     w = arg('--watch')
