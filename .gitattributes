@@ -1,0 +1,18 @@
+# Windows 배치 파일은 CRLF 여야 한다.
+# LF 로 체크아웃되면 cmd.exe 가 줄 경계를 놓쳐서, 줄 꼬리를 명령으로 실행해버린다
+# (예: "...하므로" 의 끝 글자가 'ㄹ로' is not recognized 오류로 튀어나온다)
+*.bat text eol=crlf
+
+# 파이썬/문서는 LF 로 통일
+*.py   text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
+*.txt  text eol=lf
+
+# 이미지와 영상은 손대지 않는다
+*.png  binary
+*.PNG  binary
+*.bmp  binary
+*.BMP  binary
+*.mp4  binary
+*.mov  binary

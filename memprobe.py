@@ -4,7 +4,7 @@
 #
 #쓰는 법 (Windows, 게임을 띄운 상태에서) :
 #
-#   python memprobe.py --list            돌고 있는 프로세스 전부
+#   python memprobe.py --list            돌고 있는 프로세스 전부 (창 제목까지)
 #   python memprobe.py --list lin        이름에 'lin' 이 든 것만
 #   python memprobe.py --pid 1234        그 PID 로 진단 (mem.json 없어도 된다)
 #   python memprobe.py                   mem.json 의 process 로 진단
@@ -12,6 +12,17 @@
 #   python memprobe.py --watch hp,mp              값이 실제로 따라 움직이는지 확인
 #   python memprobe.py --watch hp,mp --sec 0.5    감시 주기 바꾸기
 #   python memprobe.py --objs                     객체 목록 덤프
+#
+#듀얼클라(게임 2창)면 Lin.exe 가 2개라 이름만으로는 구분이 안 된다. 아래 중 하나로 고른다 :
+#
+#   python memprobe.py --fg              쓸 게임 창을 맨 앞에 두면 3초 뒤 그 창에 붙는다
+#   python memprobe.py --pid 17148       PID 를 직접 지정 (--list 로 확인)
+#
+#   PID 는 게임을 다시 켤 때마다 바뀐다. 정상이고, mem.json 에 적어둘 필요도 없다
+#   (mem.json 은 이름으로 찾는다). 어느 쪽 창이냐만 정해주면 된다.
+#
+#exe 로 묶어 더블클릭하면 압축을 푸느라 몇 초간 까만 창만 보인다. 고장이 아니다.
+#출력을 다 읽고 엔터를 눌러야 닫힌다.
 #
 #판정 : OpenProcess 가 실패하거나 베이스 읽기가 막히면 메모리 방식은 쓸 수 없다.
 #       그 경우 main.py 의 이미지 방식을 계속 쓰는 게 맞다
@@ -42,6 +53,30 @@ def has(name):
     return name in sys.argv
 
 
+#--pid <N> / --fg 를 실제 PID 로 바꾼다. 둘 다 없으면 None (= attach 가 알아서 고른다)
+#듀얼클라에서 "지금 쓸 창" 을 가리키는 수단이다. PID 는 매번 바뀌므로 저장하지 않는다
+def pickpid():
+    raw = arg('--pid')
+    if raw != None:
+        try:
+            return int(raw)
+        except ValueError:
+            say('--pid 는 숫자여야 한다 : ' + str(raw))
+            return -1
+    if has('--fg'):
+        for i in (3, 2, 1):
+            say('쓸 게임 창을 클릭해 맨 앞에 두세요... ' + str(i))
+            time.sleep(1)
+        pid = mr.frontpid()
+        if pid == None:
+            say('맨 앞 창을 못 찾았다')
+            return -1
+        t = mr.windows(pid).get(pid, [])
+        say('맨 앞 창 : PID ' + str(pid) + '  ' + (' | '.join(t) if t else '(제목 없음)'))
+        return pid
+    return None
+
+
 def hexdump(raw, addr, width=16):
     out = []
     for i in range(0, len(raw), width):
@@ -61,14 +96,40 @@ def dolist(filt):
     if filt:
         low  = filt.lower()
         rows = [r for r in rows if low in r[1].lower()]
-    rows.sort(key=lambda r: r[1].lower())
+    rows.sort(key=lambda r: (r[1].lower(), r[0]))
+
+    #같은 이름이 여러 개면(듀얼클라) PID 만으로는 구분이 안 된다.
+    #창 제목과 실행 경로까지 같이 찍어서 어느 쪽이 쓸 창인지 가릴 수 있게 한다
+    titles = mr.windows()
+    dup    = {}
+    for pid, name in rows:
+        dup[name.lower()] = dup.get(name.lower(), 0) + 1
 
     say('프로세스 ' + str(len(rows)) + '개' + (" (필터 '" + filt + "')" if filt else ''))
     say()
     for pid, name in rows:
-        say('  %-8d %s' % (pid, name))
+        t = titles.get(pid, [])
+        say('  %-8d %-24s %s' % (pid, name, ' | '.join(t) if t else ''))
+        #이름이 겹치는 것만 경로까지 보여준다 (전부 찍으면 너무 길다)
+        if dup.get(name.lower(), 0) > 1:
+            h, ec = mr.openproc(pid)
+            if h != None:
+                try:
+                    p = mr.exepath(h)
+                finally:
+                    mr.closeproc(h)
+                if p:
+                    say('  %-8s %s' % ('', p))
     say()
-    say("클라이언트를 찾았으면 : python memprobe.py --pid <PID>")
+
+    multi = [n for n, c in dup.items() if c > 1]
+    if multi:
+        say('같은 이름이 여러 개다 : ' + ', '.join(multi))
+        say('  PID 는 실행할 때마다 바뀌므로 mem.json 에 적어두지 않는다.')
+        say('  쓸 게임 창을 맨 앞에 두고 --fg 로 돌리거나, --pid <PID> 로 직접 지정한다.')
+        say()
+    say('클라이언트를 찾았으면 : python memprobe.py --pid <PID>')
+    say('  또는 게임 창을 클릭해 맨 앞에 두고 : python memprobe.py --fg')
 
 
 #=====================================================================
@@ -180,9 +241,9 @@ def diag(pid, name, modname):
 # 값 감시
 #=====================================================================
 
-def watch(names, sec):
+def watch(names, sec, pid):
     m = mr.Mem(MEM_PATH, say)
-    if not m.attach():
+    if not m.attach(pid):
         say('붙기 실패 : ' + str(m.err))
         return
 
@@ -227,9 +288,9 @@ def watch(names, sec):
 # 객체 목록 덤프
 #=====================================================================
 
-def dumpobjs(limit):
+def dumpobjs(limit, pid):
     m = mr.Mem(MEM_PATH, say)
-    if not m.attach():
+    if not m.attach(pid):
         say('붙기 실패 : ' + str(m.err))
         return
     try:
@@ -281,6 +342,10 @@ def main():
         dolist(arg('--list'))
         return
 
+    pid = pickpid()
+    if pid == -1:            #--pid / --fg 가 잘못됐다
+        return
+
     w = arg('--watch')
     if w:
         names = [x.strip() for x in w.split(',') if x.strip()]
@@ -288,7 +353,7 @@ def main():
             sec = float(arg('--sec', '1'))
         except ValueError:
             sec = 1.0
-        watch(names, max(0.1, sec))
+        watch(names, max(0.1, sec), pid)
         return
 
     if has('--objs'):
@@ -296,20 +361,14 @@ def main():
             limit = int(arg('--objs', '20'))
         except ValueError:
             limit = 20
-        dumpobjs(limit)
+        dumpobjs(limit, pid)
         return
 
     #--- 진단 ---
-    pid     = arg('--pid')
     modname = None
     name    = None
 
     if pid != None:
-        try:
-            pid = int(pid)
-        except ValueError:
-            say('--pid 는 숫자여야 한다 : ' + str(pid))
-            return
         hit  = [n for p, n in mr.procs() if p == pid]
         name = hit[0] if hit else '(알 수 없음)'
     else:
@@ -328,11 +387,33 @@ def main():
         if len(hit) == 0:
             say("mem.json 의 process '" + want + "' 를 못 찾았다. 게임이 떠 있는지 확인하고,")
             say('이름이 다르면 --list 로 찾아 mem.json 의 process 를 고친다')
+            say('  python memprobe.py --list')
             return
+        if len(hit) > 1:
+            say(str(len(hit)) + '개가 같은 이름으로 떠 있다 (듀얼클라) :')
+            titles = mr.windows()
+            for p, n in hit:
+                t = titles.get(p, [])
+                say('  PID %-8d %s' % (p, ' | '.join(t) if t else '(창 없음)'))
+            say('진단은 첫 번째로 한다. 특정 창을 보려면 --pid <PID> 또는 --fg 를 쓴다')
+            say()
         pid, name = hit[0]
 
     diag(pid, name, modname)
 
 
 if __name__ == '__main__':
-    main()
+    #더블클릭으로 띄우면 메시지를 찍는 순간 콘솔이 같이 닫혀서 아무것도 읽을 수 없다.
+    #예외가 나도 마찬가지다. 그래서 어떤 경우든 엔터를 기다리고 나서 끝낸다
+    try:
+        main()
+    except KeyboardInterrupt:
+        say()
+        say('중단')
+    except Exception:
+        import traceback
+        say()
+        say('예기치 못한 오류 :')
+        say(traceback.format_exc())
+    finally:
+        mr.holdconsole()

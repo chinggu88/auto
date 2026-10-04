@@ -24,9 +24,11 @@ IS_WIN = sys.platform.startswith('win')
 if IS_WIN:
     import ctypes.wintypes as wt
     k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    u32 = ctypes.WinDLL('user32',   use_last_error=True)
 else:
     wt  = None
     k32 = None
+    u32 = None
 
 PROCESS_VM_READ           = 0x0010
 PROCESS_QUERY_INFORMATION = 0x0400
@@ -70,6 +72,61 @@ if IS_WIN:
                     ('szExePath',     ctypes.c_char * MAX_PATH)]
 
 
+#CreateToolhelp32Snapshot 은 실패하면 INVALID_HANDLE_VALUE(-1) 를 준다.
+#restype 을 HANDLE(=c_void_p) 로 두면 -1 이 아니라 0xFFFF...FF 로 올라오므로
+#정수 -1 과 비교하면 절대 안 걸린다. 포인터로 해석한 값을 미리 구해둔다
+INVALID_HANDLE = ctypes.c_void_p(-1).value
+
+#ctypes 는 argtypes/restype 를 안 정해주면 인자와 반환을 C int(32비트)로 다룬다.
+#64비트에서 HANDLE/HWND 는 포인터 크기라 그대로 두면 조용히 잘린다.
+#실기에서만 터지고 원인을 찾기 어려운 종류라 여기서 전부 못 박아둔다
+if IS_WIN:
+    k32.OpenProcess.argtypes  = [wt.DWORD, wt.BOOL, wt.DWORD]
+    k32.OpenProcess.restype   = wt.HANDLE
+    k32.CloseHandle.argtypes  = [wt.HANDLE]
+    k32.CloseHandle.restype   = wt.BOOL
+    k32.ReadProcessMemory.argtypes = [wt.HANDLE, wt.LPCVOID, wt.LPVOID,
+                                      ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
+    k32.ReadProcessMemory.restype  = wt.BOOL
+    k32.IsWow64Process.argtypes    = [wt.HANDLE, ctypes.POINTER(wt.BOOL)]
+    k32.IsWow64Process.restype     = wt.BOOL
+    k32.CreateToolhelp32Snapshot.argtypes = [wt.DWORD, wt.DWORD]
+    k32.CreateToolhelp32Snapshot.restype  = wt.HANDLE
+    k32.GetConsoleProcessList.argtypes = [ctypes.POINTER(wt.DWORD), wt.DWORD]
+    k32.GetConsoleProcessList.restype  = wt.DWORD
+    k32.QueryFullProcessImageNameW.argtypes = [wt.HANDLE, wt.DWORD, wt.LPWSTR,
+                                               ctypes.POINTER(wt.DWORD)]
+    k32.QueryFullProcessImageNameW.restype  = wt.BOOL
+
+    u32.GetForegroundWindow.argtypes = []
+    u32.GetForegroundWindow.restype  = wt.HWND
+    u32.IsWindowVisible.argtypes     = [wt.HWND]
+    u32.IsWindowVisible.restype      = wt.BOOL
+    u32.GetWindowTextLengthW.argtypes = [wt.HWND]
+    u32.GetWindowTextLengthW.restype  = ctypes.c_int
+    u32.GetWindowTextW.argtypes = [wt.HWND, wt.LPWSTR, ctypes.c_int]
+    u32.GetWindowTextW.restype  = ctypes.c_int
+    u32.GetWindowThreadProcessId.argtypes = [wt.HWND, ctypes.POINTER(wt.DWORD)]
+    u32.GetWindowThreadProcessId.restype  = wt.DWORD
+
+    #스냅샷 순회. 핸들을 int 로 넘기면 64비트에서 잘리므로 여기도 못 박는다
+    k32.Process32First.argtypes = [wt.HANDLE, ctypes.POINTER(PROCESSENTRY32)]
+    k32.Process32First.restype  = wt.BOOL
+    k32.Process32Next.argtypes  = [wt.HANDLE, ctypes.POINTER(PROCESSENTRY32)]
+    k32.Process32Next.restype   = wt.BOOL
+    k32.Module32First.argtypes  = [wt.HANDLE, ctypes.POINTER(MODULEENTRY32)]
+    k32.Module32First.restype   = wt.BOOL
+    k32.Module32Next.argtypes   = [wt.HANDLE, ctypes.POINTER(MODULEENTRY32)]
+    k32.Module32Next.restype    = wt.BOOL
+
+    WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, wt.HWND, wt.LPARAM)
+    u32.EnumWindows.argtypes = [WNDENUMPROC, wt.LPARAM]
+    u32.EnumWindows.restype  = wt.BOOL
+else:
+    INVALID_HANDLE = None
+    WNDENUMPROC    = None
+
+
 def _needwin():
     if not IS_WIN:
         raise OSError('메모리 읽기는 Windows 에서만 된다 (지금 : ' + sys.platform + ')')
@@ -80,7 +137,7 @@ def procs():
     _needwin()
     out  = []
     snap = k32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
-    if snap == -1 or snap == 0:
+    if not snap or snap == INVALID_HANDLE:
         return out
     try:
         e = PROCESSENTRY32()
@@ -101,7 +158,7 @@ def modules(pid):
     _needwin()
     out  = []
     snap = k32.CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid)
-    if snap == -1 or snap == 0:
+    if not snap or snap == INVALID_HANDLE:
         return out
     try:
         e = MODULEENTRY32()
@@ -129,6 +186,90 @@ def guards(pid):
     return found
 
 
+#=====================================================================
+# 창 (듀얼클라에서 어느 클라이언트인지 가리는 데 쓴다)
+#=====================================================================
+
+#pid -> [창제목, ...]  보이는 최상위 창만. 제목이 빈 창은 버린다
+#듀얼클라는 프로세스 이름이 같으므로 창 제목이 유일한 구분 수단이다
+def windows(pid=None):
+    _needwin()
+    out = {}
+
+    def cb(hwnd, lparam):
+        if not u32.IsWindowVisible(hwnd):
+            return True
+        owner = wt.DWORD(0)
+        u32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        who = int(owner.value)
+        if pid != None and who != pid:
+            return True
+        n = u32.GetWindowTextLengthW(hwnd)
+        if n <= 0:
+            return True
+        buf = ctypes.create_unicode_buffer(n + 1)
+        u32.GetWindowTextW(hwnd, buf, n + 1)
+        title = buf.value.strip()
+        if title != '':
+            out.setdefault(who, []).append(title)
+        return True
+
+    #콜백 객체를 변수로 잡아둔다. 인자 자리에서 바로 만들면 GC 대상이 될 수 있다
+    proc = WNDENUMPROC(cb)
+    u32.EnumWindows(proc, 0)
+    return out
+
+
+#지금 맨 앞에 있는 창의 프로세스 id. 못 구하면 None
+def frontpid():
+    _needwin()
+    hwnd = u32.GetForegroundWindow()
+    if not hwnd:
+        return None
+    owner = wt.DWORD(0)
+    u32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+    return int(owner.value) or None
+
+
+#프로세스의 실행 파일 경로. 못 구하면 ''
+def exepath(h):
+    if not IS_WIN or not h:
+        return ''
+    size = wt.DWORD(MAX_PATH)
+    buf  = ctypes.create_unicode_buffer(MAX_PATH)
+    if k32.QueryFullProcessImageNameW(wt.HANDLE(h), 0, buf, ctypes.byref(size)):
+        return buf.value
+    return ''
+
+
+#=====================================================================
+# 콘솔 유지
+#=====================================================================
+
+#콘솔에 붙은 프로세스가 나 하나뿐이면 더블클릭으로 띄운 것이다.
+#(cmd 에서 돌리면 cmd 도 같은 콘솔에 붙어 있어서 2 이상이 나온다)
+def ownconsole():
+    if not IS_WIN:
+        return False
+    try:
+        arr = (wt.DWORD * 8)()
+        return k32.GetConsoleProcessList(arr, 8) <= 1
+    except Exception:
+        return False
+
+
+#더블클릭으로 띄운 경우에만 엔터를 기다린다.
+#안 그러면 메시지를 찍는 순간 창이 같이 닫혀서 아무것도 읽을 수 없다
+def holdconsole():
+    if not ownconsole():
+        return
+    try:
+        print('')
+        input('엔터를 누르면 닫힙니다...')
+    except Exception:
+        pass
+
+
 #프로세스를 읽기 권한으로만 연다. 실패하면 (None, 윈도우에러번호)
 def openproc(pid):
     _needwin()
@@ -141,6 +282,9 @@ def openproc(pid):
     return None, ctypes.get_last_error()
 
 
+#IsWow64Process 는 BOOL* 를 받는다. c_int 로 주면 64비트에서 어긋날 수 있다
+
+
 def closeproc(h):
     if IS_WIN and h:
         k32.CloseHandle(wt.HANDLE(h))
@@ -149,7 +293,7 @@ def closeproc(h):
 #대상이 32비트인지. (32비트여부, 판정근거문자열)
 def is32(h):
     _needwin()
-    wow = ctypes.c_int(0)
+    wow = wt.BOOL(0)
     if not k32.IsWow64Process(wt.HANDLE(h), ctypes.byref(wow)):
         return None, 'IsWow64Process 실패'
     if wow.value:
@@ -246,8 +390,33 @@ class Mem(object):
 
     #--- 붙기 / 떼기 ---
 
+    #후보가 여럿일 때 어느 클라이언트에 붙을지 고른다 (듀얼클라)
+    #PID 는 실행할 때마다 바뀌므로 저장해둘 수 없다. 대신 '지금 맨 앞에 있는 창' 을 쓴다
+    def _choose(self, cands):
+        if len(cands) == 1:
+            return cands[0]
+
+        titles = windows()
+        self.log(str(len(cands)) + '개가 같은 이름으로 떠 있다 :')
+        for pid in cands:
+            t = titles.get(pid, [])
+            self.log('  PID ' + str(pid) + '  ' + (' | '.join(t) if t else '(창 없음)'))
+
+        front = frontpid()
+        if front in cands:
+            self.log('-> 맨 앞 창의 PID ' + str(front) + ' 에 붙는다')
+            return front
+
+        #활성 창이 후보가 아니면(매크로 GUI 가 앞인 경우 등) 창이 있는 쪽을 고른다
+        withwin = [p for p in cands if titles.get(p)]
+        pick    = withwin[0] if withwin else cands[0]
+        self.log('-> 맨 앞 창이 대상이 아니라서 PID ' + str(pick) + ' 에 붙는다')
+        self.log('   원하는 창이 아니면, 그 게임 창을 클릭해 맨 앞에 두고 다시 시작할 것')
+        return pick
+
     #클라이언트에 붙는다. 성공하면 True. 실패 사유는 self.err
-    def attach(self):
+    #pid 를 주면 그 프로세스로 고정한다 (--pid 옵션)
+    def attach(self, pid=None):
         if self.cfg == None and not self.loadcfg():
             return False
 
@@ -256,15 +425,20 @@ class Mem(object):
             self.err = 'mem.json 의 process 가 비어 있다'
             return False
 
-        hit = [(pid, name) for pid, name in procs() if name.lower() == want]
+        hit = [p for p, name in procs() if name.lower() == want]
         if len(hit) == 0:
-            self.err = '프로세스를 못 찾음 : ' + want
+            self.err = ('프로세스를 못 찾음 : ' + want
+                        + '  (python memprobe.py --list 로 실제 이름을 확인할 것)')
             return False
-        if len(hit) > 1:
-            self.log('같은 이름 프로세스가 ' + str(len(hit)) + '개 - 첫 번째(PID '
-                     + str(hit[0][0]) + ')에 붙는다')
 
-        pid    = hit[0][0]
+        if pid != None:
+            if pid not in hit:
+                self.err = ('PID ' + str(pid) + ' 는 ' + want + ' 가 아니다'
+                            + '  (후보 : ' + ', '.join(str(x) for x in hit) + ')')
+                return False
+        else:
+            pid = self._choose(hit)
+
         h, ec  = openproc(pid)
         if h == None:
             self.err = ('OpenProcess 실패 (PID ' + str(pid) + ', 에러 ' + str(ec) + ')'
@@ -305,6 +479,10 @@ class Mem(object):
         self.log('메모리 붙음 : ' + want + ' PID ' + str(pid)
                  + ', ' + modname + ' 베이스 0x%X' % base
                  + ', ' + str(tgtbits) + '비트')
+        #어느 창에 붙었는지 남긴다. 듀얼클라에서 엉뚱한 창에 붙었는지 바로 보인다
+        t = windows(pid).get(pid, [])
+        if t:
+            self.log('붙은 창 : ' + ' | '.join(t))
         return True
 
     def detach(self):

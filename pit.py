@@ -526,7 +526,15 @@ def runmacro():
         main.HOTKEY = main.k.add_hotkey('tab', main.requeststop)
         log('tab 키를 누르면 정지')
 
+        for i in range(main.START_DELAY, 0, -1):
+            log('게임 창을 활성화하세요... ' + str(i))
+            time.sleep(1)
+            if main.runpending() or (not main.ALIVE):
+                return
+
         #--- 메모리 붙기 ---
+        #반드시 카운트다운 '뒤' 다. 듀얼클라는 Lin.exe 가 2개라 이름만으로는 구분이 안 되고,
+        #attach() 가 '맨 앞에 있는 창' 으로 고르기 때문에 사용자가 쓸 창을 띄운 다음이어야 한다
         if MEM_ON:
             if not mr.IS_WIN:
                 log('메모리 감지는 Windows 에서만 된다 - 이미지로 돈다')
@@ -543,12 +551,6 @@ def runmacro():
                         log('screen 변환 미설정 - 타겟은 커서 스윕으로 돈다'
                             + ' (python memcalib.py 로 맞춘다)')
         log('감지 방식 : ' + backend())
-
-        for i in range(main.START_DELAY, 0, -1):
-            log('게임 창을 활성화하세요... ' + str(i))
-            time.sleep(1)
-            if main.runpending() or (not main.ALIVE):
-                return
 
         atk = main.setattckinfo(main.CENTERPOINT)
         log('공격 커서 : ' + str(atk))

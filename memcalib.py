@@ -15,6 +15,8 @@
 #   python memcalib.py --key f1      기록 키 바꾸기
 #   python memcalib.py --show        지금 저장된 변환으로 몹 위치를 찍어만 본다
 #   python memcalib.py --noverify    5번 검증을 건너뛴다 (권하지 않음)
+#   python memcalib.py --fg          게임 창을 맨 앞에 두고 3초 뒤 그 창에 붙는다 (듀얼클라)
+#   python memcalib.py --pid 1234    붙을 프로세스를 직접 지정 (듀얼클라)
 #
 #어떻게 푸는가 :
 #  커서를 올린 순간 "어느 몹인지" 는 알 수 없다. 그래서 표본마다 몹 전체를 후보로 두고,
@@ -68,6 +70,30 @@ def arg(name, default=None):
 
 def has(name):
     return name in sys.argv
+
+
+#--pid <N> / --fg 를 실제 PID 로 바꾼다. 둘 다 없으면 None (= attach 가 알아서 고른다)
+#듀얼클라에서는 "표본을 찍을 그 창" 에 붙어야 하므로 이게 중요하다
+def pickpid():
+    raw = arg('--pid')
+    if raw != None:
+        try:
+            return int(raw)
+        except ValueError:
+            say('--pid 는 숫자여야 한다 : ' + str(raw))
+            return -1
+    if has('--fg'):
+        for i in (3, 2, 1):
+            say('표본을 찍을 게임 창을 클릭해 맨 앞에 두세요... ' + str(i))
+            time.sleep(1)
+        pid = mr.frontpid()
+        if pid == None:
+            say('맨 앞 창을 못 찾았다')
+            return -1
+        t = mr.windows(pid).get(pid, [])
+        say('맨 앞 창 : PID ' + str(pid) + '  ' + (' | '.join(t) if t else '(제목 없음)'))
+        return pid
+    return None
 
 
 #=====================================================================
@@ -396,8 +422,12 @@ def main_():
         say('이 도구는 Windows 에서만 된다 (지금 : ' + sys.platform + ')')
         return
 
+    pid = pickpid()
+    if pid == -1:
+        return
+
     m = mr.Mem(CAL_PATH, say)
-    if not m.attach():
+    if not m.attach(pid):
         say('메모리 붙기 실패 : ' + str(m.err))
         say('먼저 python memprobe.py 로 읽기가 되는지 확인한다')
         return
@@ -499,4 +529,16 @@ def main_():
 
 
 if __name__ == '__main__':
-    main_()
+    #더블클릭으로 띄우면 콘솔이 바로 닫혀서 출력을 못 읽는다. 어떤 경우든 엔터를 기다린다
+    try:
+        main_()
+    except KeyboardInterrupt:
+        say()
+        say('중단')
+    except Exception:
+        import traceback
+        say()
+        say('예기치 못한 오류 :')
+        say(traceback.format_exc())
+    finally:
+        mr.holdconsole()

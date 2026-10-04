@@ -5,8 +5,10 @@
   "_3": "offsets 규약은 CheatEngine 과 같다. 비면 static(모듈베이스+base). [a,b,c] 면 [[[모듈베이스+base]+a]+b]+c 이고 마지막 c 는 더하기만 한다",
   "_4": "채우는 순서 : 1) process/module  2) chains.hp/hp_max  3) chains.self_x/self_y/self_id  4) objlist  5) screen(memcalib.py 가 자동으로 채운다)",
 
-  "process": "lineage.exe",
-  "module": "lineage.exe",
+  "_process": "python memprobe.py --list 로 확인한 이름을 그대로 적는다. 핏빛서버 클라이언트는 Lin.exe 다",
+  "_process1": "같은 이름이 2개 이상이면(듀얼클라) 쓸 게임 창을 맨 앞에 두고 시작한다. PID 는 매번 바뀌므로 여기 적지 않는다",
+  "process": "Lin.exe",
+  "module": "Lin.exe",
   "encoding": "cp949",
 
   "_sane": "값이 이 범위를 벗어나면 '못 읽었다' 로 처리해서 폴백으로 보낸다. 오프셋이 밀렸을 때 쓰레기 값으로 행동하는 걸 막는 안전장치다",
