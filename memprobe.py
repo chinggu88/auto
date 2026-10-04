@@ -132,6 +132,40 @@ def dolist(filt):
     say('  또는 게임 창을 클릭해 맨 앞에 두고 : python memprobe.py --fg')
 
 
+#PE 헤더를 읽어 ASLR(동적 베이스) 가 켜져 있는지 본다.
+#꺼져 있으면 모듈 베이스가 매번 같으므로 주소 작업이 훨씬 쉬워진다
+#돌려주는 것 : (ASLR켜짐 True/False/None, 설명)
+def aslr(h, base):
+    import struct
+    raw = mr.readmem(h, base + 0x3C, 4)          #e_lfanew
+    if raw == None:
+        return None, 'PE 오프셋을 못 읽음'
+    pe = base + struct.unpack('<I', raw)[0]
+
+    sig = mr.readmem(h, pe, 4)
+    if sig != b'PE\x00\x00':
+        return None, 'PE 서명이 아님'
+
+    #COFF 헤더 20바이트 뒤가 옵셔널 헤더. magic 으로 PE32/PE32+ 를 가른다
+    magic = mr.readmem(h, pe + 24, 2)
+    if magic == None:
+        return None, '옵셔널 헤더를 못 읽음'
+    m = struct.unpack('<H', magic)[0]
+    if m == 0x10B:
+        off, kind = 0x46, 'PE32'
+    elif m == 0x20B:
+        off, kind = 0x46, 'PE32+'
+    else:
+        return None, '알 수 없는 옵셔널 헤더 magic 0x%X' % m
+
+    raw = mr.readmem(h, pe + 24 + off, 2)        #DllCharacteristics
+    if raw == None:
+        return None, 'DllCharacteristics 를 못 읽음'
+    dll = struct.unpack('<H', raw)[0]
+    dyn = bool(dll & 0x0040)                     #IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE
+    return dyn, kind + ', DllCharacteristics=0x%04X' % dll
+
+
 #=====================================================================
 # 진단 (Phase 0 게이트)
 #=====================================================================
@@ -223,6 +257,7 @@ def diag(pid, name, modname):
         say('판정 : 메모리 읽기 가능. 다음 단계로 간다')
         say('=' * 66)
         say()
+        dyn, why = aslr(h, base)
         say('다음에 할 일 :')
         say('  1. CheatEngine 등으로 HP / HP최대 주소를 찾는다')
         say('  2. 찾은 값을 ' + mname + ' 베이스(0x%X) 기준 상대값으로 바꾼다' % base)
@@ -230,8 +265,18 @@ def diag(pid, name, modname):
         say('  3. mem.json 의 chains.hp.base 에 그 상대값을 넣는다')
         say('  4. python memprobe.py --watch hp,hp_max 로 값이 따라 움직이는지 확인한다')
         say()
-        say('     ! 게임을 재시작하면 베이스 주소가 바뀐다(ASLR). 그래서 절대주소가 아니라')
-        say('       모듈 기준 상대값으로 적어야 매번 다시 안 찾아도 된다')
+        if dyn is False:
+            say('  [ASLR] 꺼져 있다 (' + why + ')')
+            say('         베이스가 항상 0x%X 다. 게임을 껐다 켜도 주소가 안 변하므로' % base)
+            say('         CheatEngine 에서 찾은 주소를 그대로 믿고 작업하면 된다.')
+            say('         그래도 mem.json 에는 상대값으로 적는다 (클라가 바뀌어도 안 깨지게).')
+        elif dyn is True:
+            say('  [ASLR] 켜져 있다 (' + why + ')')
+            say('         게임을 재시작하면 베이스가 바뀐다. 절대주소가 아니라 반드시')
+            say('         모듈 기준 상대값으로 적어야 매번 다시 안 찾는다.')
+        else:
+            say('  [ASLR] 판정 실패 : ' + str(why))
+            say('         안전하게 모듈 기준 상대값으로 적는다.')
         return True
     finally:
         mr.closeproc(h)

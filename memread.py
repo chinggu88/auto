@@ -246,14 +246,32 @@ def exepath(h):
 # 콘솔 유지
 #=====================================================================
 
-#콘솔에 붙은 프로세스가 나 하나뿐이면 더블클릭으로 띄운 것이다.
-#(cmd 에서 돌리면 cmd 도 같은 콘솔에 붙어 있어서 2 이상이 나온다)
+#이 콘솔을 셸이 아니라 우리가 띄운 것인지 본다.
+#
+#  개수로 세면 안 된다 : PyInstaller onefile 은 부트로더가 압축을 푼 뒤 같은 exe 를
+#  자식 프로세스로 한 번 더 띄운다. 그래서 더블클릭해도 콘솔에 붙은 프로세스가 2개라
+#  'GetConsoleProcessList() <= 1' 로는 셸에서 돌린 것과 구분되지 않는다.
+#  대신 콘솔에 셸(cmd/powershell 등)이 같이 붙어 있는지로 판단한다
+SHELLS = ['cmd.exe', 'powershell.exe', 'pwsh.exe', 'windowsterminal.exe',
+          'bash.exe', 'conemu', 'cmder', 'alacritty', 'wt.exe']
+
+
 def ownconsole():
     if not IS_WIN:
         return False
     try:
-        arr = (wt.DWORD * 8)()
-        return k32.GetConsoleProcessList(arr, 8) <= 1
+        cap = 32
+        arr = (wt.DWORD * cap)()
+        got = k32.GetConsoleProcessList(arr, cap)
+        if got == 0:
+            return True          #콘솔 정보를 못 얻으면 안전하게 멈추는 쪽으로
+        names = dict(procs())    #pid -> 이름
+        for i in range(min(int(got), cap)):
+            nm = (names.get(int(arr[i])) or '').lower()
+            for sh in SHELLS:
+                if sh in nm:
+                    return False     #셸이 같이 붙어 있다 = 셸에서 실행한 것
+        return True
     except Exception:
         return False
 
