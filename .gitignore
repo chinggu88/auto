@@ -13,3 +13,7 @@ scan.dat
 # 화면 녹화는 저장소에 넣지 않는다
 화면 기록*.mov
 *.mov
+
+# hpfind 중간 기록
+hpfind.dat
+mem.json.bak

@@ -4,7 +4,8 @@ REM ====================================================================
 REM  Build pit.py (memory-based macro) into exe files. Windows only.
 REM
 REM    dist\pit_auto.exe   hunting macro (GUI)
-REM    dist\memprobe.exe   memory probe / value watch (console)
+REM    dist\hpfind.exe     EASIEST: finds HP and writes mem.json (console)
+REM    dist\memprobe.exe   memory probe / value search / watch (console)
 REM    dist\memcalib.exe   world-to-screen calibration (console)
 REM
 REM  NOTE: keep this file ASCII-only and CRLF. cmd.exe rewinds the batch
@@ -40,7 +41,14 @@ pyinstaller --noconfirm --clean ^
 if errorlevel 1 goto fail
 
 echo.
-echo [4/5] Building memcalib.exe (console)
+echo [4/5] Building hpfind.exe and memcalib.exe (console)
+pyinstaller --noconfirm --clean ^
+    --onefile ^
+    --console ^
+    --name hpfind ^
+    hpfind.py
+if errorlevel 1 goto fail
+
 pyinstaller --noconfirm --clean ^
     --onefile ^
     --console ^
