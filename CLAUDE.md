@@ -12,6 +12,7 @@ There is no build, test suite, lint config, or dependency manifest. Each top-lev
 
 ```
 python main.py     # full-featured: HP/mark watchers + buff timers + attack loop
+python pit.py      # memory-based: reads HP/clan/mob list from client memory instead of the screen
 python oman.py     # "오만" variant: adds transform() + die() revive handling
 python tell.py     # near-copy of oman.py; attacks with an f5 press every 3 sweeps, 3-hour auto-stop
 python turn.py     # transform/mark-detection only; attack loop commented out
@@ -19,10 +20,60 @@ python main2.py    # simplest: manual-assist middle-click when cursor is over a 
 ```
 
 Dependencies (install manually): `pyautogui`, `pywin32`, `keyboard`, `schedule`. Python 3.9 per `.idea/misc.xml`.
+`pit.py` and its tools add no dependencies — they call `ReadProcessMemory` through `ctypes` directly.
 
 **Windows-only.** `win32gui` and the hardcoded `'\\'` path separators in every `file_path` construction mean these scripts cannot run on the macOS dev machine — they can only be edited here. Do not attempt to execute them to verify changes.
 
 To stop a running script: `pyautogui.FAILSAFE` is disabled in `oman.py`/`tell.py`/`turn.py`, so the corner-of-screen escape hatch does **not** work there. The attack loops are `while True` with no keyboard interrupt handler.
+
+## The memory-based variant (`pit.py`)
+
+`pit.py` is the one file that is **not** a copy-paste fork. It does `import main` and reuses
+everything that did not change (log queue, `_arm`/PENDING timers, mouse movement,
+`setattckinfo`, buff/transform/return actions, `FightGate` sound detection, mark-template
+image fallback, config load/save, the `App` GUI via subclassing). It redefines only
+`_checkrHp`, `huntloop`, `runmacro`, and `App`. **`main.py` is unmodified** — a change there
+propagates to `pit.py` automatically, and `pit.py` reads/writes main's module globals
+(`main.ALIVE`, `main.PENDING`, …), so renaming one of those breaks `pit.py` loudly with
+`AttributeError`.
+
+Supporting files:
+
+- `memread.py` — read-only ctypes wrapper. Opens the handle with `PROCESS_VM_READ |
+  PROCESS_QUERY_INFORMATION` only; there is deliberately **no write function in the file**.
+  Resolves CheatEngine-style pointer chains, validates every pointer step, and rejects
+  values outside a sanity range (`hp > hp_max`, `hp_max = 0`, …) so a shifted offset reads
+  as "could not read" rather than acting on garbage. N consecutive failures set `stale`,
+  which permanently drops that session to the image path and logs once.
+- `mem.json` — **all offsets live here, never in code**, because a client patch moves them.
+  `base` is an RVA from the anchor module (ASLR makes absolute addresses useless across
+  restarts). Unfilled values are `null`, which disables just that feature.
+- `memprobe.py` — the go/no-go gate. `--list` to find the PID, `--pid N` to test whether
+  `OpenProcess` and `ReadProcessMemory` actually work, `--watch hp,mp` to confirm values
+  track the game, `--objs` to dump the object list and read off real clan names.
+- `memcalib.py` — measures the world→screen transform instead of hardcoding a tile size.
+  The hovered mob's identity is unknown, so it treats every mob as a candidate and solves
+  the correspondence with RANSAC, then **verifies against the game itself** by moving the
+  cursor to each predicted mob position and checking `GetCursorInfo` (statistical thresholds
+  alone let ~2% of garbage fits through; the in-game check does not). Writes only the
+  `screen` key of `mem.json`.
+- `build_pit.bat` — builds `pit_auto.exe` plus console `memprobe.exe`/`memcalib.exe`.
+  `mem.json` is copied **beside** the exe, never bundled, and an existing one is not
+  overwritten. `build_exe.bat` (main.py) is untouched.
+
+Two invariants worth preserving when editing `pit.py`:
+
+1. **The cursor check is never removed.** Even with memory-supplied coordinates, `huntloop`
+   still runs `main._probe()` before `main._settleclick()`. A wrong coordinate then produces
+   no click at all, which keeps the failure mode identical to the image version.
+2. **Memory is an accelerator, image is the fallback.** Every sensing helper is tri-state
+   (`True`/`False`/`None` = could not judge), and `None` routes to `main.py`'s original image
+   code. An empty object list counts as "reading nothing useful", not "nobody around" —
+   otherwise the flee-on-hostile-clan safety would fail silently.
+
+Settings live in `pit.json`, **not** `config.json`: `main.saveconfig` writes a fixed dict and
+would silently drop any extra keys. `pit.py` reuses `main.loadconfig`/`saveconfig` for the
+shared buff/role settings and keeps `mem`/`hp_pct`/`mp_pct`/`clans`/`target` in its own file.
 
 ## Architecture
 

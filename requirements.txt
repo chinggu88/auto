@@ -21,3 +21,7 @@ schedule==1.2.2
 
 # 소리로 칼질을 감지할 때만 필요 (WASAPI 루프백 녹음). 없으면 소리 감지만 자동으로 꺼진다
 PyAudioWPatch==0.2.12.7
+
+# pit.py / memread.py / memprobe.py / memcalib.py (메모리 기반) 는 추가 설치가 없다.
+# ReadProcessMemory 를 ctypes 로 직접 부르므로 pymem 같은 패키지가 필요 없다.
+# (pymem 은 핸들을 PROCESS_ALL_ACCESS 로 열어서 권한이 더 필요하다. 우리는 읽기만 한다)
