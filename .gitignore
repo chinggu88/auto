@@ -17,3 +17,4 @@ scan.dat
 # hpfind 중간 기록
 hpfind.dat
 mem.json.bak
+hpfind_cands.json

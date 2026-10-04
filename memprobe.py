@@ -461,6 +461,10 @@ def snapnarrow(m, kind, how):
                 mask = b == a
             elif how == 'changed':
                 mask = b != a
+            elif how == 'notless':
+                mask = b >= a
+            elif how == 'notmore':
+                mask = b <= a
             else:
                 try:
                     want = int(how, 0)
@@ -563,11 +567,12 @@ def narrow(m, kind, cands, how):
     import struct
     fmt, size, align = kindinfo(kind)
     want = None
-    if how not in ('less', 'more', 'same', 'changed'):
+    if how not in ('less', 'more', 'same', 'changed', 'notless', 'notmore'):
         try:
             want = int(how, 0)
         except ValueError:
-            say("--next 는 숫자 또는 less / more / same / changed 다 : " + how)
+            say('--next 는 숫자 또는 less / more / same / changed /'
+                ' notless / notmore 다 : ' + how)
             return None, None
 
     out   = []
@@ -589,6 +594,12 @@ def narrow(m, kind, cands, how):
         elif how == 'same' and cur == old:
             out.append((addr, cur))
         elif how == 'changed' and cur != old:
+            out.append((addr, cur))
+        #notless = '줄지 않았다'. 매초 알아서 줄어드는 타이머/카운터를 걸러내는 데 쓴다.
+        #HP 는 맞지 않으면 그대로이거나(정지) 늘어난다(재생). 타이머는 계속 준다
+        elif how == 'notless' and cur >= old:
+            out.append((addr, cur))
+        elif how == 'notmore' and cur <= old:
             out.append((addr, cur))
     return out, table
 

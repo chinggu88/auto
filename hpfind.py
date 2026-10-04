@@ -17,9 +17,14 @@
 #   그것도 같이 눌리므로, 거슬리면 --key insert 처럼 안 쓰는 키로 바꾼다)
 #
 #  왜 이게 되는가 :
-#    처음에 메모리를 통째로 기록해두고, 맞을 때마다 "직전보다 줄어든 자리" 만 남긴다.
-#    HP 는 맞을 때마다 반드시 줄어들지만, 다른 값들이 세 번 연속 줄어들 일은 거의 없다.
-#    그래서 서너 번이면 후보가 몇 개로 줄어든다.
+#    처음에 메모리를 통째로 기록해두고 두 가지 조건을 번갈아 건다 :
+#      맞았을 때   -> '줄어든 자리' 만 남긴다
+#      안 맞았을 때 -> '줄지 않은 자리' 만 남긴다
+#
+#    '줄어든 것' 만 거르면 안 된다. 게임 안에는 매초 알아서 줄어드는 타이머/카운터가
+#    있어서, 그런 값은 모든 라운드를 통과해 HP 보다 더 잘 살아남는다. 실제로 그래서
+#    엉뚱한 주소를 잡은 적이 있다. '맞지 않을 때는 줄지 않는다' 는 조건이 그걸 걸러낸다.
+#    (HP 가 자연 회복해도 '줄지 않음' 에 해당하므로 같이 살아남는다)
 #
 #  읽기 전용이다. 게임 메모리에 아무것도 쓰지 않고, 게임에 키/마우스도 보내지 않는다.
 #  고치는 파일은 mem.json 하나뿐이고, 고치기 전에 mem.json.bak 으로 백업한다.
@@ -37,9 +42,19 @@ import memprobe as mp
 #u32 와 u16 을 둘 다 본다. 구버전 클라이언트는 HP 가 2바이트인 경우가 흔하다.
 #기록(스냅샷)은 원본 바이트라 타입과 무관하므로, 한 번 떠두고 양쪽으로 해석하면 된다
 TYPES    = ['u32', 'u16']
-ROUNDS   = 8        #최대 몇 번까지 반복할지. 보통 3번이면 몇 개로 줄어든다
+ROUNDS   = 10       #최대 몇 단계까지 반복할지
 ENOUGH   = 3        #후보가 이 수 이하로 줄면 그만한다
 NEAR     = 128      #hp_max 를 찾을 때 hp 주변 몇 바이트를 볼지
+
+#HP 로 말이 되는 범위. 이 밖의 값은 타이머나 포인터지 HP 가 아니다
+HP_MIN   = 1
+HP_MAX   = 1000000
+
+#맞는 단계와 안 맞는 단계를 번갈아 한다
+STEPS = [('몹한테 맞아서 HP 를 줄이세요',               'less',
+          'HP 가 줄어든 것을 확인하고 누르세요'),
+         ('이제 맞지 마세요 (도망치거나 안전한 곳으로)', 'notless',
+          '맞지 않는 상태가 되면 누르세요')]
 KEY_NEXT = '1'      #다음 단계. --key 로 바꿀 수 있다
 KEY_QUIT = '2'      #중단.     --quit 로 바꿀 수 있다
 
@@ -154,25 +169,95 @@ def writejson(path, base, hp, hpkind, hpmax, maxkind):
         return False
 
 
-#찾은 주소가 진짜 HP 인지 눈으로 확인시켜 준다
-def verify(m, seconds=12):
+#찾은 주소가 진짜 HP 인지 눈으로 확인시켜 준다.
+#고른 것 하나만 보여주면 그게 틀렸을 때 알 길이 없으므로, 남은 후보를 전부 같이 찍는다
+def verify(m, cands, chosen, seconds=15):
+    import struct
     say()
     line()
-    say('확인 : 지금부터 %d초간 HP 를 읽어서 보여준다' % seconds)
-    say('게임에서 맞거나 회복하면서 숫자가 따라 움직이는지 보세요')
+    say('확인 : %d초간 후보들의 값을 읽어서 보여준다' % seconds)
+    say('게임에서 맞거나 회복하면서, 어느 열이 HP 바와 같이 움직이는지 보세요')
     line()
     say()
+
+    head = '  %-8s' % '시각'
+    for i, (a, v, k) in enumerate(cands[:6], start=1):
+        mark = '*' if a == chosen else ' '
+        head += ' %s%d:0x%X(%s)' % (mark, i, a, k)
+    say(head)
+    say('  (* = mem.json 에 저장한 것)')
+    say()
+
     end = time.time() + seconds
     while time.time() < end:
-        hp  = m.value('hp')
-        mx  = m.value('hp_max')
-        pct = m.hppct()
-        say('  %s   hp = %-8s hp_max = %-8s %s'
-            % (time.strftime('%H:%M:%S'),
-               '--' if hp == None else hp,
-               '--' if mx == None else mx,
-               '' if pct == None else '(%.1f%%)' % pct))
+        row = '  %-8s' % time.strftime('%H:%M:%S')
+        for a, v, k in cands[:6]:
+            fmt, size = mr.FMT[k]
+            raw = mr.readmem(m.h, a, size)
+            cur = '--' if raw == None else struct.unpack(fmt, raw)[0]
+            row += ' %14s' % cur
+        say(row)
         time.sleep(1)
+
+
+CANDS_FILE = 'hpfind_cands.json'
+
+
+#지난번에 찾아둔 후보 중 n 번째로 mem.json 을 다시 쓴다.
+#한 번 틀렸다고 처음부터 다시 맞으러 가는 건 낭비다
+def repick(n):
+    path = os.path.join(mr.appdir(), CANDS_FILE)
+    if not os.path.isfile(path):
+        say('이전 후보 기록이 없다 (' + path + ')')
+        say('먼저 python hpfind.py 를 한 번 돌려야 한다')
+        return
+    try:
+        with open(path, encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception as e:
+        say('후보 기록을 못 읽었다 : ' + str(e))
+        return
+
+    cands = [(int(a), int(v), str(k)) for a, v, k in data.get('cands', [])]
+    base  = int(data.get('base', 0))
+    if not cands:
+        say('후보 기록이 비어 있다')
+        return
+    if n < 1 or n > len(cands):
+        say('%d번 후보는 없다. 1 ~ %d 중에서 고른다' % (n, len(cands)))
+        for i, (a, v, k) in enumerate(cands, start=1):
+            say('    %d : 0x%X (%s, 그때 값 %d)' % (i, a, k, v))
+        return
+
+    addr, v, kind = cands[n - 1]
+    say('%d번 후보 0x%X (%s) 로 다시 저장한다' % (n, addr, kind))
+
+    m = mr.Mem(mp.MEM_PATH, say)
+    if not m.attach():
+        say('붙기 실패 : ' + str(m.err))
+        return
+    try:
+        if m.base != base:
+            say('주의 : 모듈 베이스가 달라졌다 (0x%X -> 0x%X).' % (base, m.base))
+            say('게임을 다시 켰다면 후보 주소가 안 맞을 수 있다. 처음부터 다시 하는 게 낫다')
+        import struct
+        fmt, size = mr.FMT[kind]
+        raw = mr.readmem(m.h, addr, size)
+        hp  = struct.unpack(fmt, raw)[0] if raw else None
+        say('지금 그 주소의 값 : ' + str(hp))
+
+        hpmax = None
+        if hp != None:
+            near = findmax(m, addr, kind, hp)
+            if near:
+                hpmax = near[0][0]
+                say('hp_max 후보 : 0x%X (%d)' % (hpmax, near[0][1]))
+        if not writejson(mp.MEM_PATH, m.base, addr, kind, hpmax, kind):
+            return
+        say('mem.json 저장 완료')
+        verify(m, cands, addr)
+    finally:
+        m.detach()
 
 
 def run():
@@ -222,19 +307,20 @@ def run():
 
         groups = None
         for rnd in range(1, ROUNDS + 1):
+            prompt, how, hint = STEPS[(rnd - 1) % len(STEPS)]
             line()
-            say(' %d번째 : 몹한테 맞아서 HP 를 줄이세요' % rnd)
+            say(' %d단계 : %s' % (rnd, prompt))
             line()
-            if not waitkey('   HP 가 줄었으면 키를 누르세요.'):
+            if not waitkey('   ' + hint):
                 say('중단')
                 return
             say()
 
             if groups == None:
-                #첫 번째만 기록 전체와 비교한다. 같은 기록을 타입별로 두 번 해석한다
+                #첫 단계만 기록 전체와 비교한다. 같은 기록을 타입별로 두 번 해석한다
                 groups = []
                 for kind in TYPES:
-                    out = mp.snapnarrow(m, kind, 'less')
+                    out = mp.snapnarrow(m, kind, how)
                     if out == None:
                         return
                     if len(out) > 0:
@@ -242,7 +328,7 @@ def run():
             else:
                 nxt = []
                 for kind, cands in groups:
-                    kept, table = mp.narrow(m, kind, cands, 'less')
+                    kept, table = mp.narrow(m, kind, cands, how)
                     if kept == None:
                         return
                     if len(kept) > 0:
@@ -250,27 +336,33 @@ def run():
                 groups = nxt
 
             total = sum(len(c) for k, c in groups)
-            say('  남은 후보 : %d개  (%s)'
-                % (total, ', '.join('%s %d' % (k, len(c)) for k, c in groups)
+            say('  %s -> 남은 후보 %d개  (%s)'
+                % ('줄어든 자리만' if how == 'less' else '줄지 않은 자리만',
+                   total,
+                   ', '.join('%s %d' % (k, len(c)) for k, c in groups)
                    if groups else '없음'))
             say()
 
-            if total == 0:   #과하게 좁혀졌다
+            if total == 0:
                 line()
                 say('후보가 하나도 안 남았다')
                 line()
                 say()
-                say('HP 가 실제로 줄기 전에 키를 눌렀을 가능성이 크다.')
-                say('맞아서 HP 바가 눈에 띄게 줄어든 것을 확인한 다음 키를 누르세요.')
+                if how == 'less':
+                    say('HP 가 실제로 줄기 전에 키를 눌렀을 가능성이 크다.')
+                    say('HP 바가 눈에 띄게 줄어든 것을 확인한 뒤 누르세요.')
+                else:
+                    say('안 맞는 단계인데 HP 가 줄었을 가능성이 크다.')
+                    say('독이나 지속 피해가 없는 안전한 곳에서 다시 해보세요.')
                 say('다시 하려면 : python hpfind.py')
                 return
-            if total <= ENOUGH and rnd >= 2:
+
+            #두 조건을 모두 한 번씩은 겪은 뒤에 멈춰야 의미가 있다
+            if total <= ENOUGH and rnd >= len(STEPS):
                 say('  충분히 좁혀졌다')
                 break
             if rnd == ROUNDS:
-                #끝까지 많이 남았는데 첫 번째를 덥석 쓰면 엉뚱한 주소를 넣게 된다
-                say('  %d번을 했는데도 후보가 %d개 남았다' % (rnd, total))
-                say('  HP 가 확실히 줄어든 뒤에 키를 눌렀는지 확인하고 다시 돌려본다')
+                say('  %d단계를 했는데도 후보가 %d개 남았다' % (rnd, total))
                 if total > 10:
                     say()
                     say('후보가 너무 많아 여기서 멈춘다. 다시 : python hpfind.py')
@@ -279,20 +371,55 @@ def run():
         #--- 2. 결과 ---
         cands = [(a, v, k) for k, cs in groups for a, v in cs]
         cands.sort()
+
+        #HP 로 말이 안 되는 값은 뒤로 보낸다.
+        #6억 같은 값은 타이머나 포인터지 HP 가 아니다 (실제로 그걸 잡은 적이 있다)
+        def sane(v):
+            return HP_MIN <= v <= HP_MAX
+
+        good = [c for c in cands if sane(c[1])]
+        bad  = [c for c in cands if not sane(c[1])]
+
         line()
         say(' 찾은 후보 %d개' % len(cands))
         line()
         say()
-        say('  %-18s %-6s %-10s %s' % ('주소', '타입', '현재 HP', 'mem.json base'))
+        say('  %-18s %-6s %-12s %s' % ('주소', '타입', '현재 값', '판단'))
         for a, v, k in cands[:10]:
-            say('  0x%-16X %-6s %-10d 0x%X' % (a, k, v, a - m.base))
+            note = '' if sane(v) else '<- HP 로는 말이 안 되는 값'
+            say('  0x%-16X %-6s %-12d %s' % (a, k, v, note))
         say()
 
-        addr, hp, kind = cands[0]
-        if len(cands) > 1:
-            say('후보가 여럿이라 첫 번째(0x%X)로 진행한다.' % addr)
-            say('아래 확인에서 숫자가 안 맞으면 다시 돌리면 된다.')
+        if len(good) == 0:
+            say('HP 로 쓸 만한 값이 하나도 없다. 전부 타이머나 포인터로 보인다.')
+            say('다시 하려면 : python hpfind.py')
+            return
+
+        #같은 바이트를 겹쳐 읽는 후보가 섞일 수 있다 (u32 와 그 위쪽 절반 u16 등)
+        for a, v, k in good:
+            for a2, v2, k2 in good:
+                if a2 > a and a2 < a + mr.FMT[k][1]:
+                    say('참고 : 0x%X(%s) 와 0x%X(%s) 는 같은 바이트를 겹쳐 읽는다'
+                        % (a, k, a2, k2))
+                    break
+
+        addr, hp, kind = good[0]
+        if len(good) > 1:
+            say('후보가 %d개 남았다. 0x%X (%s, 현재 %d) 로 저장하고,'
+                % (len(good), addr, kind, hp))
+            say('아래 확인에서 남은 후보를 전부 같이 보여준다.')
+            say('다른 쪽이 HP 와 맞으면 그 주소로 다시 저장하면 된다 :')
+            say('    python hpfind.py --pick 2        (2번째 후보로)')
             say()
+
+        #--pick 으로 다시 고를 수 있게 후보를 남겨둔다
+        try:
+            with open(os.path.join(mr.appdir(), CANDS_FILE),
+                      'w', encoding='utf-8') as f:
+                json.dump({'base': m.base,
+                           'cands': [[a, v, k] for a, v, k in good]}, f)
+        except Exception:
+            pass
 
         #--- 3. hp_max 찾기 ---
         near = findmax(m, addr, kind, hp)
@@ -319,19 +446,17 @@ def run():
                 % (hpmax - m.base, kind))
 
         #--- 5. 바로 확인 ---
-        m.cfg = None
-        if not m.loadcfg():
-            say('저장한 mem.json 을 다시 못 읽었다 : ' + str(m.err))
-            return
-        verify(m)
+        verify(m, good, addr)
 
         say()
         line()
         say(' 끝났다')
         line()
         say()
-        say('위에서 hp 가 맞을 때 줄고 회복할 때 늘었으면 성공이다.')
-        say('숫자가 이상하면 다시 돌리면 된다 : python hpfind.py')
+        say('* 표시한 열이 HP 바와 같이 움직였으면 성공이다.')
+        say('다른 열이 HP 와 맞았으면 그 번호로 다시 저장한다 :')
+        say('    python hpfind.py --pick 2')
+        say('어느 것도 안 맞으면 처음부터 다시 : python hpfind.py')
         say()
         say('다음 단계는 pit.py 에서 [메모리에서 상태 읽기] 를 켜는 것이다.')
         say('(혈맹 판별과 몹 타겟은 objlist 가 필요한데, HP 귀환만 쓸 거면 안 해도 된다)')
@@ -348,7 +473,14 @@ if __name__ == '__main__':
         if not mr.IS_WIN:
             say('이 도구는 Windows 에서만 된다 (지금 : ' + sys.platform + ')')
         else:
-            run()
+            pick = arg('--pick')
+            if pick != None:
+                try:
+                    repick(int(pick))
+                except ValueError:
+                    say('--pick 은 숫자여야 한다 : ' + str(pick))
+            else:
+                run()
     except KeyboardInterrupt:
         say()
         say('중단')
