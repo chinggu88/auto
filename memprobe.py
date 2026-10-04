@@ -51,7 +51,22 @@ import time
 
 import memread as mr
 
-MEM_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'mem.json')
+#exe 로 묶었을 때도 exe 옆의 mem.json 을 찾도록 memread 의 경로 처리를 쓴다
+MEM_PATH, MEM_FOUND, MEM_TRIED = mr.findfile('mem.json')
+SCAN_PATH = os.path.join(mr.appdir(), 'scan.dat')
+
+
+#지금 어느 mem.json 을 쓰는지 항상 보여준다.
+#스크립트로 돌릴 때와 exe 로 돌릴 때 파일이 서로 다른 폴더에 있어서,
+#엉뚱한 파일을 고쳐놓고 왜 안 되냐고 헤매기 딱 좋다
+def saypath():
+    if MEM_FOUND:
+        say('mem.json : ' + MEM_PATH)
+    else:
+        say('mem.json 을 못 찾았다. 찾아본 곳 :')
+        for t in MEM_TRIED:
+            say('    ' + t)
+        say('  -> ' + MEM_PATH + ' 에 만들면 된다')
 
 
 def say(s=''):
@@ -307,7 +322,6 @@ def diag(pid, name, modname):
 #   후보 목록은 scan.dat 에 저장되고, --next 로 계속 좁혀 나간다
 #=====================================================================
 
-SCAN_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'scan.dat')
 SCAN_MAGIC = b'MSCAN2\n'
 
 
@@ -903,10 +917,23 @@ def dumpobjs(limit, pid):
 #=====================================================================
 
 def main():
+    #--where 는 경로만 찍으므로 Windows 체크보다 먼저 둔다 (어디서든 쓸 수 있게)
+    if has('--where'):
+        say('실행 폴더   : ' + mr.appdir())
+        say('현재 폴더   : ' + os.getcwd())
+        say('scan.dat    : ' + SCAN_PATH)
+        saypath()
+        return
+
     if not mr.IS_WIN:
         say('이 도구는 Windows 에서만 된다 (지금 : ' + sys.platform + ')')
         say('게임이 도는 윈도우 PC 에서 돌려야 한다')
         return
+
+    #--list 말고는 전부 mem.json 을 쓰므로 어느 파일인지 먼저 알려준다
+    if not has('--list'):
+        saypath()
+        say()
 
     if has('--list'):
         dolist(arg('--list'))

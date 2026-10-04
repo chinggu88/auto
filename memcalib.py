@@ -35,7 +35,8 @@ import time
 
 import memread as mr
 
-CAL_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'mem.json')
+#exe 로 묶었을 때도 exe 옆의 mem.json 을 쓴다 (__file__ 은 임시 폴더를 가리킨다)
+CAL_PATH, CAL_FOUND, CAL_TRIED = mr.findfile('mem.json')
 
 TOL      = 28       #이 픽셀 안에 들어오면 '들어맞았다' 로 본다
 MIN_PICK = 4        #최소 표본 수
@@ -425,6 +426,15 @@ def main_():
     pid = pickpid()
     if pid == -1:
         return
+
+    if CAL_FOUND:
+        say('mem.json : ' + CAL_PATH)
+    else:
+        say('mem.json 을 못 찾았다. 찾아본 곳 :')
+        for t in CAL_TRIED:
+            say('    ' + t)
+        return
+    say()
 
     m = mr.Mem(CAL_PATH, say)
     if not m.attach(pid):

@@ -422,6 +422,37 @@ def readmem(h, addr, size):
 
 
 #=====================================================================
+# 파일 위치
+#=====================================================================
+
+#실행 폴더. exe 로 묶으면 exe 가 놓인 폴더다
+#  PyInstaller onefile 에서 __file__ 은 임시 압축 해제 폴더를 가리킨다.
+#  그걸 그대로 쓰면 exe 옆의 mem.json 을 영영 못 찾는다 (main.py 의 _appdir 과 같은 이유)
+def appdir():
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(os.path.realpath(sys.executable))
+    try:
+        return os.path.dirname(os.path.realpath(__file__))
+    except NameError:
+        return os.getcwd()
+
+
+#설정 파일을 찾는다. exe/스크립트 옆을 먼저 보고, 없으면 지금 폴더를 본다
+#돌려주는 것 : (쓸 경로, 찾았는지, 찾아본 곳들)
+#  없을 때도 '여기에 만들면 된다' 는 경로를 돌려줘야 사용자가 헤매지 않는다
+def findfile(name):
+    tried = []
+    for d in (appdir(), os.getcwd()):
+        p = os.path.join(d, name)
+        if p not in tried:
+            tried.append(p)
+    for p in tried:
+        if os.path.isfile(p):
+            return p, True, tried
+    return tried[0], False, tried
+
+
+#=====================================================================
 # mem.json
 #=====================================================================
 
