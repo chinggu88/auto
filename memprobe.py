@@ -336,13 +336,22 @@ def _writehead(f, mode, kind):
     f.write(struct.pack('<B', len(k)) + k)
 
 
-def savecands(kind, cands):
+#후보를 타입별로 나눠 저장한다.
+#  단일 값 검색에서 타입을 하나로 정해버리면 안 된다 : 2바이트 값은 우연히 더 많이
+#  잡히는 게 정상이라 '후보가 적은 타입' 을 고르는 건 근거가 없다.
+#  어느 타입이 맞는지는 --next 로 걸러보면 저절로 드러나므로, 전부 들고 간다
+def savecands(groups):
     import struct
+    groups = [(k, c) for k, c in groups if len(c) > 0]
     with open(SCAN_PATH, 'wb') as f:
-        _writehead(f, 'C', kind)
-        f.write(struct.pack('<Q', len(cands)))
-        for a, v in cands:
-            f.write(struct.pack('<Qq', a, v))
+        _writehead(f, 'C', 'multi' if len(groups) != 1 else groups[0][0])
+        f.write(struct.pack('<I', len(groups)))
+        for kind, cands in groups:
+            kb = kind.encode('ascii')
+            f.write(struct.pack('<B', len(kb)) + kb)
+            f.write(struct.pack('<Q', len(cands)))
+            for a, v in cands:
+                f.write(struct.pack('<Qq', a, v))
 
 
 #스냅샷은 통째로 메모리에 들고 있으면 수백 MB 라, 읽으면서 바로 파일에 흘려 쓴다
@@ -382,23 +391,32 @@ def loadhead(f):
     return mode, f.read(n).decode('ascii')
 
 
+#돌려주는 것 : (모드, 데이터)
+#   'C' -> [(타입, [(주소,값), ...]), ...]      'S' -> 타입 문자열
+#   없으면 (None, None)
 def loadcands():
     import struct
     if not os.path.isfile(SCAN_PATH):
-        return None, []
+        return None, None
     try:
         with open(SCAN_PATH, 'rb') as f:
             mode, kind = loadhead(f)
             if mode != 'C':
-                return kind, None            #스냅샷 모드다
-            cnt = struct.unpack('<Q', f.read(8))[0]
-            out = []
-            for _ in range(cnt):
-                out.append(struct.unpack('<Qq', f.read(16)))
-        return kind, out
+                return 'S', kind
+            ng     = struct.unpack('<I', f.read(4))[0]
+            groups = []
+            for _ in range(ng):
+                n  = struct.unpack('<B', f.read(1))[0]
+                k  = f.read(n).decode('ascii')
+                cn = struct.unpack('<Q', f.read(8))[0]
+                cs = []
+                for _ in range(cn):
+                    cs.append(struct.unpack('<Qq', f.read(16)))
+                groups.append((k, cs))
+        return 'C', groups
     except Exception as e:
         say('scan.dat 읽기 실패 : ' + str(e))
-        return None, []
+        return None, None
 
 
 #스냅샷과 지금 메모리를 비교해 조건에 맞는 자리만 후보로 만든다.
@@ -539,6 +557,8 @@ ANYTYPES = ['u32', 'i32', 'u16', 'i16', 'f32']
 
 
 #이미 있는 후보만 다시 읽어 좁힌다. how : 숫자 / less / more / same / changed
+#돌려주는 것 : (살아남은 후보, 비교표[(주소, 이전값, 현재값)])
+#  비교표가 있어야 0개가 됐을 때 '왜' 를 보여줄 수 있다
 def narrow(m, kind, cands, how):
     import struct
     fmt, size, align = kindinfo(kind)
@@ -548,14 +568,17 @@ def narrow(m, kind, cands, how):
             want = int(how, 0)
         except ValueError:
             say("--next 는 숫자 또는 less / more / same / changed 다 : " + how)
-            return None
+            return None, None
 
-    out = []
+    out   = []
+    table = []
     for addr, old in cands:
         raw = mr.readmem(m.h, addr, size)
         if raw == None:
+            table.append((addr, old, None))
             continue
         cur = struct.unpack(fmt, raw)[0]
+        table.append((addr, old, cur))
         if want != None:
             if cur == want:
                 out.append((addr, cur))
@@ -567,13 +590,20 @@ def narrow(m, kind, cands, how):
             out.append((addr, cur))
         elif how == 'changed' and cur != old:
             out.append((addr, cur))
-    return out
+    return out, table
 
 
 #후보를 보여준다. 적어지면 mem.json 에 그대로 붙여 넣을 줄까지 만들어 준다
-def showcands(m, kind, cands, limit=30):
+#groups = [(타입, [(주소,값), ...]), ...]
+def showcands(m, groups, limit=30):
+    cands = [(a, v, k) for k, cs in groups for a, v in cs]
+    kind  = groups[0][0] if len(groups) == 1 else 'u32'
     say()
-    say('남은 후보 : ' + str(len(cands)) + '개')
+    if len(groups) > 1:
+        say('남은 후보 : ' + str(len(cands)) + '개  ('
+            + ', '.join('%s %d개' % (k, len(c)) for k, c in groups) + ')')
+    else:
+        say('남은 후보 : ' + str(len(cands)) + '개')
     if len(cands) == 0:
         say()
         say('  너무 많이 좁혔다. 조건이 틀렸을 가능성이 크다.')
@@ -586,11 +616,11 @@ def showcands(m, kind, cands, limit=30):
     if len(cands) > limit:
         say('  (앞 %d개만 표시)' % limit)
     say()
-    say('  %-18s %-12s %s' % ('절대주소', '값', 'mem.json 에 넣을 base (상대값)'))
-    for addr, val in cands[:limit]:
+    say('  %-18s %-6s %-12s %s' % ('절대주소', '타입', '값', 'mem.json 에 넣을 base'))
+    for addr, val, k in cands[:limit]:
         rva = addr - m.base
         mark = '0x%X' % rva if 0 <= rva < (1 << 32) else '(모듈 밖 - 포인터 필요)'
-        say('  0x%-16X %-12d %s' % (addr, val, mark))
+        say('  0x%-16X %-6s %-12d %s' % (addr, k, val, mark))
 
     #--- 다음에 칠 명령을 그대로 보여준다 ---
     #'--next <새값>' 처럼 빈칸으로 두면 뭘 쳐야 할지 알 수가 없다. 통째로 찍어준다
@@ -622,12 +652,13 @@ def showcands(m, kind, cands, limit=30):
     say()
     say('살아남으면 mem.json 의 chains 를 이렇게 고친다 :')
     say()
-    a, v = cands[0]
+    a, v, k = cands[0]
     rva  = a - m.base
-    say('    "hp":     { "base": "0x%X", "offsets": [], "type": "%s" },' % (rva, kind))
+    say('    "hp":     { "base": "0x%X", "offsets": [], "type": "%s" },' % (rva, k))
     if len(cands) > 1:
         b = cands[1][0] - m.base
-        say('    "hp_max": { "base": "0x%X", "offsets": [], "type": "%s" },' % (b, kind))
+        say('    "hp_max": { "base": "0x%X", "offsets": [], "type": "%s" },'
+            % (b, cands[1][2]))
         say('')
         say('  (hp 와 hp_max 중 어느 쪽이 어느 쪽인지는 --watch 로 보면 바로 안다.')
         say('   맞을 때 변하는 쪽이 hp, 안 변하는 쪽이 hp_max 다)')
@@ -694,37 +725,25 @@ def dofind(pid, kind, spec):
                     % (k, single, len(cands)))
         say('걸린 시간 %.1f초' % (time.time() - t0))
 
-        #짝까지 맞은 타입 중 후보가 가장 적고 0 이 아닌 것을 고른다.
-        #동점이면 ANYTYPES 순서를 따른다 (부호없는 쪽을 먼저 쓴다).
-        #양수는 u16 과 i16 의 바이트가 같아서 늘 같이 잡히는데, HP 는 음수가 없으므로
-        #부호없는 타입으로 적는 게 맞다
-        order = dict((k, i) for i, k in enumerate(ANYTYPES))
-        good  = [(len(c), order.get(k, 99), k)
-                 for k, (c, sg, g) in results.items() if len(c) > 0]
-        if len(good) == 0:
+        #타입을 하나로 정하지 않는다. 어느 타입이 맞는지는 --next 로 걸러보면
+        #저절로 드러난다. 여기서 버리면 정작 맞는 타입을 날려버릴 수 있다
+        #(u16 은 우연히 더 많이 잡히는 게 정상이라 '적은 쪽' 을 고르면 안 된다)
+        order  = dict((k, i) for i, k in enumerate(ANYTYPES))
+        groups = [(k, results[k][0]) for k in kinds
+                  if k in results and len(results[k][0]) > 0]
+        groups.sort(key=lambda g: order.get(g[0], 99))
+        if len(groups) == 0:
             explainzero(m, value, pair, results, kinds)
             return
 
-        good.sort()
-        best = good[0][2]
-        cands, single, gaps = results[best]
-        if len(kinds) > 1:
-            same = [k for n, o, k in good if n == good[0][0]]
-            say()
-            if len(same) > 1:
-                say('-> ' + ', '.join(same) + ' 가 똑같이 잡혔다 (바이트가 같은 타입들)')
-                say('   HP 는 음수가 없으니 ' + best + ' 로 쓴다')
-            else:
-                say('-> ' + best + ' 로 잡혔다')
-        if gaps:
-            uniq = sorted(set(gaps))[:6]
+        allgaps = [g for k, (c, sg, gp) in results.items() for g in gp]
+        if allgaps:
+            uniq = sorted(set(allgaps))[:6]
             say('짝까지의 간격 : ' + ', '.join(('%+d' % g) for g in uniq) + ' 바이트'
                 + '   (음수면 짝이 앞에 있다는 뜻)')
 
-        savecands(best, cands)
-        showcands(m, best, cands)
-        if len(cands) > 30:
-            say('게임에서 HP 를 바꾼 뒤 :  python memprobe.py --next <새 HP 값> --fg')
+        savecands(groups)
+        showcands(m, groups)
     finally:
         m.detach()
 
@@ -773,9 +792,66 @@ def explainzero(m, value, pair, results, kinds):
     say('  몇 번 반복하면 후보가 몇 개로 줄어든다.')
 
 
+#좁혔더니 0개가 됐을 때, 후보들이 실제로 어떤 값이었는지 보여준다.
+#이게 없으면 "0개" 만 보고 같은 짓을 반복하게 된다.
+#전부 '그대로' 면 HP 가 안 변했거나 그 자리들이 HP 가 아니라는 뜻이고,
+#'늘었다' 면 less 가 아니라 more 를 써야 한다는 뜻이다
+def dumpcompare(m, tables, how, limit=16):
+    rows = [(k, a, o, c) for k, t in tables for a, o, c in t]
+    if len(rows) == 0:
+        return
+    say()
+    say('후보들이 지금 실제로 어떤 값인지 :')
+    say()
+    say('  %-18s %-6s %-12s %-12s %s' % ('주소', '타입', '이전', '현재', '변화'))
+    same = up = down = dead = 0
+    for k, a, o, c in rows[:limit]:
+        if c == None:
+            w, dead = '못 읽음', dead + 1
+        elif c == o:
+            w, same = '그대로', same + 1
+        elif c > o:
+            w, up = '늘었다', up + 1
+        else:
+            w, down = '줄었다', down + 1
+        say('  0x%-16X %-6s %-12s %-12s %s'
+            % (a, k, o, '--' if c == None else c, w))
+    for k, a, o, c in rows[limit:]:
+        if c == None:
+            dead += 1
+        elif c == o:
+            same += 1
+        elif c > o:
+            up += 1
+        else:
+            down += 1
+    if len(rows) > limit:
+        say('  ... (전체 %d개)' % len(rows))
+
+    say()
+    say('정리 : 그대로 %d개, 늘었다 %d개, 줄었다 %d개, 못 읽음 %d개'
+        % (same, up, down, dead))
+    say()
+    if down > 0 and how != 'less':
+        say('-> 줄어든 자리가 있다. python memprobe.py --next less 를 쓴다')
+    elif up > 0 and how != 'more':
+        say('-> 늘어난 자리가 있다. python memprobe.py --next more 를 쓴다')
+    elif same == len(rows):
+        say('-> 하나도 안 변했다. 둘 중 하나다 :')
+        say('   (1) HP 가 실제로 안 변했다 - 몹한테 맞아서 확실히 줄인 뒤 다시 한다')
+        say('   (2) 이 자리들은 HP 가 아니다 - 처음 찾은 값이 HP 가 아니었다는 뜻')
+        say()
+        say('   (2) 라면 값을 모르는 채로 찾는 방법이 확실하다 :')
+        say('       del scan.dat')
+        say('       python memprobe.py --find unknown --type u32')
+        say('       (몹한테 맞는다)')
+        say('       python memprobe.py --next less')
+        say('       (또 맞는다)  python memprobe.py --next less   ... 반복')
+
+
 def donext(pid, how):
-    kind, cands = loadcands()
-    if kind == None:
+    mode, data = loadcands()
+    if mode == None:
         say('이전 검색 결과(scan.dat)가 없다. 먼저 --find 로 찾는다')
         return
 
@@ -784,8 +860,9 @@ def donext(pid, how):
         say('붙기 실패 : ' + str(m.err))
         return
     try:
-        if cands == None:
+        if mode == 'S':
             #스냅샷 모드 : 기록해둔 것과 지금을 통째로 비교한다
+            kind = data
             say('기록해둔 메모리와 지금을 비교해 ' + how + ' 인 자리를 찾는다 ('
                 + kind + ')')
             t0  = time.time()
@@ -793,30 +870,47 @@ def donext(pid, how):
             if out == None:
                 return
             say('걸린 시간 %.1f초' % (time.time() - t0))
-        else:
-            if len(cands) == 0:
-                say('남은 후보가 없다. scan.dat 를 지우고 --find 부터 다시 한다')
+            groups = [(kind, out)]
+            savecands(groups)
+            showcands(m, groups)
+            return
+
+        groups = data
+        total  = sum(len(c) for k, c in groups)
+        if total == 0:
+            say('남은 후보가 없다. scan.dat 를 지우고 --find 부터 다시 한다')
+            return
+        say('이전 후보 ' + str(total) + '개를 ' + how + ' 로 좁힌다  ('
+            + ', '.join('%s %d개' % (k, len(c)) for k, c in groups) + ')')
+
+        out    = []
+        tables = []
+        for kind, cands in groups:
+            kept, table = narrow(m, kind, cands, how)
+            if kept == None:
                 return
-            say('이전 후보 ' + str(len(cands)) + '개를 ' + how + ' 로 좁힌다 ('
-                + kind + ')')
-            out = narrow(m, kind, cands, how)
-            if out == None:
-                return
-        savecands(kind, out)
-        showcands(m, kind, out)
-        if len(out) > 30:
-            say('아직 많다. 게임에서 HP 를 또 바꾸고 --next 를 한 번 더 돌린다')
+            tables.append((kind, table))
+            if len(kept) > 0:
+                out.append((kind, kept))
+
+        if len(out) == 0:
+            showcands(m, [(groups[0][0], [])])
+            dumpcompare(m, tables, how)
+            return
+
+        savecands(out)
+        showcands(m, out)
     finally:
         m.detach()
 
 
 def docands(pid):
-    kind, cands = loadcands()
-    if kind == None:
+    mode, data = loadcands()
+    if mode == None:
         say('scan.dat 가 없다. 먼저 --find 로 찾는다')
         return
-    if cands == None:
-        say('지금은 "값 모름" 기록 상태다 (' + str(kind) + ').')
+    if mode == 'S':
+        say('지금은 "값 모름" 기록 상태다 (' + str(data) + ').')
         say('게임에서 HP 를 바꾸고 --next less / more / same 으로 좁혀야 후보가 생긴다')
         return
     m = mr.Mem(MEM_PATH, say)
@@ -824,7 +918,7 @@ def docands(pid):
         say('붙기 실패 : ' + str(m.err))
         return
     try:
-        showcands(m, kind, cands)
+        showcands(m, data)
     finally:
         m.detach()
 
