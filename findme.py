@@ -1,7 +1,12 @@
 #캐릭터 이름으로 캐릭터 구조체를 찾아 HP 를 짚어낸다
 #
 #  쓰는 법 :   python findme.py --name 캐릭터이름
-#              python findme.py              (이름을 물어본다)
+#              python findme.py --anchor 2169     (최대 HP 를 기준점으로)
+#              python findme.py                   (이름을 물어본다)
+#
+#  --anchor 는 이름이 두 글자뿐이라 채팅 곳곳에 걸리거나, 구조체에 평문 이름이 없을 때 쓴다.
+#  최대 HP 는 맞아도 안 변해서 '줄어든 값' 으로는 절대 안 잡히지만, 바로 옆에 현재 HP 가
+#  있을 가능성이 아주 높다. 그래서 최대 HP 를 찾아 그 옆에서 줄어드는 값을 본다.
 #
 #  옵션 :
 #    --win 512        이름 주변 몇 바이트를 볼지 (기본 192, 앞뒤 각각)
@@ -82,7 +87,11 @@ def arg(name, default=None):
 #=====================================================================
 
 #이름 문자열이 들어 있는 자리를 전부 찾는다. [(주소, 인코딩), ...]
-def scanname(m, name):
+#  1차 : 이름 바로 뒤에 NUL 이 붙은 것만 (구조체의 이름 칸은 이렇게 끝난다)
+#        채팅은 '[여포]:' 처럼 괄호나 글자가 따라오므로 여기서 거의 다 떨어진다.
+#        두 글자 이름은 문장 곳곳에 걸려서 이 단계가 없으면 채팅 로그만 수백 개 나온다
+#  2차 : 1차가 비었을 때만, NUL 조건 없이
+def scanname(m, name, strict=True):
     needles = []
     for enc, label in ENCODINGS:
         try:
@@ -91,45 +100,70 @@ def scanname(m, name):
             continue
         if len(b) >= 2 and b not in [x[0] for x in needles]:
             needles.append((b, enc, label))
-
     if not needles:
         say('이름을 바이트로 바꿀 수 없다 : ' + name)
-        return []
+        return [], False
 
     say('찾는 바이트 :')
     for b, enc, label in needles:
         say('    %-10s %s' % (label, ' '.join('%02X' % x for x in b)))
     say()
 
-    #이름은 쓰기 가능한 영역(살아 있는 구조체)에 있을 수도, 읽기 전용에 있을 수도 있다.
-    #먼저 쓰기 가능한 쪽만 본다 - 우리가 원하는 건 값이 변하는 '살아 있는' 구조체다
-    for writable in (True, False):
-        regs  = mr.regions(m.h, writable=writable,
+    def scan(wrt, nul):
+        regs  = mr.regions(m.h, writable=wrt,
                            maxaddr=(1 << 32) if m.ptrsz == 4 else None)
         total = sum(r[1] for r in regs)
-        say('검색 영역 %d개, %.1f MB  (%s)'
+        say('검색 영역 %d개, %.1f MB  (%s, %s)'
             % (len(regs), total / 1048576.0,
-               '쓰기 가능' if writable else '읽기 전용 포함'))
-
+               '쓰기 가능' if wrt else '읽기 전용 포함',
+               '이름+NUL' if nul else '이름만'))
         hits = []
+        capped = False
         for base, size in regs:
             for at, raw in mr.readchunks(m.h, base, size):
                 for b, enc, label in needles:
-                    pos = raw.find(b)
+                    nd  = b + (b'\x00' if nul else b'')
+                    pos = raw.find(nd)
                     while pos >= 0:
                         hits.append((at + pos, enc))
                         if len(hits) >= MAX_HITS:
+                            capped = True
                             break
-                        pos = raw.find(b, pos + 1)
-                if len(hits) >= MAX_HITS:
+                        pos = raw.find(nd, pos + 1)
+                if capped:
                     break
-            if len(hits) >= MAX_HITS:
+            if capped:
                 break
+        if capped:
+            say('  ! %d곳에서 끊었다. 이름이 너무 흔하다' % MAX_HITS)
+        return hits
 
+    plan = [(True, True), (False, True), (True, False), (False, False)] if strict \
+           else [(True, False), (False, False)]
+    for wrt, nul in plan:
+        hits = scan(wrt, nul)
         if hits:
-            return hits
+            return hits, nul
         say('  여기서는 못 찾았다')
-    return []
+    return [], False
+
+
+#최대 HP 같은 '안 변하는 값' 을 기준점으로 쓴다. [(주소, 타입), ...]
+#  이름이 두 글자뿐이거나 구조체에 평문으로 없을 때의 대안이다.
+#  최대 HP 는 맞아도 안 변하므로 '줄어든 값' 검색으로는 절대 안 잡히지만,
+#  그 바로 옆에 현재 HP 가 있을 가능성이 아주 높다
+def scananchor(m, value):
+    hits = []
+    for kind in ('u16', 'u32'):
+        cands, single, gaps = mp.scanall(m, kind, value, None, quiet=(kind != 'u16'))
+        if cands:
+            say('  %s 로 %d군데' % (kind, len(cands)))
+            hits += [(a, kind) for a, v in cands]
+        if len(hits) >= MAX_HITS:
+            say('  ! %d곳에서 끊었다. 값이 너무 흔하다. 더 특이한 값으로' % MAX_HITS)
+            hits = hits[:MAX_HITS]
+            break
+    return hits
 
 
 #=====================================================================
@@ -215,6 +249,145 @@ def rank(cands):
 # 구조 덤프 : 눈으로 보고 직접 찾을 수 있게 json 으로 뽑는다
 #=====================================================================
 
+#cp949 로 읽히는 글자인지 본다. (ASCII 인쇄 가능) 또는 (완성형 2바이트)
+#  완성형 : 앞바이트 0x81~0xFE, 뒷바이트 0x41~0x5A / 0x61~0x7A / 0x81~0xFE
+def _textlen(raw, i):
+    b = raw[i]
+    if 0x20 <= b < 0x7F:
+        return 1
+    if 0x81 <= b <= 0xFE and i + 1 < len(raw):
+        c = raw[i + 1]
+        if (0x41 <= c <= 0x5A) or (0x61 <= c <= 0x7A) or (0x81 <= c <= 0xFE):
+            return 2
+    return 0
+
+
+#글자가 이어지는 구간을 찾는다. [(시작, 끝), ...]
+#  4바이트씩 쪼개 보면 문장이 조각나서 읽을 수가 없다. 이어 붙여야 눈에 들어온다
+def _textruns(raw, minlen=6):
+    runs = []
+    i = 0
+    while i < len(raw):
+        n = _textlen(raw, i)
+        if n == 0:
+            i += 1
+            continue
+        start = i
+        while i < len(raw):
+            n = _textlen(raw, i)
+            if n == 0:
+                break
+            i += n
+        if i - start >= minlen:
+            runs.append((start, i))
+    return runs
+
+
+#창 안을 '글자 덩어리' 와 '숫자 자리' 로 나눠서 돌려준다.
+#한 줄에 하나의 정보가 담기게 하는 것이 목적이다
+def segments(before, after, lo, base, runs):
+    inrun = [False] * len(before)
+    for a, b in runs:
+        for i in range(a, b):
+            inrun[i] = True
+
+    out = []
+    i   = 0
+    while i < len(before):
+        if inrun[i]:
+            j = i
+            while j < len(before) and inrun[j]:
+                j += 1
+            try:
+                txt = bytes(before[i:j]).decode('cp949', 'replace')
+            except Exception:
+                txt = ''
+            txt = ''.join(c if c.isprintable() else ' ' for c in txt)
+            out.append({'off': i - WIN, 'addr': '0x%X' % (lo + i),
+                        'rva': '0x%X' % (lo + i - base) if lo + i >= base else None,
+                        'kind': 'text', 'len': j - i, 'text': txt})
+            i = j
+            continue
+
+        #숫자 구간 : 4바이트 정렬 자리이고, 그 4바이트가 전부 숫자 구간일 때만 한 줄로 읽는다
+        a = lo + i
+        if a % 4 == 0 and i + 4 <= len(before) and not any(inrun[i:i + 4]):
+            row = {'off': i - WIN, 'addr': '0x%X' % a,
+                   'rva': '0x%X' % (a - base) if a >= base else None,
+                   'kind': 'num',
+                   'hex': ' '.join('%02X' % x for x in before[i:i + 4]),
+                   'u32': struct.unpack_from('<I', before, i)[0],
+                   'u16': [struct.unpack_from('<H', before, i)[0],
+                           struct.unpack_from('<H', before, i + 2)[0]]}
+            f = struct.unpack_from('<f', before, i)[0]
+            if f == f and abs(f) != float('inf') and 1e-6 < abs(f) < 1e9:
+                row['f32'] = f
+            if after != None:
+                ch = {}
+                for key, fmt, n in (('u32', '<I', 4), ('u16', '<H', 2)):
+                    o = struct.unpack_from(fmt, before, i)[0]
+                    v = struct.unpack_from(fmt, after, i)[0]
+                    if o != v:
+                        ch[key] = {'before': o, 'after': v, 'delta': v - o}
+                if ch:
+                    row['changed'] = ch
+            out.append(row)
+            i += 4
+            continue
+
+        #자투리 : 정렬 전이거나, 글자 구간 직전이거나, 끝부분.
+        #예전엔 4바이트씩 건너뛰다가 글자 구간 한가운데로 들어가 문장 앞머리를 삼켰고,
+        #정렬 안 맞는 바이트는 조용히 사라졌다. 바이트가 안 보이게 되는 일은 없어야 한다
+        j = i + 1
+        while j < len(before) and not inrun[j]:
+            aj = lo + j
+            if aj % 4 == 0 and j + 4 <= len(before) and not any(inrun[j:j + 4]):
+                break
+            j += 1
+        out.append({'off': i - WIN, 'addr': '0x%X' % a,
+                    'rva': '0x%X' % (a - base) if a >= base else None,
+                    'kind': 'pad', 'len': j - i,
+                    'hex': ' '.join('%02X' % x for x in before[i:j])})
+        i = j
+    return out
+
+
+#이 자리가 '살아 있는 구조체' 인지 '채팅/UI 글자 버퍼' 인지 가린다.
+#  글자 비율이 높으면 문장 안에 이름이 박힌 것이다 (채팅 광고 등)
+#  이름 앞뒤가 NUL 로 끊겨 있으면 구조체의 이름 칸일 가능성이 높다
+def classify(before, nameoff, namelen, runs):
+    textbytes = sum(b - a for a, b in runs)
+    ratio = textbytes * 1.0 / max(1, len(before))
+
+    def isbreak(i):
+        return i < 0 or i >= len(before) or before[i] < 0x20
+
+    standalone = isbreak(nameoff - 1) and isbreak(nameoff + namelen)
+
+    #이름을 품은 글자 구간의 길이. 이름보다 훨씬 길면 문장 안에 박힌 것이다
+    #(창 전체 글자 비율보다 이게 직접적인 신호다 - 주변이 0 으로 비어 있어도 판정된다)
+    host = 0
+    for a, b in runs:
+        if a <= nameoff < b:
+            host = b - a
+            break
+    embedded = host > namelen + 2
+
+    if embedded:
+        verdict = ('채팅/UI 글자 버퍼로 보임 - 이름이 %d바이트짜리 문장 안에 박혀 있다'
+                   % host)
+        score = 3
+    elif standalone and ratio < 0.5:
+        verdict = '구조체의 이름 칸으로 보임 (앞뒤가 끊겨 있고 글자 비율 %d%%)' % (ratio * 100)
+        score = 0
+    elif standalone:
+        verdict = '이름은 끊겨 있으나 주변이 글자투성이 (%d%%)' % (ratio * 100)
+        score = 1
+    else:
+        verdict = '판단 애매 (글자 %d%%)' % (ratio * 100)
+        score = 2
+    return score, verdict, round(ratio, 3), standalone
+
 #4바이트를 여러 방식으로 해석해 본다. 어떤 게 HP 인지는 사람이 보는 게 빠를 때가 많다
 def _row(before, after, off, lo, base):
     a = lo + off
@@ -258,22 +431,39 @@ def _row(before, after, off, lo, base):
 
 
 #이름이 잡힌 자리마다 주변을 통째로 떠서 json 으로 만든다
-def builddump(m, name, hits, snaps, withafter):
+def builddump(m, name, hits, snaps, withafter, full=False, anchor=None):
     out = {'name': name,
            'pid': m.pid,
            'module_base': '0x%X' % m.base,
            'window': WIN,
-           'note': ('off 는 이름이 시작하는 자리를 0 으로 본 상대 위치다. '
-                    'rva 를 mem.json 의 base 에 그대로 넣으면 된다. '
-                    'changed 가 있는 줄이 맞았을 때 변한 값이다'),
+           'how_to_read': [
+               'hits 는 구조체일 가능성이 높은 순서로 정렬돼 있다. verdict 를 먼저 본다',
+               '채팅/UI 글자 버퍼로 분류된 자리는 이름이 문장 안에 박힌 것이라 HP 가 없다',
+               'segments 가 읽기용이다. 글자는 한 덩어리로, 숫자는 4바이트 한 줄로 묶었다',
+               'off 는 이름이 시작하는 자리를 0 으로 본 상대 위치, rva 는 mem.json 의 base 에 넣을 값',
+               'changed 가 붙은 줄이 맞았을 때 변한 값이다. changed_summary 에 모아뒀다'],
            'hits': []}
 
-    enc_of = dict(hits)
-    for i, (addr, (lo, before)) in enumerate(sorted(snaps.items()), start=1):
+    enc_of  = dict(hits)
+    rows_all = []
+    for addr, (lo, before) in sorted(snaps.items()):
         after = mr.readmem(m.h, lo, len(before)) if withafter else None
-        rows  = []
-        for off in range(0, len(before) - 3, 4):
-            rows.append(_row(before, after, off, lo, m.base))
+        enc = enc_of.get(addr, 'cp949')
+        if anchor != None:
+            nlen = 2 if enc == 'u16' else 4
+        else:
+            try:
+                nlen = len(name.encode(enc))
+            except Exception:
+                nlen = len(name) * 2
+        runs = _textruns(before)
+        if anchor != None:
+            #앵커 모드는 글자 판정이 의미 없다. 변한 값이 많은 자리를 앞세운다
+            score, verdict, ratio, standalone = 0, ('기준값 %d 주변' % anchor), 0.0, True
+        else:
+            score, verdict, ratio, standalone = classify(before, addr - lo, nlen, runs)
+
+        segs = segments(before, after, lo, m.base, runs)
 
         dump = []
         for off in range(0, len(before), 16):
@@ -282,24 +472,38 @@ def builddump(m, name, hits, snaps, withafter):
             dump.append('0x%X  %-47s  %s'
                         % (lo + off, ' '.join('%02X' % b for b in chunk), txt))
 
-        out['hits'].append({
-            'index': i,
-            'name_addr': '0x%X' % addr,
-            'name_rva': '0x%X' % (addr - m.base) if addr >= m.base else None,
-            'encoding': enc_of.get(addr, ''),
-            'region_start': '0x%X' % lo,
-            'hexdump': dump,
-            'fields': rows})
+        h = {'index': 0,
+             'name_addr': '0x%X' % addr,
+             'name_rva': '0x%X' % (addr - m.base) if addr >= m.base else None,
+             'encoding': enc_of.get(addr, ''),
+             'verdict': verdict,
+             'standalone': standalone,
+             'text_ratio': ratio,
+             'changed_count': sum(1 for r in segs if 'changed' in r),
+             'segments': segs,
+             'hexdump': dump}
+        if full:
+            h['fields'] = [_row(before, after, off, lo, m.base)
+                           for off in range(0, len(before) - 3, 4)]
+        rows_all.append((score, -h['changed_count'], addr, h))
 
-    #바뀐 것만 따로 모아 맨 위에 둔다. 제일 먼저 볼 곳이다
+    #구조체로 보이는 것부터, 같은 등급이면 변한 값이 많은 것부터
+    rows_all.sort(key=lambda r: (r[0], r[1], r[2]))
+    for i, (score, nc, addr, h) in enumerate(rows_all, start=1):
+        h['index'] = i
+        out['hits'].append(h)
+
     changed = []
     for h in out['hits']:
-        for r in h['fields']:
+        for r in h['segments']:
             if 'changed' in r:
-                changed.append({'hit': h['index'], 'addr': r['addr'],
-                                'rva': r['rva'], 'off': r['off'],
-                                'changed': r['changed'], 'text': r['text']})
+                changed.append({'hit': h['index'], 'verdict': h['verdict'],
+                                'addr': r['addr'], 'rva': r['rva'], 'off': r['off'],
+                                'changed': r['changed']})
     out['changed_summary'] = changed
+    out['hit_summary'] = [{'index': h['index'], 'name_addr': h['name_addr'],
+                           'verdict': h['verdict'], 'changed': h['changed_count']}
+                          for h in out['hits']]
     return out
 
 
@@ -325,26 +529,32 @@ def run():
         say('mem.json 이 없다. 같은 폴더에 있어야 한다')
         return
 
-    name = arg('--name')
-    if not name:
-        say()
+    anchor = None
+    raw_anchor = arg('--anchor')
+    if raw_anchor != None:
         try:
-            name = input('캐릭터 이름을 입력하세요 : ').strip()
-        except Exception:
-            name = ''
-    if not name or len(name) < 2:
-        say('이름이 너무 짧다. 두 글자 이상이어야 찾을 수 있다')
-        return
-    say()
+            anchor = int(raw_anchor, 0)
+        except ValueError:
+            say('--anchor 는 숫자여야 한다 : ' + raw_anchor)
+            return
 
-    global WIN, MAX_DUMP
-    try:
-        WIN = max(32, min(4096, int(arg('--win', WIN))))
-        MAX_DUMP = max(1, int(arg('--max', MAX_DUMP)))
-    except ValueError:
-        say('--win / --max 는 숫자여야 한다')
-        return
-    outpath = arg('--out', os.path.join(mr.appdir(), DUMP_NAME))
+    name = arg('--name')
+    if anchor == None:
+        if not name:
+            say()
+            try:
+                name = input('캐릭터 이름을 입력하세요 (또는 --anchor 최대HP) : ').strip()
+            except Exception:
+                name = ''
+        if not name or len(name) < 2:
+            say('이름이 너무 짧다. 두 글자 이상이어야 찾을 수 있다')
+            return
+        if len(name.encode('cp949', 'ignore')) <= 4:
+            say('! 이름이 %d글자뿐이다. 채팅 문장 곳곳에 걸릴 수 있어 이름+NUL 로 먼저 찾는다' % len(name))
+            say('  그래도 안 되면 최대 HP 를 기준으로 : python findme.py --anchor <최대HP>')
+    else:
+        name = str(anchor)
+    say()
 
     hf.KEY_NEXT = arg('--key', hf.KEY_NEXT)
     hf.KEY_QUIT = arg('--quit', hf.KEY_QUIT)
@@ -365,26 +575,49 @@ def run():
     say()
 
     try:
-        #--- 1. 이름 찾기 ---
+        #--- 1. 기준점 찾기 (이름 또는 최대HP 값) ---
         line()
-        say(" 1단계 : 메모리에서 '" + name + "' 을 찾는다")
+        if anchor != None:
+            say(' 1단계 : 메모리에서 값 %d (최대 HP) 를 찾는다' % anchor)
+        else:
+            say(" 1단계 : 메모리에서 '" + name + "' 을 찾는다")
         line()
         say()
-        hits = scanname(m, name)
+        if anchor != None:
+            hits = scananchor(m, anchor)
+            nul  = False
+        else:
+            hits, nul = scanname(m, name)
         if not hits:
             say()
-            say('이름을 못 찾았다. 가능한 이유 :')
-            say('  - 이름을 잘못 적었다 (게임에 보이는 것과 똑같이, 띄어쓰기까지)')
-            say('  - 이 클라이언트는 이름을 다른 방식으로 저장한다')
-            say('  - 캐릭터 선택 화면이라 아직 안 들어갔다 (게임에 접속한 상태여야 한다)')
+            if anchor != None:
+                say('값 %d 를 못 찾았다. 최대 HP 숫자가 맞는지 확인한다' % anchor)
+            else:
+                say('이름을 못 찾았다. 가능한 이유 :')
+                say('  - 이름을 잘못 적었다 (게임에 보이는 것과 똑같이, 띄어쓰기까지)')
+                say('  - 이 클라이언트는 이름을 다른 방식으로 저장한다')
+                say('  - 캐릭터 선택 화면이라 아직 안 들어갔다 (게임에 접속한 상태여야 한다)')
+                say('  -> 최대 HP 를 기준으로 : python findme.py --anchor <최대HP>')
             return
         say()
-        say('찾음 : %d군데' % len(hits))
+        say('찾음 : %d군데%s' % (len(hits), '  (이름+NUL 로 걸러짐)' if nul else ''))
         enc_count = {}
         for a, e in hits:
             enc_count[e] = enc_count.get(e, 0) + 1
         for e, c in enc_count.items():
             say('    %-12s %d군데' % (e, c))
+
+        #어느 영역에 있는지 - 모듈 정적 데이터 vs 힙. 살아 있는 구조체는 보통 힙에 있다
+        modend = m.base
+        try:
+            for mn, mb, ms in mr.modules(m.pid):
+                if mb == m.base:
+                    modend = mb + ms
+                    break
+        except Exception:
+            pass
+        inmod = sum(1 for a, e in hits if m.base <= a < modend)
+        say('    모듈 정적 영역 %d군데 / 그 밖(힙 등) %d군데' % (inmod, len(hits) - inmod))
         say()
 
         #--- 2. 주변 기록 ---
@@ -408,10 +641,39 @@ def run():
 
         #--- 덤프는 무슨 일이 있어도 남긴다 ---
         #자동 판정이 실패했을 때가 바로 눈으로 봐야 하는 순간이다
-        keep = dict(list(sorted(snaps.items()))[:MAX_DUMP])
-        if len(snaps) > MAX_DUMP:
-            say('덤프는 앞 %d곳만 담는다 (--max 로 변경)' % MAX_DUMP)
-        data = builddump(m, name, hits, keep, withafter)
+        #덤프에 담을 자리를 고른다. 주소순으로 자르면 안 된다 -
+        #모듈 정적 영역(채팅 로그)이 주소가 낮아서 힙의 진짜 구조체가 통째로 잘린 적이 있다.
+        #먼저 전부 분류한 뒤 구조체로 보이는 것부터 담고, 채팅 버퍼는 기본으로 뺀다
+        enc_of = dict(hits)
+        graded = []
+        chat   = 0
+        for addr, (lo, before) in snaps.items():
+            if anchor != None:
+                graded.append((0, addr))
+                continue
+            try:
+                nlen = len(name.encode(enc_of.get(addr, 'cp949')))
+            except Exception:
+                nlen = len(name) * 2
+            runs = _textruns(before)
+            score, verdict, ratio, standalone = classify(before, addr - lo, nlen, runs)
+            if score >= 3 and '--keep-chat' not in sys.argv:
+                chat += 1
+                continue
+            graded.append((score, addr))
+        graded.sort()
+        keep = dict((a, snaps[a]) for sc, a in graded[:MAX_DUMP])
+        if chat:
+            say('채팅/UI 글자 버퍼로 보이는 %d곳은 덤프에서 뺐다 (--keep-chat 으로 포함)' % chat)
+        if len(graded) > MAX_DUMP:
+            say('구조체로 보이는 순으로 %d곳만 담는다 (--max 로 변경, 전체 %d곳)'
+                % (MAX_DUMP, len(graded)))
+        if not keep and snaps:
+            #전부 채팅이면 그래도 몇 개는 남겨서 볼 수 있게 한다
+            keep = dict(list(sorted(snaps.items()))[:min(5, len(snaps))])
+            say('남은 자리가 없어 채팅 자리 %d곳을 참고용으로 담는다' % len(keep))
+        data = builddump(m, name, hits, keep, withafter,
+                         full='--full' in sys.argv, anchor=anchor)
         if savedump(data, outpath):
             line()
             say(' 구조 덤프 저장 : ' + outpath)
@@ -421,20 +683,26 @@ def run():
             say('  바뀐 값 %d개 - json 의 changed_summary 를 먼저 보세요'
                 % len(data['changed_summary']))
             say()
+            say('  자리별 판정 (구조체일 가능성 높은 순) :')
+            for hs in data['hit_summary'][:12]:
+                say('    %2d. %-12s 변한값 %2d  %s'
+                    % (hs['index'], hs['name_addr'], hs['changed'], hs['verdict']))
+            if len(data['hit_summary']) > 12:
+                say('    ... (전체 %d곳)' % len(data['hit_summary']))
+            say()
             say('  보는 법 :')
-            say('    off     이름이 시작하는 자리를 0 으로 본 상대 위치')
-            say('    rva     mem.json 의 base 에 그대로 넣을 값')
-            say('    u32/u16/f32  그 자리를 각 타입으로 읽은 값')
-            say('    text    그 자리부터 16바이트를 글자로 (옆 이름/혈맹명 찾기)')
-            say('    changed 맞았을 때 변한 값 - 여기에 HP 가 있을 가능성이 높다')
-            say('    hexdump 사람이 읽기 좋은 16진 덤프')
+            say('    hit_summary      자리별 판정. 채팅 버퍼로 분류된 건 건너뛴다')
+            say('    segments         읽기용. 글자는 한 덩어리, 숫자는 4바이트 한 줄')
+            say('    off / rva        이름 기준 상대 위치 / mem.json 의 base 에 넣을 값')
+            say('    changed          맞았을 때 변한 값 (changed_summary 에 모아둠)')
+            say('    --full 을 주면 4바이트마다 전부 해석한 fields 도 넣는다')
             say()
             if data['changed_summary']:
                 say('  바뀐 값 미리보기 :')
                 for c in data['changed_summary'][:10]:
                     for k, v in c['changed'].items():
-                        say('    %s  off %+5d  %-3s %d -> %d (%+d)'
-                            % (c['addr'], c['off'], k,
+                        say('    [%d번 자리] %s  off %+5d  %-3s %d -> %d (%+d)'
+                            % (c['hit'], c['addr'], c['off'], k,
                                v['before'], v['after'], v['delta']))
                 say()
 
@@ -442,6 +710,13 @@ def run():
             return
 
         cands = rank(diffs(m, snaps, hits))
+        if anchor != None:
+            #현재 HP 는 최대 HP 를 넘을 수 없다. 기준점 바로 옆(±64) 에 있어야 한다
+            cands = [c for c in cands if c['old'] <= anchor and abs(c['dist']) <= 64]
+            for c in cands:
+                if c['maxaddr'] == None:
+                    c['maxaddr'], c['maxval'], c['maxdist'] = c['name_at'], anchor, abs(c['dist'])
+            cands = rank(cands)
         if not cands:
             say('HP 로 보이는 감소값을 자동으로는 못 찾았다.')
             say('위 덤프의 changed_summary 를 직접 보세요.')
