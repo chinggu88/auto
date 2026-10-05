@@ -4,7 +4,8 @@ REM ====================================================================
 REM  Build pit.py (memory-based macro) into exe files. Windows only.
 REM
 REM    dist\pit_auto.exe   hunting macro (GUI)
-REM    dist\hpfind.exe     EASIEST: finds HP and writes mem.json (console)
+REM    dist\findme.exe     BEST: finds HP via character name (console)
+REM    dist\hpfind.exe     alternative: finds HP by repeated damage (console)
 REM    dist\memprobe.exe   memory probe / value search / watch (console)
 REM    dist\memcalib.exe   world-to-screen calibration (console)
 REM
@@ -47,6 +48,12 @@ pyinstaller --noconfirm --clean ^
     --console ^
     --name hpfind ^
     hpfind.py
+if errorlevel 1 goto fail
+pyinstaller --noconfirm --clean ^
+    --onefile ^
+    --console ^
+    --name findme ^
+    findme.py
 if errorlevel 1 goto fail
 
 pyinstaller --noconfirm --clean ^
