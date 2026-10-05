@@ -556,6 +556,16 @@ def run():
         name = str(anchor)
     say()
 
+    #--win / --max / --out  (이 블록을 패치 중에 실수로 지워서 outpath 가 없어진 적이 있다)
+    global WIN, MAX_DUMP
+    try:
+        WIN = max(32, min(4096, int(arg('--win', WIN))))
+        MAX_DUMP = max(1, int(arg('--max', MAX_DUMP)))
+    except ValueError:
+        say('--win / --max 는 숫자여야 한다')
+        return
+    outpath = arg('--out', os.path.join(mr.appdir(), DUMP_NAME))
+
     hf.KEY_NEXT = arg('--key', hf.KEY_NEXT)
     hf.KEY_QUIT = arg('--quit', hf.KEY_QUIT)
     if not hf.checkkeys():
