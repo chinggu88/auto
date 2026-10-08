@@ -151,6 +151,17 @@ def checkrbuff10():
         time.sleep(1)
         gu.press('f9', presses=1)
     threading.Timer(600, checkrbuff10).start()
+#채팅 버프 (.버프)
+def checkrbuffchat():
+    global isattack
+    if isattack:
+        gu.press('enter', presses=1)
+        time.sleep(0.3)
+        k.write('.버프', delay=0.05)
+        time.sleep(0.3)
+        gu.press('enter', presses=1)
+    threading.Timer(1200, checkrbuffchat).start()
+
 #마크 확인
 def checkrMark():
     global isattack
@@ -199,6 +210,7 @@ if __name__ == '__main__':
     transform()
     checkrbuff20()
     checkrbuff10()
+    checkrbuffchat()
     checkrHp()
     die()
     attack1(centerpoint, 3, attackinfo)

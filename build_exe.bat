@@ -6,7 +6,7 @@ REM  결과물 : dist\lin_auto.exe
 REM ====================================================================
 
 echo [1/3] 필요한 패키지 설치
-pip install pyinstaller pyautogui pywin32 keyboard pillow opencv-python PyAudioWPatch
+pip install --user pyinstaller pyautogui pywin32 keyboard pillow opencv-python PyAudioWPatch
 if errorlevel 1 goto fail
 
 echo.
@@ -14,7 +14,7 @@ echo [2/3] exe 빌드
 REM --onefile   : exe 하나로 묶기
 REM --windowed  : 콘솔 창 안 띄우기 (GUI 만)
 REM --add-data  : image 폴더를 exe 안에 넣기 (exe 옆에 image\ 가 있으면 그쪽이 우선)
-pyinstaller --noconfirm --clean ^
+python -m PyInstaller --noconfirm --clean ^
     --onefile ^
     --windowed ^
     --name lin_auto ^
