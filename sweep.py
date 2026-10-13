@@ -64,11 +64,24 @@ def scan_all():
     return pts
 
 
+def _safemove(x, y):
+    """마우스 이동. SetCursorPos 가 실패하면(화면 밖 좌표, 입력 차단 등)
+    pyautogui 방식(mouse_event)으로 폴백한다."""
+    sw, sh = gu.size()
+    x = max(0, min(sw - 1, int(x)))
+    y = max(0, min(sh - 1, int(y)))
+    try:
+        main._movefast(x, y)
+    except Exception as e:
+        main.log('SetCursorPos 실패(%d,%d) : %s -> pyautogui 로 폴백' % (x, y, e))
+        gu.moveTo(x, y)
+
+
 def hit(x, y):
     """한 위치 공격 : F5 누르고 Ctrl+좌클릭."""
     gu.press('f5', presses=1)
     time.sleep(HIT_GAP)
-    main._movefast(x, y)
+    _safemove(x, y)
     gu.keyDown('ctrl')
     time.sleep(main.CTRL_DELAY)
     gu.click()
