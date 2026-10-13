@@ -2,7 +2,7 @@
 #
 # main.py 변형 버전. 이것만 한다:
 #   1. 화면 전체에서 이미지 1개를 전수 스캔해서 매칭된 위치를 전부 찾는다
-#   2. 각 위치마다 F5를 누르고 Ctrl+좌클릭을 한다 (순차 반복)
+#   2. 각 위치에서 10px 아래로 이동한 뒤 마우스 휠(중간) 클릭을 한다 (순차 반복)
 #   3. 0.5초 쉬고 다시 돈다
 #
 # main.py 와 같은 폴더에 넣고 실행 :  python sweep.py
@@ -22,7 +22,8 @@ from main import gu
 TARGET_IMG = 'target.png'   # image\ 폴더에 넣어둔 찾을 이미지 1장
 CONF       = 0.8            # 매칭 신뢰도(0~1). 너무 많이 잡히면 올리고, 못 찾으면 내린다
 REPEAT_SEC = 0.5            # 한 바퀴 돌고 쉬는 시간(초)
-HIT_GAP    = 0.15           # F5 누른 뒤 Ctrl+클릭까지 대기(초)
+CLICK_DY   = 10             # 매칭 위치에서 아래로 내린 지점을 클릭(px)
+SETTLE_SEC = 0.1            # 이동 후 클릭까지 대기(초)
 STOP_KEY   = 'esc'          # 이 키를 누르면 종료
 #=====================================================================
 
@@ -78,15 +79,12 @@ def _safemove(x, y):
 
 
 def hit(x, y):
-    """한 위치 공격 : F5 누르고 Ctrl+좌클릭."""
-    gu.press('f5', presses=1)
-    time.sleep(HIT_GAP)
-    _safemove(x, y)
-    gu.keyDown('ctrl')
-    time.sleep(main.CTRL_DELAY)
-    gu.click()
-    gu.keyUp('ctrl')
-    main.log('타격 : %d,%d  (F5 + Ctrl+클릭)' % (x, y))
+    """한 위치 공격 : 매칭 위치에서 CLICK_DY 만큼 아래로 이동 후 휠(중간) 클릭."""
+    tx, ty = x, y + CLICK_DY
+    _safemove(tx, ty)
+    time.sleep(SETTLE_SEC)
+    gu.middleClick()
+    main.log('타격 : %d,%d  (휠클릭)' % (tx, ty))
 
 
 def repeat():
