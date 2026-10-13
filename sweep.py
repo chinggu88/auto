@@ -78,6 +78,11 @@ def hit(x, y):
 
 def repeat():
     """0.5초 간격 반복 : 전체 스캔 -> 각 위치마다 F5 + Ctrl+클릭 순차 반복."""
+    imgpath = os.path.join(main.IMAGE_DIR, TARGET_IMG)
+    if not os.path.isfile(imgpath):
+        main.log('이미지 파일을 못 찾음 : ' + imgpath)
+        main.log('image 폴더에 찾을 그림 1장을 넣고, 파일명을 TARGET_IMG 와 맞추세요 (지금 설정: ' + TARGET_IMG + ')')
+        return
     main.log('sweep 시작 : %s  (신뢰도 %.2f, %s초 간격, %s=종료)'
              % (TARGET_IMG, CONF, REPEAT_SEC, STOP_KEY.upper()))
     n = 0
