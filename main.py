@@ -139,6 +139,7 @@ MARK_SELF_OFFSETS = [
     [0, -151],   #(720, 389) 머리 위. turn.py 값
 ]
 MARK_SELF_RADIUS = 90          #이 거리(px) 안이면 내 마크로 본다. 0 이면 예외처리 끔
+MARK_BOTTOM_CUT = 0.88         #화면 높이의 이 비율 아래쪽은 마크 탐지 제외 (하단 HP바/채팅 UI 오탐 방지). 1.0 이면 끔
 
 #=====================================================================
 # 소리 감지 : 스피커로 나가는 소리를 루프백으로 받아 '내가 칼질 중'인지만 본다
@@ -741,6 +742,13 @@ def isselfmark(x, y):
             return True
     return False
 
+#하단 UI 영역인지. HP바/채팅창이 있는 맨 아래쪽에서 잡힌 매칭은 UI 오탐이므로 버린다
+#h 는 화면 높이(px). MARK_BOTTOM_CUT=0.88 이면 아래쪽 12% 는 안 본다
+def isbottomui(x, y, h):
+    if MARK_BOTTOM_CUT >= 1.0:
+        return False
+    return y > h * MARK_BOTTOM_CUT
+
 #마크 템플릿 캐시 : 경로 -> (그림 float32, 마스크 float32, 마스크 픽셀수)
 #혈맹문장 BMP 는 검정이 게임에서 투명으로 렌더링된다. 그 검정까지 비교하면
 #'어두운 네모' 를 찾는 꼴이라 배경에서 오탐이 쏟아진다. 그래서 검정을 마스크로 빼고 본다
@@ -817,11 +825,13 @@ def findmark(hay, path, conf):
         score = 1.0 - numpy.sqrt(numpy.clip(res, 0, None) / (cnt * 3.0)) / 255.0
 
         ys, xs = numpy.where(score >= conf)
-        #잘 맞는 것부터 본다. 내 마크 자리면 건너뛰고 다음 후보로
+        #잘 맞는 것부터 본다. 내 마크 자리나 하단 UI 면 건너뛰고 다음 후보로
         for i in numpy.argsort(-score[ys, xs]):
             x = int(xs[i]) + w // 2
             y = int(ys[i]) + h // 2
             if isselfmark(x, y):
+                continue
+            if isbottomui(x, y, hay.shape[0]):
                 continue
             sc = float(score[ys[i], xs[i]])
             if best is None or sc > best[0]:
@@ -833,10 +843,13 @@ def findmark(hay, path, conf):
 
 #cv2/numpy 가 없을 때 쓰는 예전 방식. 검정 배경까지 그대로 비교한다
 def _findmark_old(path, conf):
+    sw, sh = gu.size()
     for box in gu.locateAllOnScreen(path, confidence=conf):
         x = box.left + box.width  // 2
         y = box.top  + box.height // 2
         if isselfmark(x, y):
+            continue
+        if isbottomui(x, y, sh):
             continue
         return (x, y)
     return None
