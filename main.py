@@ -113,14 +113,14 @@ START_DELAY = 3    #시작 버튼 누르고 게임 창 활성화할 시간(초)
 
 HP_IMG    = 'checkhp.PNG'   #피 부족 경고 UI. 이게 '뜨면' 귀환한다
 HP_CONF   = 0.9
-MARK_GLOB = 'mark*.PNG'    #적대 혈맹 마크. image 폴더의 png 만 긁어온다 (bmp 는 안 본다)
-                           #게임 화면에서 직접 캡처한 그림을 쓴다
+MARK_GLOB = 'mark*.PNG'    #적대 혈맹 마크. png(화면 캡처)와 bmp(혈맹문장 원본)를 긁어온다
+                           #같은 번호가 둘 다 있으면 bmp(원본)를 우선한다
+                           #bmp 는 검정이 게임에서 투명으로 렌더링되므로 마스크 매칭(1번 방법)을 쓴다
 MARK_CONF = 0.7            #마크 신뢰도. 진짜 마크를 놓치면 더 내려볼 것
                            #파일마다 따로 주고 싶으면 MARK_CONF_BY_FILE 에 적는다
-MARK_CONF_BY_FILE = {}     #예) {'mark3.PNG': 0.8} 처럼 파일명만 적으면 그 값이 우선
-MARK_BG_TOL = 0            #검정 배경을 투명으로 보고 매칭에서 뺄 때의 기준값
-                           #화면 캡처는 배경이 투명이 아니므로 0(끔) 으로 둔다
-                           #혈맹문장 원본 BMP 를 쓸 때만 25 정도로 켜면 된다
+MARK_CONF_BY_FILE = {}     #예) {'mark3.bmp': 0.8} 처럼 파일명만 적으면 그 값이 우선
+MARK_BG_TOL = 25           #검정 배경을 투명으로 보고 매칭에서 뺄 때의 기준값 (1번 방법)
+                           #bmp 원본에만 적용한다. png 화면 캡처는 배경이 진짜라 마스크를 안 쓴다
 MARK_MAX  = 3              #mark1 ~ mark(이 번호) 까지만 본다. 0 이면 폴더에 있는 걸 전부
                            #번호가 없거나 범위를 넘는 파일(mark4.bmp 등)은 폴더에 있어도 건너뛴다
 
@@ -668,9 +668,10 @@ class FightGate:
                 self.event  = 'forced'
         return self.fight
 
-#image 폴더에 들어있는 마크 이미지(png)를 긁어온다
+#image 폴더에 들어있는 마크 이미지(png/bmp)를 긁어온다
 #  - MARK_MAX 까지만 본다. mark4.PNG 를 폴더에 둬도 MARK_MAX 가 3 이면 안 본다
-#  - 같은 이름의 bmp 가 옆에 있어도 무시한다. png 만 본다
+#  - 같은 번호의 png 와 bmp 가 둘 다 있으면 bmp(원본)를 우선한다
+#  - 번호가 없는 bmp(예: 5149.bmp)도 마크 후보에 넣는다. 번호 있는 것들 뒤에 붙는다
 #  - 번호 순으로 정렬해서 mark1, mark2 ... 순서로 본다 (mark10 이 mark2 앞에 오지 않게)
 #  - 한 번 읽고 캐시한다. 사냥 중에 폴더를 뒤지지 않기 위함
 MARK_FILES = None
@@ -689,8 +690,12 @@ def markfiles():
     if MARK_FILES != None:
         return MARK_FILES
 
-    found = glob.glob(IMAGE_DIR + MARK_GLOB) + glob.glob(IMAGE_DIR + 'mark*.png')
-    #윈도우 glob 은 대소문자를 안 가려서 같은 파일이 두 번 잡힌다. 파일명 기준으로 중복 제거
+    #png(화면 캡처)와 bmp(혈맹문장 원본)를 둘 다 긁어온다
+    found = []
+    for pat in (MARK_GLOB, 'mark*.png', 'mark*.bmp'):
+        found += glob.glob(IMAGE_DIR + pat)
+    #윈도우 glob 은 대소문자를 안 가려서 같은 파일이 두 번 잡힌다. 번호 기준으로 중복 제거
+    #같은 번호가 png/bmp 둘 다 있으면 bmp(원본+마스크)를 우선한다
     seen = {}
     for path in found:
         name = os.path.basename(path)
@@ -699,8 +704,19 @@ def markfiles():
             continue
         if MARK_MAX > 0 and num > MARK_MAX:   #MARK_MAX 를 넘는 번호는 안 본다
             continue
+        if num in seen and not name.lower().endswith('.bmp'):
+            continue                          #이미 bmp 가 잡혀 있으면 png 는 버린다
         seen[num] = path
     MARK_FILES = [seen[num] for num in sorted(seen.keys())]
+
+    #번호가 없는 bmp(예: 5149.bmp)도 마크 후보에 넣는다. 번호 있는 것들 뒤에 붙인다
+    for path in sorted(glob.glob(IMAGE_DIR + '*.bmp')):
+        name = os.path.basename(path)
+        if marknum(name.lower()) != None:
+            continue                          #번호 있는 건 위에서 처리됨
+        if name.lower() in [os.path.basename(p).lower() for p in MARK_FILES]:
+            continue
+        MARK_FILES.append(path)
 
     limit = ('mark1~' + str(MARK_MAX)) if MARK_MAX > 0 else '전부'
     if len(MARK_FILES) == 0:
@@ -759,8 +775,10 @@ def screengrab():
 #마크 하나를 화면에서 찾는다. 내 캐릭터 자리에 뜬 건 건너뛰고,
 #그 밖에서 잡힌 가장 잘 맞는 매칭의 중심 (x, y) 를 돌려준다. 없으면 None
 def findmark(hay, path, conf):
-    #마스크를 끄면(화면 캡처를 쓸 때) 예전 방식이 더 낫다. 밝기 변화에 덜 흔들린다
-    if MARK_BG_TOL <= 0 or not MASK_OK or hay is None:
+    #bmp 원본에만 마스크를 쓴다 (1번 방법). 검정이 게임에서 투명으로 렌더링되기 때문
+    #png 화면 캡처는 배경이 진짜라서 마스크를 끄면 예전 방식이 더 낫다. 밝기 변화에 덜 흔들린다
+    use_mask = path.lower().endswith('.bmp') and MARK_BG_TOL > 0 and MASK_OK and hay is not None
+    if not use_mask:
         return _findmark_old(path, conf)
 
     needle, mask, cnt = _marktpl(path)
@@ -822,7 +840,9 @@ def _checkrHp():
     #   하나라도 걸리면 나머지는 볼 필요가 없으므로 바로 귀환
     marks = markfiles()
     #마스크를 쓸 때만 화면을 한 장 찍어 돌려쓴다. 예전 방식은 자기가 알아서 찍는다
-    hay   = screengrab() if (MARK_BG_TOL > 0 and MASK_OK and len(marks) > 0) else None
+    need_hay = (MARK_BG_TOL > 0 and MASK_OK
+                and any(m.lower().endswith('.bmp') for m in marks))
+    hay   = screengrab() if (need_hay and len(marks) > 0) else None
     for markpath in marks:
         markname = os.path.basename(markpath)
         markconf = MARK_CONF_BY_FILE.get(markname, MARK_CONF)
