@@ -210,18 +210,18 @@ FKEYS = ['f5', 'f6', 'f7', 'f8', 'f9', 'f10', 'f11', 'f12']
 #기본 셋팅 : config.json 이 없을 때 이 값으로 시작한다
 DEFAULT_SECONDS = {
     'f5':     0,   #새로고침 - 주기 없음
-    'f6':  1800,
+    'f6':  4,
     'f7':  1800,
     'f8':     0,
-    'f9':     0,
-    'f10':  600,
+    'f9':     5,
+    'f10':  1830,
     'f11': 1800,   #변신 주기
-    'f12':    0,   #귀환 - 주기 없음
+    'f12':    1800,   #귀환 - 주기 없음
 }
 DEFAULT_ROLES = {
-    'return':    'f12',
+    'return':    'f8',
     'refresh':   'f5',
-    'transform': 'f11',
+    'transform': 'f7',
     'skill':     'f6',    #공격스킬 - 공격 중에만 쿨타임이 돌고, 대상을 치고 나서 누른다
 }
 ROLE_IDS = ['return', 'refresh', 'transform', 'skill']   #config.json 에 저장하는 역할 목록
