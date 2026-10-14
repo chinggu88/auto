@@ -1073,6 +1073,61 @@ def watch(names, sec, pid):
 # 객체 목록 덤프
 #=====================================================================
 
+#=====================================================================
+# 영역별 메모리 덤프 : 베이스마다 하나씩 JSON 으로 저장
+#   python memprobe.py --pid <PID> --dump [--maxmb 16]
+#   파일 : memdump_<PID>/memdump_<BASEHEX>.json  (+ _index.json)
+#   16MB 넘는 영역은 건너뛴다 (--maxmb 로 조절)
+#=====================================================================
+def dodump(pid, maxmb=16):
+    h, ec = mr.openproc(pid)
+    if h == None:
+        say('OpenProcess 실패 (에러 ' + str(ec) + ')')
+        return
+    try:
+        regs = mr.regions(h, writable=False)
+        say('덤프 대상 영역 : ' + str(len(regs)) + '개')
+        maxsize = int(maxmb) * 1024 * 1024
+        outdir = os.path.join(mr.appdir(), 'memdump_%d' % int(pid))
+        try:
+            os.makedirs(outdir)
+        except Exception:
+            pass
+        index = []
+        for i, (base, size) in enumerate(regs):
+            say('  [%d/%d] 0x%X (%d bytes)' % (i + 1, len(regs), base, size))
+            if size > maxsize:
+                say('    건너뜀 : %dMB 초과' % maxmb)
+                index.append({'base_hex': '0x%X' % base, 'size': size,
+                              'file': None, 'skip': 'too big'})
+                continue
+            chunks = []
+            for _cbase, craw in mr.readchunks(h, base, size):
+                chunks.append(craw)
+            raw = b''.join(chunks)
+            if len(raw) != size:
+                say('    부분 읽기 : %d/%d bytes' % (len(raw), size))
+            info = {'pid': int(pid), 'base': base, 'base_hex': '0x%X' % base,
+                    'size': size, 'read': len(raw),
+                    'saved_at': datetime.datetime.now().isoformat(timespec='seconds'),
+                    'hex': raw.hex()}
+            fname = 'memdump_%X.json' % base
+            try:
+                with open(os.path.join(outdir, fname), 'w', encoding='utf-8') as f:
+                    json.dump(info, f, ensure_ascii=False)
+                index.append({'base_hex': '0x%X' % base, 'size': size,
+                              'file': fname, 'skip': None})
+            except Exception as e:
+                say('    저장 실패 : ' + str(e))
+                index.append({'base_hex': '0x%X' % base, 'size': size,
+                              'file': None, 'skip': str(e)})
+        with open(os.path.join(outdir, '_index.json'), 'w', encoding='utf-8') as f:
+            json.dump(index, f, ensure_ascii=False, indent=2)
+        say('완료 : ' + outdir + '  (목록: _index.json)')
+    finally:
+        mr.closeproc(h)
+
+
 def dumpobjs(limit, pid):
     m = mr.Mem(MEM_PATH, say)
     if not m.attach(pid):
@@ -1180,6 +1235,14 @@ def main():
         except ValueError:
             limit = 20
         dumpobjs(limit, pid)
+        return
+
+    if has('--dump'):
+        try:
+            maxmb = int(arg('--maxmb', '16'))
+        except ValueError:
+            maxmb = 16
+        dodump(pid, maxmb)
         return
 
     #--- 진단 ---
