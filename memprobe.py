@@ -45,6 +45,8 @@
 #
 #판정 : OpenProcess 가 실패하거나 베이스 읽기가 막히면 메모리 방식은 쓸 수 없다.
 #       그 경우 main.py 의 이미지 방식을 계속 쓰는 게 맞다
+import datetime
+import json
 import os
 import sys
 import time
@@ -54,6 +56,19 @@ import memread as mr
 #exe 로 묶었을 때도 exe 옆의 mem.json 을 찾도록 memread 의 경로 처리를 쓴다
 MEM_PATH, MEM_FOUND, MEM_TRIED = mr.findfile('mem.json')
 SCAN_PATH = os.path.join(mr.appdir(), 'scan.dat')
+
+
+#diag() 가 모은 정보를 JSON 으로 저장한다. 파일명 : memdiag_<PID>.json
+def _savejson(pid, info):
+    info['saved_at'] = datetime.datetime.now().isoformat(timespec='seconds')
+    path = os.path.join(mr.appdir(), 'memdiag_%d.json' % int(pid))
+    try:
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(info, f, ensure_ascii=False, indent=2)
+        say('JSON 저장 : ' + path)
+    except Exception as e:
+        say('JSON 저장 실패 : ' + str(e))
+    return path
 
 
 #지금 어느 mem.json 을 쓰는지 항상 보여준다.
@@ -205,6 +220,7 @@ def aslr(h, base):
 #=====================================================================
 
 def diag(pid, name, modname):
+    info = {'pid': int(pid), 'name': str(name), 'module_want': modname}
     say('=' * 66)
     say('진단 대상 : ' + str(name) + '  (PID ' + str(pid) + ')')
     say('=' * 66)
@@ -212,6 +228,7 @@ def diag(pid, name, modname):
 
     #--- 1. 안티치트 모듈 ---
     g = mr.guards(pid)
+    info['guards'] = list(g)
     if len(g) > 0:
         say('[안티치트] 의심 모듈 발견 : ' + ', '.join(g))
         say('           메모리 읽기가 막힐 가능성이 높다. 아래 OpenProcess 결과를 본다')
@@ -222,6 +239,9 @@ def diag(pid, name, modname):
     #--- 2. OpenProcess : 이게 핵심 판정 ---
     h, ec = mr.openproc(pid)
     if h == None:
+        info['handle'] = {'ok': False, 'error': int(ec) if ec != None else None}
+        info['verdict'] = '메모리 방식 불가 (OpenProcess 실패)'
+        _savejson(pid, info)
         say('[핸들] OpenProcess 실패 (에러 ' + str(ec) + ')')
         say()
         say('  에러 5   = 접근 거부. 이 스크립트를 관리자 권한으로 다시 돌려본다')
@@ -230,12 +250,18 @@ def diag(pid, name, modname):
         say()
         say('판정 : 메모리 방식 불가. main.py 의 이미지 방식을 계속 쓰는 게 맞다')
         return False
+    info['handle'] = {'ok': True}
     say('[핸들] OpenProcess 성공 (읽기 권한)')
 
     try:
         #--- 3. 비트수 ---
         small, why = mr.is32(h)
         pybits = 64 if sys.maxsize > 2 ** 32 else 32
+        info['target_bits'] = None if small == None else (32 if small else 64)
+        info['target_bits_why'] = why
+        info['python_bits'] = pybits
+        info['bits_match'] = None if small == None else not (
+            (small and pybits != 32) or ((not small) and pybits != 64))
         if small == None:
             say('[비트수] 판정 실패 : ' + why)
         else:
@@ -247,6 +273,8 @@ def diag(pid, name, modname):
 
         #--- 4. 모듈 ---
         mods = mr.modules(pid)
+        info['modules'] = [{'name': mname, 'base': base, 'base_hex': '0x%X' % base,
+                            'size': size} for mname, base, size in mods]
         say('[모듈] ' + str(len(mods)) + '개')
         anchor = None
         for mname, base, size in mods:
@@ -270,12 +298,19 @@ def diag(pid, name, modname):
             say('[읽기] 기준 모듈이 없어 못 해봄')
             say()
             say('판정 : 모듈 목록을 못 읽었다. 비트수 불일치인지 확인한다')
+            info['verdict'] = '메모리 방식 불가 (기준 모듈 없음)'
+            _savejson(pid, info)
             return False
+        info['anchor'] = {'name': anchor[0], 'base': anchor[1],
+                          'base_hex': '0x%X' % anchor[1], 'size': anchor[2]}
 
         #--- 5. 실제 읽기 : 핸들이 열려도 읽기가 막히는 경우를 걸러낸다 ---
         mname, base, size = anchor
         raw = mr.readmem(h, base, 64)
         if raw == None:
+            info['read_test'] = {'ok': False, 'base_hex': '0x%X' % base}
+            info['verdict'] = '메모리 방식 불가 (ReadProcessMemory 실패)'
+            _savejson(pid, info)
             say('[읽기] ReadProcessMemory 실패 (0x%X)' % base)
             say()
             say('판정 : 핸들은 열렸지만 읽기가 막혔다. 메모리 방식 불가')
@@ -283,8 +318,21 @@ def diag(pid, name, modname):
 
         say('[읽기] ' + mname + ' 베이스 0x%X 에서 64바이트 성공' % base)
         say(hexdump(raw, base))
+        info['read_test'] = {'ok': True, 'base_hex': '0x%X' % base,
+                             'head_hex': raw.hex(), 'is_mz': raw[:2] == b'MZ'}
         if raw[:2] == b'MZ':
             say('        앞 2바이트가 MZ = PE 헤더. 제대로 읽고 있다')
+        say()
+
+        #--- 6. 메모리 영역 목록 (읽기 가능한 committed 영역) ---
+        try:
+            regs = mr.regions(h, writable=False)
+            info['regions'] = [{'base': b, 'base_hex': '0x%X' % b, 'size': s}
+                               for b, s in regs]
+            say('[영역] 읽기 가능한 committed 영역 ' + str(len(regs)) + '개')
+        except Exception as e:
+            info['regions'] = []
+            say('[영역] 열거 실패 : ' + str(e))
         say()
 
         say('=' * 66)
@@ -292,6 +340,9 @@ def diag(pid, name, modname):
         say('=' * 66)
         say()
         dyn, why = aslr(h, base)
+        info['aslr'] = {'enabled': dyn, 'why': str(why)}
+        info['verdict'] = '메모리 읽기 가능'
+        _savejson(pid, info)
         say('다음에 할 일 :')
         say('  1. CheatEngine 등으로 HP / HP최대 주소를 찾는다')
         say('  2. 찾은 값을 ' + mname + ' 베이스(0x%X) 기준 상대값으로 바꾼다' % base)
