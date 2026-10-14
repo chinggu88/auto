@@ -121,6 +121,10 @@ MARK_CONF = 0.7            #마크 신뢰도. 진짜 마크를 놓치면 더 내
 MARK_CONF_BY_FILE = {}     #예) {'mark3.bmp': 0.8} 처럼 파일명만 적으면 그 값이 우선
 MARK_BG_TOL = 25           #검정 배경을 투명으로 보고 매칭에서 뺄 때의 기준값 (1번 방법)
                            #bmp 원본에만 적용한다. png 화면 캡처는 배경이 진짜라 마스크를 안 쓴다
+MARK_SCALES = [1.0, 1.5, 2.0, 2.5, 3.0, 4.0]
+                           #bmp 원본 크기 대비 탐색 배율. 화면의 실제 마크 크기를 몰라도 된다
+                           #템플릿 매칭은 스케일 불변성이 없어서 크기가 안 맞으면 점수가 안 나온다.
+                           #여러 배율로 돌려 가장 잘 맞는 것을 고르면 측정 없이도 된다
 MARK_MAX  = 3              #mark1 ~ mark(이 번호) 까지만 본다. 0 이면 폴더에 있는 걸 전부
                            #번호가 없거나 범위를 넘는 파일(mark4.bmp 등)은 폴더에 있어도 건너뛴다
 
@@ -781,29 +785,51 @@ def findmark(hay, path, conf):
     if not use_mask:
         return _findmark_old(path, conf)
 
-    needle, mask, cnt = _marktpl(path)
-    if needle is None:
+    needle0, mask0, cnt0 = _marktpl(path)
+    if needle0 is None:
         return None
+    h0, w0 = needle0.shape[0], needle0.shape[1]
 
-    #마스크 밖(검정)은 빼고, 남은 픽셀의 색 차이만 본다
-    #TM_SQDIFF 는 (차이 x 마스크)^2 의 합이라 마스크 픽셀만 더해진다
-    res = cv2.matchTemplate(hay, needle, cv2.TM_SQDIFF, mask=mask)
-    res = numpy.where(numpy.isfinite(res), res, numpy.inf)      #마스크가 0 인 자리는 버린다
-    #픽셀당 평균 오차로 바꿔서 0~1 점수로 만든다. 1.0 이면 그림이 완전히 같다
-    score = 1.0 - numpy.sqrt(numpy.clip(res, 0, None) / (cnt * 3.0)) / 255.0
-
-    ys, xs = numpy.where(score >= conf)
-    if len(xs) == 0:
-        return None
-    h, w = needle.shape[0], needle.shape[1]
-    #잘 맞는 것부터 본다. 내 마크 자리면 건너뛰고 다음 후보로
-    for i in numpy.argsort(-score[ys, xs]):
-        x = int(xs[i]) + w // 2
-        y = int(ys[i]) + h // 2
-        if isselfmark(x, y):
+    #스케일 피라미드: 화면의 실제 마크 크기를 모르므로 여러 배율로 돌려 최고점을 고른다
+    best = None  # (점수, x, y)
+    for s in MARK_SCALES:
+        w, h = int(w0 * s), int(h0 * s)
+        if w < 1 or h < 1 or w > hay.shape[1] or h > hay.shape[0]:
             continue
-        return (x, y)
-    return None
+        if s == 1.0:
+            needle, mask, cnt = needle0, mask0, cnt0
+        else:
+            #템플릿을 키운다. 마스크는 보간 뒤 다시 threshold 해서 경계를 살린다
+            needle = cv2.resize(needle0, (w, h), interpolation=cv2.INTER_CUBIC)
+            keep = cv2.resize(mask0[:, :, 0], (w, h),
+                              interpolation=cv2.INTER_NEAREST) > 0.5
+            cnt = int(keep.sum())
+            if cnt == 0:
+                continue
+            mask = numpy.dstack([keep.astype('float32')] * 3)
+
+        #마스크 밖(검정)은 빼고, 남은 픽셀의 색 차이만 본다
+        #TM_SQDIFF 는 (차이 x 마스크)^2 의 합이라 마스크 픽셀만 더해진다
+        res = cv2.matchTemplate(hay, needle, cv2.TM_SQDIFF, mask=mask)
+        res = numpy.where(numpy.isfinite(res), res, numpy.inf)  #마스크가 0 인 자리는 버린다
+        #픽셀당 평균 오차로 바꿔서 0~1 점수로 만든다. 1.0 이면 그림이 완전히 같다
+        #(cnt 로 나누므로 스케일이 달라도 점수끼리 비교가 된다)
+        score = 1.0 - numpy.sqrt(numpy.clip(res, 0, None) / (cnt * 3.0)) / 255.0
+
+        ys, xs = numpy.where(score >= conf)
+        #잘 맞는 것부터 본다. 내 마크 자리면 건너뛰고 다음 후보로
+        for i in numpy.argsort(-score[ys, xs]):
+            x = int(xs[i]) + w // 2
+            y = int(ys[i]) + h // 2
+            if isselfmark(x, y):
+                continue
+            sc = float(score[ys[i], xs[i]])
+            if best is None or sc > best[0]:
+                best = (sc, x, y)
+            break  #이 스케일에서는 최고점 하나만 본다
+    if best is None:
+        return None
+    return (best[1], best[2])
 
 #cv2/numpy 가 없을 때 쓰는 예전 방식. 검정 배경까지 그대로 비교한다
 def _findmark_old(path, conf):
