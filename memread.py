@@ -705,9 +705,20 @@ class Mem(object):
         if raw == None:
             return None
         try:
-            return _unpack(kind, raw, 0, self.enc)
+            val = _unpack(kind, raw, 0, self.enc)
         except Exception:
             return None
+        #값 보정 (선택). bias/div 가 적힌 체인만 적용한다
+        #self_x 처럼 인코딩된 값(raw = 2*X - 32768)을 실제 값으로 되돌릴 때 쓴다
+        #적힌 게 없는 체인은 읽은 그대로 돌려주므로 기존 동작과 같다
+        if isinstance(val, int):
+            bias = num(spec.get('bias'))
+            if bias != None:
+                val += bias
+            div = num(spec.get('div'))
+            if div:
+                val //= div
+        return val
 
     #여러 개를 한 번에. 하나라도 못 읽으면 그 키는 None
     def values(self, names):
