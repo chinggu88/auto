@@ -44,12 +44,14 @@
       "type": "u16"
     },
     "self_x": {
-      "base": null,
+      "base": "0xA3558",
       "offsets": [],
-      "type": "u16"
+      "type": "u16",
+      "bias": 32768,
+      "div": 2
     },
     "self_y": {
-      "base": null,
+      "base": "0xA355C",
       "offsets": [],
       "type": "u16"
     }
@@ -102,5 +104,6 @@
     "player_types": []
   },
   "_screen": "월드좌표 -> 화면좌표 변환. 손으로 적지 말고 python memcalib.py 로 실측해서 채운다",
-  "screen": null
+  "screen": null,
+  "_chains1": "bias/div 는 선택 필드 (memread.py Mem.value 가 적용). 읽은 값에 bias 를 더하고 div 로 나눈 몫을 쓴다. self_x 의 raw 가 2*X-32768 로 인코딩돼 있어서 필요해졌다. 없는 체인은 종전 그대로 동작한다"
 }
