@@ -24,12 +24,12 @@
       "type": "u32"
     },
     "hp": {
-      "base": "0x1B0D1C",
+      "base": "0x11C33780",
       "offsets": [],
       "type": "u16"
     },
     "hp_max": {
-      "base": "0x1B0D1E",
+      "base": "0x11C33782",
       "offsets": [],
       "type": "u16"
     },
