@@ -970,22 +970,27 @@ class Mem(object):
                             'hp': hp, 'hp_max': mx})
             return out, head, count
 
-    #좌표 일치로 플레이어 객체를 찾는다. (객체 dict 또는 None).
-    #테이블을 먼저 읽고 좌표를 읽으면 그 사이 이동으로 어긋날 수 있어, 좌표를 먼저 읽는다
-    def player_object(self):
+    #좌표 일치 객체 전부. (객체 dict 리스트).
+    #객체 안의 x/y 는 raw 좌표임이 --table 실측으로 확인됐으므로, 게임 좌표와
+    #비교하면 엉뚱한 몹이 걸리는 오매치가 난다 (몹 raw_x 가 플레이어 게임_x 와
+    #같아지는 경우). 그래서 raw 로만 비교한다.
+    #몹이 플레이어와 같은 타일에 서면 좌표만으로는 플레이어를 가릴 수 없으므로,
+    #일치하는 걸 전부 돌려주고 호출자가 골라야 한다.
+    #좌표를 먼저 읽고 테이블을 읽는다 (그 사이 이동으로 어긋나는 것을 줄인다)
+    def player_objects(self):
         if self.h == None or self.cfg == None:
-            return None
+            return []
         raw = self.selfraw()
-        me = self.selfpos()
-        if raw == None and me == None:
-            return None
+        if raw == None:
+            return []
         objs, head, count = self.entity_table()
+        out = []
         for o in objs:
-            if raw != None and (o['x'], o['y']) == raw:
-                return o
-            if me != None and (o['x'], o['y']) == me:
-                return o
-        return None
+            if (o['x'], o['y']) == raw:
+                o = dict(o)
+                o['match'] = 'raw'
+                out.append(o)
+        return out
 
     #객체 주소에서 size 바이트를 읽는다. (bytes 또는 None)
     def object_bytes(self, ptr, size=0x200):
