@@ -12,6 +12,7 @@
 #   python memprobe.py --watch hp,mp              값이 실제로 따라 움직이는지 확인
 #   python memprobe.py --watch hp,mp --sec 0.5    감시 주기 바꾸기
 #   python memprobe.py --objs                     객체 목록 덤프
+#   python memprobe.py --table                    bsearch 엔티티 테이블 순회 (플레이어 객체 찾기)
 #
 #주소 찾기 (CheatEngine 없이. 읽기만 하고 게임 메모리에 쓰지 않는다) :
 #
@@ -1170,6 +1171,45 @@ def dumpobjs(limit, pid):
         m.detach()
 
 
+def dumpenttable(pid):
+    m = mr.Mem(MEM_PATH, say)
+    if not m.attach(pid):
+        say('붙기 실패 : ' + str(m.err))
+        return
+    try:
+        me  = m.selfpos()
+        raw = m.selfraw()
+        objs, head, count = m.entity_table()
+        say()
+        say('테이블 베이스 : ' + (hex(head) if head != None else '(못 읽음)')
+            + '   개수 : ' + str(count))
+        say('내 좌표 : ' + str(me) + '   내 좌표 raw : ' + str(raw))
+        say()
+        if len(objs) == 0:
+            say('  비었다. mem.json chains.ent_table / ent_count 를 확인한다')
+            say('  count 가 크면(수천 단위) 정적 주소가 틀린 것이다')
+            return
+        say('  %-12s %-12s %-12s %-12s %-12s %s'
+            % ('ptr', 'id', 'x', 'y', 'hp', 'hp_max'))
+        for o in objs:
+            mark = ''
+            if me != None and raw != None:
+                if (o['x'], o['y']) == raw:
+                    mark = '  <-- 나 (raw 좌표 일치)'
+                elif (o['x'], o['y']) == me:
+                    mark = '  <-- 나 (게임 좌표 일치)'
+                elif (o['x'], o['y']) == (raw[1], raw[0]) or \
+                     (o['x'], o['y']) == (me[1], me[0]):
+                    mark = '  <-- 나? (x/y 바뀜)'
+            say('  0x%-10X %-12d %-12d %-12d %-12d %d%s'
+                % (o['ptr'], o['id'], o['x'], o['y'], o['hp'], o['hp_max'], mark))
+        say()
+        say('  <-- 나가 붙은 객체의 hp/hp_max 가 게임 HP 와 같이 변하면')
+        say('  그 객체의 +0x50 이 원본 HP 이다')
+    finally:
+        m.detach()
+
+
 #=====================================================================
 
 def main():
@@ -1235,6 +1275,10 @@ def main():
         except ValueError:
             limit = 20
         dumpobjs(limit, pid)
+        return
+
+    if has('--table'):
+        dumpenttable(pid)
         return
 
     if has('--dump'):
