@@ -970,6 +970,30 @@ class Mem(object):
                             'hp': hp, 'hp_max': mx})
             return out, head, count
 
+    #좌표 일치로 플레이어 객체를 찾는다. (객체 dict 또는 None).
+    #테이블을 먼저 읽고 좌표를 읽으면 그 사이 이동으로 어긋날 수 있어, 좌표를 먼저 읽는다
+    def player_object(self):
+        if self.h == None or self.cfg == None:
+            return None
+        raw = self.selfraw()
+        me = self.selfpos()
+        if raw == None and me == None:
+            return None
+        objs, head, count = self.entity_table()
+        for o in objs:
+            if raw != None and (o['x'], o['y']) == raw:
+                return o
+            if me != None and (o['x'], o['y']) == me:
+                return o
+        return None
+
+    #객체 주소에서 size 바이트를 읽는다. (bytes 또는 None)
+    def object_bytes(self, ptr, size=0x200):
+        if self.h == None or ptr == None or ptr < 0x10000:
+            return None
+        with self.lock:
+            return readmem(self.h, ptr, size)
+
     #자기 좌표 raw 값 (bias/div 적용 전). (raw_x, raw_y) 또는 None.
     #객체 안의 x/y 가 raw 인지 게임 좌표인지 가릴 때, 양쪽 다 비교해야 하므로 둔다
     def selfraw(self):
