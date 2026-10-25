@@ -54,6 +54,17 @@
       "base": "0xA355C",
       "offsets": [],
       "type": "u16"
+    },
+    "_enttable": "bsearch 엔티티 테이블. ent_table 은 [lin.exe+0x1FEAB0] 을 한 번 거른 테이블 베이스 주소, ent_count 는 lin.exe+0x1FEAA8 의 u32 개수. memprobe.py --table 이 순회한다",
+    "ent_table": {
+      "base": "0x1FEAB0",
+      "offsets": [0],
+      "type": "u32"
+    },
+    "ent_count": {
+      "base": "0x1FEAA8",
+      "offsets": [],
+      "type": "u32"
     }
   },
   "_objlist": "주변 객체 배열. base 를 null 로 두면 혈맹 판별과 몹 타겟 집기가 꺼지고 마크 이미지로 폴백한다",
