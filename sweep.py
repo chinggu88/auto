@@ -2,8 +2,8 @@
 #
 # main.py 변형 버전. 이것만 한다:
 #   1. 화면 전체에서 이미지 1개를 전수 스캔해서 매칭된 위치를 전부 찾는다
-#   2. 각 위치에서 10px 아래로 이동한 뒤 마우스 휠(중간) 클릭을 한다 (순차 반복)
-#   3. 0.5초 쉬고 다시 돈다
+#   2. 각 위치에서 50px 아래로 이동한 뒤 휠(중간) 클릭 -> 0.5초 -> 휠 위 1회 + 클릭 -> 0.5초 -> 휠 아래 1회 (순차 반복)
+#   3. 0.5초 쉬고 다시 돈다 (매칭이 있을 때만 로그)
 #
 # main.py 와 같은 폴더에 넣고 실행 :  python sweep.py
 # (pit.py 처럼 `import main` 으로 공용 헬퍼를 재사용한다. main.py 는 수정하지 않는다)
@@ -24,6 +24,7 @@ CONF       = 0.8            # 매칭 신뢰도(0~1). 너무 많이 잡히면 올
 REPEAT_SEC = 0.5            # 한 바퀴 돌고 쉬는 시간(초)
 CLICK_DY   = 50             # 매칭 위치에서 아래로 내린 지점을 클릭(px)
 SETTLE_SEC = 0.1            # 이동 후 클릭까지 대기(초)
+WHEEL_GAP  = 0.5            # 클릭 후 휠 이동까지 대기(초)
 STOP_KEY   = 'esc'          # 이 키를 누르면 종료
 #=====================================================================
 
@@ -79,16 +80,22 @@ def _safemove(x, y):
 
 
 def hit(x, y):
-    """한 위치 공격 : 매칭 위치에서 CLICK_DY 만큼 아래로 이동 후 휠(중간) 클릭."""
+    """한 위치 공격 : 매칭 위치에서 CLICK_DY 만큼 아래로 이동 후 휠(중간) 클릭,
+    0.5초 뒤 휠 위로 1회 + 클릭, 0.5초 뒤 휠 아래로 1회."""
     tx, ty = x, y + CLICK_DY
     _safemove(tx, ty)
     time.sleep(SETTLE_SEC)
     gu.middleClick()
     main.log('타격 : %d,%d  (휠클릭)' % (tx, ty))
+    time.sleep(WHEEL_GAP)
+    gu.scroll(1)            # 휠 위로 1회
+    gu.middleClick()
+    time.sleep(WHEEL_GAP)
+    gu.scroll(-1)           # 휠 아래로 1회 (원위치)
 
 
 def repeat():
-    """0.5초 간격 반복 : 전체 스캔 -> 각 위치마다 F5 + Ctrl+클릭 순차 반복."""
+    """0.5초 간격 반복 : 전체 스캔 -> 각 위치마다 휠클릭 시퀀스 순차 반복."""
     imgpath = os.path.join(main.IMAGE_DIR, TARGET_IMG)
     if not os.path.isfile(imgpath):
         main.log('이미지 파일을 못 찾음 : ' + imgpath)
@@ -102,7 +109,8 @@ def repeat():
             break
         n += 1
         pts = scan_all()
-        main.log('[%d] 매칭 %d개' % (n, len(pts)))
+        if pts:
+            main.log('[%d] 매칭 %d개' % (n, len(pts)))
         for (x, y) in pts:
             if k.is_pressed(STOP_KEY):
                 break
