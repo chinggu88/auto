@@ -13,7 +13,7 @@
 #   python memprobe.py --watch hp,mp --sec 0.5    감시 주기 바꾸기
 #   python memprobe.py --objs                     객체 목록 덤프
 #   python memprobe.py --table                    bsearch 엔티티 테이블 순회 (플레이어 객체 찾기)
-#   python memprobe.py --objdump                   좌표 일치 플레이어 객체 덤프
+#   python memprobe.py --objdump                   플레이어 좌표 일치 객체 전부 덤프
 #   python memprobe.py --objdump 0x12031030        그 주소의 객체 덤프
 #
 #주소 찾기 (CheatEngine 없이. 읽기만 하고 게임 메모리에 쓰지 않는다) :
@@ -1219,55 +1219,68 @@ def dumpobj(ptrarg, pid):
         say('붙기 실패 : ' + str(m.err))
         return
     try:
-        ptr = None
+        targets = []
         if ptrarg:
             try:
                 ptr = int(ptrarg, 0)
             except ValueError:
                 say('주소는 0x... 형태여야 한다 : ' + ptrarg)
                 return
-        target = None
-        if ptr == None:
-            target = m.player_object()
-            if target == None:
-                say('플레이어 객체를 못 찾았다 (좌표 일치 없음)')
+            targets = [{'ptr': ptr}]
+        else:
+            raw = m.selfraw()
+            me = m.selfpos()
+            say('내 좌표 raw : ' + str(raw) + '   게임 좌표 : ' + str(me))
+            targets = m.player_objects()
+            if len(targets) == 0:
+                say('플레이어 좌표(raw)와 일치하는 객체가 없다')
                 return
-            ptr = target['ptr']
+            if len(targets) > 5:
+                say('일치 객체가 %d개라 앞 5개만 덤프한다' % len(targets))
+                targets = targets[:5]
+            else:
+                say('일치 객체 %d개 — 전부 덤프한다' % len(targets))
         hp = m.value('hp')
         mx = m.value('hp_max')
-        blob = m.object_bytes(ptr, 0x200)
-        say()
-        say('객체 : 0x%X' % ptr + (
-            '  id=%d x=%d y=%d hp=%d hp_max=%d'
-            % (target['id'], target['x'], target['y'],
-               target['hp'], target['hp_max']) if target else ''))
         say('표시 HP (버퍼) : hp=%s hp_max=%s'
             '  (깜빡일 수 있으니 게임 화면 숫자와 대조)' % (str(hp), str(mx)))
-        say()
-        if blob == None:
-            say('  못 읽었다. 객체가 해제됐을 수 있다. 다시 --table 로 확인한다')
-            return
-        for off in range(0, len(blob), 16):
-            chunk = blob[off:off + 16]
-            hexs = ' '.join('%02X' % b for b in chunk)
-            asc = ''.join(chr(b) if 32 <= b < 127 else '.' for b in chunk)
-            say('  +%03X  %-47s  %s' % (off, hexs, asc))
-        say()
-        hints = []
-        for off in range(0, len(blob) - 1):
-            v = struct.unpack_from('<H', blob, off)[0]
-            if hp != None and v == hp:
-                hints.append('+0x%02X = %d (표시 HP 와 같음)' % (off, v))
-            elif mx != None and v == mx:
-                hints.append('+0x%02X = %d (표시 MaxHP 와 같음)' % (off, v))
-        if hints:
-            say('  힌트 (표시 HP/MaxHP 와 같은 u16 오프셋) :')
-            for h in hints:
-                say('    ' + h)
-        else:
-            say('  힌트 없음 — 표시 HP 와 같은 u16 이 이 객체 안에 없다')
+        for t in targets:
+            dumpobjone(m, t, hp, mx)
     finally:
         m.detach()
+
+
+def dumpobjone(m, target, hp, mx):
+    ptr = target['ptr']
+    blob = m.object_bytes(ptr, 0x200)
+    say()
+    say('객체 : 0x%X' % ptr + (
+        '  id=%d x=%d y=%d hp=%d hp_max=%d (%s 좌표 일치)'
+        % (target['id'], target['x'], target['y'],
+           target['hp'], target['hp_max'], target.get('match', '?'))
+        if 'id' in target else ''))
+    if blob == None:
+        say('  못 읽었다. 객체가 해제됐을 수 있다. 다시 --table 로 확인한다')
+        return
+    for off in range(0, len(blob), 16):
+        chunk = blob[off:off + 16]
+        hexs = ' '.join('%02X' % b for b in chunk)
+        asc = ''.join(chr(b) if 32 <= b < 127 else '.' for b in chunk)
+        say('  +%03X  %-47s  %s' % (off, hexs, asc))
+    say()
+    hints = []
+    for off in range(0, len(blob) - 1):
+        v = struct.unpack_from('<H', blob, off)[0]
+        if hp != None and v == hp:
+            hints.append('+0x%02X = %d (표시 HP 와 같음)' % (off, v))
+        elif mx != None and v == mx:
+            hints.append('+0x%02X = %d (표시 MaxHP 와 같음)' % (off, v))
+    if hints:
+        say('  힌트 (표시 HP/MaxHP 와 같은 u16 오프셋) :')
+        for h in hints:
+            say('    ' + h)
+    else:
+        say('  힌트 없음 — 표시 HP 와 같은 u16 이 이 객체 안에 없다')
 
 
 #=====================================================================
