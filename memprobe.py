@@ -15,6 +15,7 @@
 #   python memprobe.py --table                    bsearch 엔티티 테이블 순회 (플레이어 객체 찾기)
 #   python memprobe.py --objdump                   플레이어 좌표 일치 객체 전부 덤프
 #   python memprobe.py --objdump 0x12031030        그 주소의 객체 덤프
+#   python memprobe.py --findplayer                테이블 객체 안에서 현재 HP/MaxHP 쌍 찾기 (플레이어 객체 특정)
 #
 #주소 찾기 (CheatEngine 없이. 읽기만 하고 게임 메모리에 쓰지 않는다) :
 #
@@ -1283,6 +1284,56 @@ def dumpobjone(m, target, hp, mx):
         say('  힌트 없음 — 표시 HP 와 같은 u16 이 이 객체 안에 없다')
 
 
+def dumpfindplayer(pid):
+    m = mr.Mem(MEM_PATH, say)
+    if not m.attach(pid):
+        say('붙기 실패 : ' + str(m.err))
+        return
+    try:
+        hp = m.value('hp')
+        mx = m.value('hp_max')
+        raw = m.selfraw()
+        me = m.selfpos()
+        say()
+        say('표시 HP (버퍼) : hp=%s hp_max=%s  (이 쌍을 테이블 객체 안에서 찾는다)'
+            % (str(hp), str(mx)))
+        say('내 좌표 raw : ' + str(raw) + '   게임 좌표 : ' + str(me))
+        if hp == None or mx == None:
+            say('  버퍼 HP 를 못 읽었다. 게임 화면 HP 를 보고 mem.json chains.hp/hp_max 를 확인한다')
+            return
+        pair = struct.pack('<HH', hp, mx)
+        objs, head, count = m.entity_table()
+        say('테이블 객체 %d개 (베이스 %s, 개수 %s) — 각 객체에서 쌍 검색'
+            % (len(objs), hex(head) if head != None else '?', str(count)))
+        say()
+        found = 0
+        for o in objs:
+            blob = m.object_bytes(o['ptr'], 0x400)
+            if blob == None:
+                blob = m.object_bytes(o['ptr'], 0x200)
+            if blob == None:
+                continue
+            at = blob.find(pair)
+            if at < 0:
+                continue
+            found += 1
+            mark = ''
+            if raw != None and (o['x'], o['y']) == raw:
+                mark = '  <-- 내 좌표와 일치'
+            say('  0x%X  id=%d x=%d y=%d  쌍 오프셋 +0x%02X  (이 객체의 +0x50 hp=%d hp_max=%d)%s'
+                % (o['ptr'], o['id'], o['x'], o['y'], at, o['hp'], o['hp_max'], mark))
+        say()
+        if found == 0:
+            say('  없음 — 테이블 객체 안에 현재 HP/MaxHP 쌍이 없다.')
+            say('  -> 플레이어 객체가 이 테이블에 없거나, HP 가 평문 쌍으로 저장되지 않는다.')
+            say('  -> 다음은 self 좌표를 갱신하는 코드를 추적해서 플레이어 포인터를 찾는 방향이다.')
+        else:
+            say('  %d개 발견. 위 객체 중 하나가 플레이어 객체 후보이다.' % found)
+            say('  확인법: 몹한테 맞거나 물약 먹어서 HP 를 바꾸고, 그 객체의 쌍 오프셋 값이 같이 변하면 확정이다.')
+    finally:
+        m.detach()
+
+
 #=====================================================================
 
 def main():
@@ -1356,6 +1407,10 @@ def main():
 
     if has('--objdump'):
         dumpobj(arg('--objdump'), pid)
+        return
+
+    if has('--findplayer'):
+        dumpfindplayer(pid)
         return
 
     if has('--dump'):
