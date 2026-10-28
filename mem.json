@@ -67,6 +67,25 @@
       "type": "u32"
     }
   },
+  "_secure": "보안 값 홀더 (2026-10-28, lin.exe+57C20). HP/MP를 평문으로 저장하지 않고 XOR + 랜덤 슬롯에 숨긴다. holder는 정적 주소(RVA), 배열 포인터·키·인덱스는 패킷마다 바뀌므로 매번 읽는다. 디코드: index=[holder] XOR xor; array=[holder+4]; key=[holder+8]; 값=([array+index*4] XOR key) & mask. 검증: MP 홀더 0x1FAA10 → 1658, HP 홀더 0x1FAA20 → 2170 (2026-10-28 실측)",
+  "secure": {
+    "hp": {
+      "holder": "0x1FAA20",
+      "xor": "0xB104FA87",
+      "off_index": 0,
+      "off_array": 4,
+      "off_key": 8,
+      "mask": "0xFFFF"
+    },
+    "mp": {
+      "holder": "0x1FAA10",
+      "xor": "0xB104FA87",
+      "off_index": 0,
+      "off_array": 4,
+      "off_key": 8,
+      "mask": "0xFFFF"
+    }
+  },
   "_objlist": "주변 객체 배열. base 를 null 로 두면 혈맹 판별과 몹 타겟 집기가 꺼지고 마크 이미지로 폴백한다",
   "_objlist1": "kind=array 면 base 부터 stride 간격으로 count 개가 늘어서 있다고 본다. kind=linked 면 stride 오프셋에 있는 next 포인터를 따라간다",
   "_objlist2": "fields 의 off 는 원소 하나의 시작에서부터의 오프셋이다. id 가 0 인 칸은 빈 칸으로 보고 버리므로 id 오프셋이 틀리면 목록이 전부 비어 보인다",
