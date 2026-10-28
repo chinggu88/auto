@@ -1242,6 +1242,88 @@ def dosecure(pid):
         m.detach()
 
 
+def dosecurewatch(pid, sec):
+    #보안 홀더 HP/MP 를 계속 찍어 값이 튀는지 본다. 버퍼 값도 같이 찍어
+    #어느 쪽이 튀는지 바로 보인다. 콘솔 + secure_track.log 에 남긴다
+    #  python memprobe.py --securewatch [--sec 1]
+    m = mr.Mem(MEM_PATH, say)
+    if not m.attach(pid):
+        say('붙기 실패 : ' + str(m.err))
+        return
+    logpath = os.path.join(os.path.dirname(os.path.abspath(MEM_PATH)),
+                            'secure_track.log')
+    try:
+        f = open(logpath, 'a', encoding='utf-8')
+    except Exception:
+        f = None
+        logpath = '(로그 파일 열기 실패 - 콘솔만 찍는다)'
+
+    def out(s):
+        say(s)
+        if f != None:
+            try:
+                f.write(s + '\n')
+                f.flush()
+            except Exception:
+                pass
+
+    out('')
+    out('보안 홀더 연속 트래킹 시작 (간격 ' + str(sec) + '초, 멈추려면 Ctrl+C)')
+    out('로그 : ' + logpath)
+    out('  시각      S-HP   S-MP   B-HP   B-MP   표시')
+    out('  (S=보안 홀더 디코드, B=버퍼 chains,'
+        ' BUF-SPIKE=버퍼만 다름, SEC-FAIL=디코드 실패, SEC-Δ=보안 값 변화)')
+    ticks = 0
+    fails = 0
+    mism  = 0
+    prev  = (None, None)
+    try:
+        while True:
+            hp, mp = m.secure_hpmp()
+            bh = m.value('hp')
+            bm = m.value('mp')
+            marks = []
+            if hp == None:
+                fails += 1
+                marks.append('SEC-FAIL-HP')
+            else:
+                if prev[0] != None and hp != prev[0]:
+                    marks.append('SEC-ΔHP%+d' % (hp - prev[0]))
+                prev = (hp, prev[1])
+            if mp == None:
+                fails += 1
+                marks.append('SEC-FAIL-MP')
+            else:
+                if prev[1] != None and mp != prev[1]:
+                    marks.append('SEC-ΔMP%+d' % (mp - prev[1]))
+                prev = (prev[0], mp)
+            if bh != None and hp != None and bh != hp:
+                mism += 1
+                marks.append('BUF-SPIKE-HP')
+            if bm != None and mp != None and bm != mp:
+                mism += 1
+                marks.append('BUF-SPIKE-MP')
+            ticks += 1
+            out('  %s  %-6s %-6s %-6s %-6s %s'
+                % (time.strftime('%H:%M:%S'),
+                   str(hp) if hp != None else '-',
+                   str(mp) if mp != None else '-',
+                   str(bh) if bh != None else '-',
+                   str(bm) if bm != None else '-',
+                   ' '.join(marks)))
+            time.sleep(sec)
+    except KeyboardInterrupt:
+        out('')
+        out('트래킹 종료 : %d틱, SEC-FAIL %d회, BUF-SPIKE %d회' % (ticks, fails, mism))
+    finally:
+        if f != None:
+            try:
+                f.close()
+            except Exception:
+                pass
+        m.detach()
+
+
 def dumpobj(ptrarg, pid):
     m = mr.Mem(MEM_PATH, say)
     if not m.attach(pid):
@@ -1435,6 +1517,14 @@ def main():
 
     if has('--secure'):
         dosecure(pid)
+        return
+
+    if has('--securewatch'):
+        try:
+            sec = float(arg('--sec', '1'))
+        except ValueError:
+            sec = 1.0
+        dosecurewatch(pid, max(0.1, sec))
         return
 
     if has('--objdump'):
