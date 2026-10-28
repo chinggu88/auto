@@ -1363,13 +1363,14 @@ def dotablewatch(pid, sec):
     names = (m.cfg.get('names') or {}) if m.cfg else {}
     out('  이름 맵 : %d종 (mem.json names, 모르는 종류는 type 번호만 찍는다)' % len(names))
 
-    #이름 표시. 우선순위 : ① 엔티티 +0x54 포인터가 가리키는 실제 이름 (몹만)
+    #이름 표시. 우선순위 : ① 엔티티 +0x54 포인터가 가리키는 실제 이름
     #  ② mem.json names 맵 (타입 번호 기준)  ③ 타입 번호만
-    #+0x54 이름은 몹에만 쓴다. 플레이어(type 255)의 +0x54는 이름이 아니라
-    #16바이트 레코드 테이블이라, 그대로 믿으면 '씀얾' 같은 오독이 나온다 (2026-10-28 확인)
+    #+0x54가 레코드 테이블인 경우(플레이어 일부 구조체)는 memread._decode_name이
+    #UTF-16LE 첫 바이트 0x00 가드로 걸러서 name=None으로 온다. 그래서 타입 게이트 없이
+    #이름이 있으면 그대로 쓰고, 없으면 타입 표시로 떨어진다 (2026-10-28 확인)
     #hp 0/0 은 대부분이라 노이즈라서, 0이 아닐 때만 뒤에 붙인다
     def nm(o):
-        if o.get('name') and o.get('type') != 255:
+        if o.get('name'):
             return o['name']
         t = o.get('type')
         v = names.get(str(t)) if t != None else None
