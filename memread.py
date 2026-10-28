@@ -724,6 +724,70 @@ class Mem(object):
     def values(self, names):
         return dict((n, self.value(n)) for n in names)
 
+    #--- 보안 값 홀더 (secure holder, 2026-10-28) ---
+    #
+    #  lin.exe+57C20 이 HP/MP 를 평문으로 저장하지 않고 XOR + 랜덤 슬롯에 숨긴다.
+    #  홀더 구조체 (16바이트, 정적 테이블에 0x10 간격으로 늘어섬):
+    #    +0x00  인덱스 XOR 0xB104FA87 (u32, 난독화된 슬롯 번호 0~15)
+    #    +0x04  배열 포인터 (u32, 힙. 16개 u32 슬롯 = 64바이트)
+    #    +0x08  키 (u32, helper 첫 반환값)
+    #    +0x0C  0
+    #  디코드: index = [holder] XOR xor; array = [holder+4]; key = [holder+8];
+    #          값 = ([array + index*4] XOR key) & mask
+    #  홀더 주소는 정적(재시작 유지)이지만 배열 포인터·키·인덱스는 패킷마다
+    #  바뀌므로 매번 읽는다. 읽는 도중에 패킷이 오면 값이 섞일 수 있다:
+    #  인덱스가 0~15를 벗어나면 찢긴 읽기로 보고 None 을 돌려준다.
+    #  오프셋·xor·mask 는 코드에 박지 않고 mem.json 의 secure 에서 읽는다.
+    def secure_detail(self, name):
+        if self.h == None or self.cfg == None:
+            return None
+        spec = (self.cfg.get('secure') or {}).get(name)
+        if spec == None:
+            return None
+        rva = num(spec.get('holder'))
+        if rva == None:
+            return None
+        xor  = num(spec.get('xor'), 0xB104FA87)
+        oi   = num(spec.get('off_index'), 0)
+        oa   = num(spec.get('off_array'), 4)
+        ok   = num(spec.get('off_key'), 8)
+        mask = num(spec.get('mask'), 0xFFFF)
+        with self.lock:
+            holder = self.base + rva
+            raw = readmem(self.h, holder + oi, 4)
+            if raw == None:
+                return None
+            index_raw = struct.unpack('<I', raw)[0]
+            raw = readmem(self.h, holder + oa, 4)
+            if raw == None:
+                return None
+            array = struct.unpack('<I', raw)[0]
+            raw = readmem(self.h, holder + ok, 4)
+            if raw == None:
+                return None
+            key = struct.unpack('<I', raw)[0]
+            index = (index_raw ^ xor) & 0xFFFFFFFF
+            if index > 15:
+                return None
+            if array < 0x10000:
+                return None
+            raw = readmem(self.h, array + index * 4, 4)
+            if raw == None:
+                return None
+            encoded = struct.unpack('<I', raw)[0]
+        return {'holder': holder, 'index_raw': index_raw, 'index': index,
+                'array': array, 'key': key, 'encoded': encoded,
+                'value': (encoded ^ key) & mask}
+
+    #보안 홀더에서 디코드한 값 하나. 실패하면 None
+    def secure_value(self, name):
+        d = self.secure_detail(name)
+        return d['value'] if d else None
+
+    #보안 홀더 HP/MP (현재값). (hp, mp) — 못 읽은 쪽은 None
+    def secure_hpmp(self):
+        return self.secure_value('hp'), self.secure_value('mp')
+
     #체인 하나가 지금 어떤 상태인지 사람 말로 설명한다.
     #'값이 None' 이라는 결과만으로는 '아직 주소를 안 넣었다' 와 '넣었는데 못 읽는다' 가
     #구분되지 않는다. 그 둘은 할 일이 완전히 다르므로 반드시 갈라서 알려줘야 한다
