@@ -1330,6 +1330,8 @@ def dotablewatch(pid, sec):
     #첫 틱은 전체 목록, 이후 틱은 변화만 찍는다. 콘솔 + table_track.log 에 남긴다
     #식별은 (id, ptr) 쌍으로 한다. id 만으로는 같은 종류 몹이 겹칠 수 있고,
     #ptr 만으로는 주소가 재사용될 때 엉뚱한 몹으로 이어질 수 있기 때문이다
+    #이름은 mem.json names 에서 타입(+0x4C) 으로 찾는다. hp 대신 이름을 찍고,
+    #hp 는 0이 아닐 때만 뒤에 붙인다 (0/0 은 대부분이라 노이즈라서)
     m = mr.Mem(MEM_PATH, say)
     if not m.attach(pid):
         say('붙기 실패 : ' + str(m.err))
@@ -1355,6 +1357,23 @@ def dotablewatch(pid, sec):
     out('몹 테이블 연속 트래킹 시작 (간격 ' + str(sec) + '초, 멈추려면 Ctrl+C)')
     out('로그 : ' + logpath)
     out('  첫 틱은 전체 목록, 이후는 NEW/GONE/HP변화/이동만 찍는다')
+    names = (m.cfg.get('names') or {}) if m.cfg else {}
+    out('  이름 맵 : %d종 (mem.json names, 모르는 종류는 type 번호만 찍는다)' % len(names))
+
+    #이름 표시. 타입(+0x4C) 으로 mem.json names 에서 찾는다.
+    #hp 0/0 은 대부분이라 노이즈라서, 0이 아닐 때만 뒤에 붙인다
+    def nm(o):
+        t = o.get('type')
+        v = names.get(str(t)) if t != None else None
+        if v:
+            return 'type %s %s' % (t, v)
+        return 'type %s' % t if t != None else 'type ?'
+
+    def disp(o):
+        s = nm(o)
+        if o['hp'] != 0 or o['hp_max'] != 0:
+            s += ' hp %d/%d' % (o['hp'], o['hp_max'])
+        return s
     ticks = 0
     fails = 0
     seen  = {}
@@ -1377,28 +1396,27 @@ def dotablewatch(pid, sec):
                 if len(objs) == 0:
                     out('    (비었다)')
                 for o in objs:
-                    out('    id %-10d ptr 0x%X  x %-6d y %-6d hp %d/%d'
-                        % (o['id'], o['ptr'], o['x'], o['y'], o['hp'], o['hp_max']))
+                    out('    id %-10d ptr 0x%X  x %-6d y %-6d %s'
+                        % (o['id'], o['ptr'], o['x'], o['y'], disp(o)))
                 first = False
             else:
                 lines = []
                 for key, o in cur.items():
                     if key not in seen:
-                        lines.append('NEW id %d ptr 0x%X x %d y %d hp %d/%d'
-                                     % (o['id'], o['ptr'], o['x'], o['y'],
-                                        o['hp'], o['hp_max']))
+                        lines.append('NEW id %d ptr 0x%X x %d y %d %s'
+                                     % (o['id'], o['ptr'], o['x'], o['y'], disp(o)))
                     else:
                         p = seen[key]
                         if o['hp'] != p['hp']:
-                            lines.append('HP id %d %d->%d (max %d)'
-                                         % (o['id'], p['hp'], o['hp'], o['hp_max']))
+                            lines.append('HP id %d %s %d->%d (max %d)'
+                                         % (o['id'], nm(o), p['hp'], o['hp'], o['hp_max']))
                         if (o['x'], o['y']) != (p['x'], p['y']):
-                            lines.append('MOVED id %d (%d,%d)->(%d,%d)'
-                                         % (o['id'], p['x'], p['y'], o['x'], o['y']))
+                            lines.append('MOVED id %d %s (%d,%d)->(%d,%d)'
+                                         % (o['id'], nm(o), p['x'], p['y'], o['x'], o['y']))
                 for key, p in seen.items():
                     if key not in cur:
-                        lines.append('GONE id %d (마지막 x %d y %d hp %d/%d)'
-                                     % (p['id'], p['x'], p['y'], p['hp'], p['hp_max']))
+                        lines.append('GONE id %d %s (마지막 x %d y %d)'
+                                     % (p['id'], nm(p), p['x'], p['y']))
                 out('  %s  개수 %d%s' % (now, count,
                                          '' if not lines else '  ' + ' | '.join(lines)))
             seen = cur
