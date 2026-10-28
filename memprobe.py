@@ -1655,6 +1655,24 @@ def dofindname(pid, name, typenum):
     if not pats:
         say('이름을 어떤 인코딩으로도 만들 수 없다 : ' + name)
         return
+    if pid == None:
+        #--pid/--fg 없이도 --tablewatch처럼 mem.json 의 process 이름으로 찾는다
+        #(없으면 openproc 에 None 이 들어가 TypeError 로 죽는다 — 2026-10-28 버그 수정)
+        m = mr.Mem(MEM_PATH, say)
+        if not m.loadcfg():
+            say(str(m.err))
+            say('PID를 직접 주려면 --pid <PID> 또는 --fg 를 쓴다')
+            return
+        want = str(m.cfg.get('process', '')).lower()
+        hit = [(p, n) for p, n in mr.procs() if n.lower() == want]
+        if len(hit) == 0:
+            say("mem.json 의 process '" + want + "' 를 못 찾았다. 게임이 떠 있는지 확인한다")
+            return
+        if len(hit) > 1:
+            say(str(len(hit)) + '개가 같은 이름으로 떠 있다 (듀얼클라) — 첫 번째로 한다')
+            say('특정 창을 보려면 --pid <PID> 또는 --fg 를 쓴다')
+        pid = hit[0][0]
+        say('PID 자동 선택 : %d (%s)' % (pid, hit[0][1]))
     h, ec = mr.openproc(pid)
     if h == None:
         say('OpenProcess 실패 (에러 ' + str(ec) + ')')
