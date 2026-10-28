@@ -1586,22 +1586,46 @@ def _decprint(raw, enc):
     return s
 
 
+def _cleanch(ch):
+    #깨끗한 문자 : 한글 음절 + ASCII 인쇄 문자. 바이너리 오독은 보통 이 범위를 벗어난다
+    o = ord(ch)
+    return (0x20 <= o <= 0x7E) or (0xAC00 <= o <= 0xD7A3)
+
+
+def _cleanseg(s):
+    return len(s) >= 2 and all(_cleanch(ch) for ch in s)
+
+
 def _trystr(h, addr):
-    #그 주소가 문자열을 가리키는지 본다. 되면 (인코딩, 문자열), 안 되면 None
-    raw = mr.readmem(h, addr, 64)
+    #그 주소가 "깨끗한" 문자열을 가리키는지 본다. 되면 (인코딩, 문자열)
+    #조건 : 종결자(널) 안에서 끝나고, 2~32자, 전부 한글 음절/ASCII 인쇄 문자
+    #바이너리를 문자열로 오독하는 노이즈를 막는 필터다 (2026-10-28 출력 정리)
+    raw = mr.readmem(h, addr, 128)
     if raw == None or len(raw) < 4:
         return None
-    cut = raw.find(b'\x00\x00')
-    if cut >= 0:
-        even = cut if cut % 2 == 0 else cut - 1
-        s = _decprint(raw[:even], 'utf-16le')
-        if s:
-            return ('utf-16le', s)
-    cut = raw.find(b'\x00')
-    if cut >= 0:
-        s = _decprint(raw[:cut], 'cp949')
-        if s:
-            return ('cp949', s)
+    for enc in ('utf-16le', 'cp949'):
+        if enc == 'utf-16le':
+            cut = raw.find(b'\x00\x00')
+            if cut < 0 or cut % 2 != 0:
+                continue
+            body = raw[:cut]
+            if len(body) % 2 != 0:
+                continue
+            try:
+                s = body.decode('utf-16le')
+            except Exception:
+                continue
+        else:
+            cut = raw.find(b'\x00')
+            if cut < 0:
+                continue
+            try:
+                s = raw[:cut].decode('cp949')
+            except Exception:
+                continue
+        s = s.strip()
+        if 2 <= len(s) <= 32 and _cleanseg(s):
+            return (enc, s)
     return None
 
 
@@ -1628,8 +1652,11 @@ def _neighbors(h, addr, name, enc):
                 break
         if idx == None:
             return ([], [])
-        before = [p for p in parts[max(0, idx - 3):idx] if p]
-        after = [p for p in parts[idx + 1:idx + 4] if p]
+        #깨끗한 한글/ASCII 이웃만 보여준다 — 바이너리를 디코딩한 깨진 글자는 버린다
+        before = [p for p in parts[max(0, idx - 3):idx] if p and _cleanseg(p)]
+        after = [p for p in parts[idx + 1:idx + 4] if p and _cleanseg(p)]
+        if not before and not after:
+            return ([], [])
         return (before, after)
     except Exception:
         return ([], [])
@@ -1724,9 +1751,18 @@ def dofindname(pid, name, typenum):
             if hitcap:
                 break
         say('[1] 문자열 발견 : %d곳%s' % (len(hits), ' (200개에서 끊음 — 더 있을 수 있다)' if hitcap else ''))
+        patlen = dict((e, len(p)) for e, p in pats)
         for a, enc in hits[:100]:
             before, after = _neighbors(h, a, name, enc)
-            line = '  0x%X (%s)' % (a, enc)
+            #바로 뒤가 종결자/구분자면 실제 문자열일 가능성이 높다 (★)
+            star = ''
+            raw2 = mr.readmem(h, a + patlen[enc], 2)
+            if raw2 != None:
+                if enc == 'utf-16le' and raw2 in (b'\x00\x00', b'\x0a\x00'):
+                    star = ' ★'
+                elif enc != 'utf-16le' and raw2[:1] in (b'\x00', b'\x0a'):
+                    star = ' ★'
+            line = '  0x%X (%s)%s' % (a, enc, star)
             if before or after:
                 line += '  이웃: ' + (' | '.join(before) if before else '-') \
                     + '  << ' + name + ' >>  ' \
@@ -1775,8 +1811,11 @@ def dofindname(pid, name, typenum):
                 mark = ' <= 슬롯' if off == 0 else ''
                 got = _trystr(h, v)
                 if got or mark:
-                    say('    %+5d  0x%08X%s%s' % (off, v, mark,
-                        ('  -> \'%s\' (%s)' % (got[1], got[0])) if got else ''))
+                    ann = ''
+                    if got:
+                        nm = got[1]
+                        ann = '  -> \'%s\' (%s)' % (nm[:12] + ('…' if len(nm) > 12 else ''), got[0])
+                    say('    %+5d  0x%08X%s%s' % (off, v, mark, ann))
         if len(refs) > 20:
             for slot, target in refs[20:]:
                 say('  슬롯 0x%X  -> 문자열 0x%X' % (slot, target))
@@ -1784,7 +1823,12 @@ def dofindname(pid, name, typenum):
         #--- 3) 타입 번호가 메모리 어디에 있는지 (주변 u32 맥락) ---
         if tnum != None:
             say('[3] 타입 번호 %d 발견 : %d곳' % (tnum, len(tnums)))
-            for a in tnums[:50]:
+            if len(tnums) > 200:
+                say('  너무 흔한 값이다 (200곳 초과) — 맥락은 처음 10곳만 본다. 고유한 번호로 다시 돌리는 게 낫다')
+                show = tnums[:10]
+            else:
+                show = tnums[:50]
+            for a in show:
                 raw = mr.readmem(h, a - 16, 36)
                 if raw == None or len(raw) < 36:
                     say('  0x%X  (주변 읽기 실패)' % a)
@@ -1792,8 +1836,8 @@ def dofindname(pid, name, typenum):
                 vals = struct.unpack('<9I', raw)
                 ctx = ' '.join('0x%X' % v for v in vals)
                 say('  0x%X : %s   (가운데가 타입 번호)' % (a, ctx))
-            if len(tnums) > 50:
-                say('  ... %d곳은 생략' % (len(tnums) - 50))
+            if len(tnums) > len(show):
+                say('  ... %d곳은 생략' % (len(tnums) - len(show)))
         say()
         say('끝. 이 출력을 그대로 보내주면 연결 구조를 분석한다')
     finally:
