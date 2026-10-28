@@ -490,6 +490,27 @@ def _unpack(kind, raw, off, enc):
 DEFAULT_PATH = 'mem.json'
 
 
+def _decode_name(raw):
+    #이름 문자열 디코드 (CP949 우선 — 몹 이름 테이블이 CP949, UTF-16LE 폴백)
+    #널 종결자 안에서 끝나고 1~32자, 제어 문자 없음. 아니면 None
+    for enc in ('cp949', 'utf-16le'):
+        term = b'\x00' if enc == 'cp949' else b'\x00\x00'
+        cut = raw.find(term)
+        if cut < 0:
+            continue
+        body = raw[:cut]
+        if enc == 'utf-16le' and (cut % 2 != 0 or len(body) % 2 != 0):
+            continue
+        try:
+            s = body.decode(enc)
+        except Exception:
+            continue
+        s = s.strip()
+        if 1 <= len(s) <= 32 and all(ord(ch) >= 0x20 for ch in s):
+            return s
+    return None
+
+
 class Mem(object):
     def __init__(self, path=None, logfn=None):
         self.path   = path if path else DEFAULT_PATH
@@ -987,6 +1008,9 @@ class Mem(object):
     #각 원소는 4바이트 객체 포인터. 객체 필드 (2026-10-25 실측, 타입은 2026-10-28):
     #  id@+0x04 u32, x@+0x28 u32, y@+0x2C u32, hp@+0x50 u16, hp_max@+0x52 u16,
     #  type@+0x4C u32 (종류 마커. 12543=냉혹한 샤벨타이거, 13567=미확인 종류)
+    #  name_ptr@+0x54 u32 (이름 문자열 포인터, CP949. 2026-10-28 --findname 확정:
+    #    슬롯-84=+0x00 vtable, 슬롯-8=+0x4C type, 슬롯=+0x54 name_ptr, 슬롯+124=+0xD0 서브 vtable, 2개체 일치)
+    #  인라인 문자열은 객체 안에 없지만, 이름은 +0x54 포인터로 참조한다
     #주의: lock 안에서 value() 를 부르면 데드락이 나므로 (Lock 은 재진입이 안 된다)
     #개수는 resolve + readmem 으로 직접 읽는다
     def entity_table(self):
@@ -1018,7 +1042,7 @@ class Mem(object):
             for p in ptrs:
                 if p < 0x10000:
                     continue
-                ob = readmem(self.h, p, 0x54)
+                ob = readmem(self.h, p, 0x58)
                 if ob == None:
                     continue
                 try:
@@ -1028,12 +1052,19 @@ class Mem(object):
                     hp  = struct.unpack_from('<H', ob, 0x50)[0]
                     mx  = struct.unpack_from('<H', ob, 0x52)[0]
                     typ = struct.unpack_from('<I', ob, 0x4C)[0]
+                    nptr = struct.unpack_from('<I', ob, 0x54)[0]
                 except Exception:
                     continue
                 if oid == 0:
                     continue
+                nm = None
+                if nptr >= 0x10000:
+                    raw = readmem(self.h, nptr, 64)
+                    if raw != None:
+                        nm = _decode_name(raw)
                 out.append({'ptr': p, 'id': oid, 'x': x, 'y': y,
-                            'hp': hp, 'hp_max': mx, 'type': typ})
+                            'hp': hp, 'hp_max': mx, 'type': typ,
+                            'name': nm, 'name_ptr': nptr})
             return out, head, count
 
     #좌표 일치 객체 전부. (객체 dict 리스트).
