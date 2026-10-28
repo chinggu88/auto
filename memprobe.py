@@ -16,6 +16,9 @@
 #   python memprobe.py --objdump                   플레이어 좌표 일치 객체 전부 덤프
 #   python memprobe.py --objdump 0x12031030        그 주소의 객체 덤프
 #   python memprobe.py --findplayer                테이블 객체 안에서 현재 HP/MaxHP 쌍 찾기 (플레이어 객체 특정)
+#   python memprobe.py --findname "냉혹한 샤벨타이거" --typenum 12543
+#                        이름 문자열 위치 + 그걸 가리키는 타입 테이블 슬롯 + 타입 번호 분포 스캔
+#                        (타입 번호와 이름 테이블 사이의 연결고리 찾기 — 전 타입 이름 자동 매핑용)
 #
 #주소 찾기 (CheatEngine 없이. 읽기만 하고 게임 메모리에 쓰지 않는다) :
 #
@@ -1556,6 +1559,229 @@ def dumpfindplayer(pid):
 
 #=====================================================================
 
+#=====================================================================
+# 이름 스캔 (--findname) : 타입 번호(+0x4C)와 이름 테이블 사이의 연결고리 찾기
+#=====================================================================
+#이름은 엔티티 안에 없다. 그래서 역으로 찾는다 :
+#  1) "냉혹한 샤벨타이거" 문자열이 지금 메모리의 어디에 있는지 찾는다
+#     (게임 문자열은 UTF-16LE — 10/14 확인. CP949/UTF-8도 같이 시도)
+#  2) 그 문자열을 가리키는 포인터를 찾는다 (= 타입 포인터 테이블의 슬롯)
+#  3) 슬롯 주변 u32에 타입 번호(예: 12543)가 있는지, 타입 번호가 메모리
+#     어디에 어떤 형태로 있는지 본다. 연결이 보이면 그 구조로 전 타입
+#     이름을 자동 매핑할 수 있다
+#주의 : 채팅/로그 버퍼에도 같은 이름이 반복해서 들어 있다 (10/15 0x11110000
+#영역 판정). 그래서 이웃 문자열을 같이 보여준다 — 이름 테이블은 서로 다른
+#이름이 줄줄이 이어지고, 채팅 버퍼는 같은 이름이 반복된다
+def _decprint(raw, enc):
+    try:
+        s = raw.decode(enc)
+    except Exception:
+        return None
+    s = s.split('\x00')[0].strip()
+    if len(s) < 2:
+        return None
+    for ch in s:
+        if ord(ch) < 0x20:
+            return None
+    return s
+
+
+def _trystr(h, addr):
+    #그 주소가 문자열을 가리키는지 본다. 되면 (인코딩, 문자열), 안 되면 None
+    raw = mr.readmem(h, addr, 64)
+    if raw == None or len(raw) < 4:
+        return None
+    cut = raw.find(b'\x00\x00')
+    if cut >= 0:
+        even = cut if cut % 2 == 0 else cut - 1
+        s = _decprint(raw[:even], 'utf-16le')
+        if s:
+            return ('utf-16le', s)
+    cut = raw.find(b'\x00')
+    if cut >= 0:
+        s = _decprint(raw[:cut], 'cp949')
+        if s:
+            return ('cp949', s)
+    return None
+
+
+def _neighbors(h, addr, name, enc):
+    #문자열 앞뒤에 이어지는 이름들을 본다. 테이블인지 채팅 버퍼인지 가리는 단서
+    try:
+        start = addr - 512
+        if enc == 'utf-16le' and start % 2 != 0:
+            start -= 1
+        raw = mr.readmem(h, start, 1024)
+        if raw == None:
+            return ([], [])
+        if enc == 'utf-16le':
+            if len(raw) % 2 != 0:
+                raw = raw[:-1]
+            txt = raw.decode('utf-16le', errors='replace')
+        else:
+            txt = raw.decode(enc, errors='replace')
+        parts = [p.strip() for p in txt.split('\n')]
+        idx = None
+        for i, p in enumerate(parts):
+            if name in p:
+                idx = i
+                break
+        if idx == None:
+            return ([], [])
+        before = [p for p in parts[max(0, idx - 3):idx] if p]
+        after = [p for p in parts[idx + 1:idx + 4] if p]
+        return (before, after)
+    except Exception:
+        return ([], [])
+
+
+def dofindname(pid, name, typenum):
+    if not name:
+        say('--findname 뒤에 이름을 적는다 : python memprobe.py --findname "냉혹한 샤벨타이거" --typenum 12543')
+        return
+    tnum = None
+    if typenum != None:
+        try:
+            tnum = int(typenum, 0)
+        except ValueError:
+            say('--typenum 은 숫자여야 한다 : ' + str(typenum))
+            return
+    pats = []
+    for enc in ('utf-16le', 'cp949', 'utf-8'):
+        try:
+            pats.append((enc, name.encode(enc)))
+        except Exception:
+            pass
+    if not pats:
+        say('이름을 어떤 인코딩으로도 만들 수 없다 : ' + name)
+        return
+    h, ec = mr.openproc(pid)
+    if h == None:
+        say('OpenProcess 실패 (에러 ' + str(ec) + ')')
+        return
+    try:
+        regs = mr.regions(h, writable=False)
+        say('스캔 대상 영역 : ' + str(len(regs)) + '개')
+        say('찾는 이름 : ' + name)
+        for enc, pat in pats:
+            say('  패턴 %s : %d bytes' % (enc, len(pat)))
+        if tnum != None:
+            say('찾는 타입 번호 : %d (0x%X)' % (tnum, tnum))
+        say()
+        #--- 1패스 : 문자열 + 타입 번호 (한 번의 읽기 순회로 둘 다) ---
+        hits = []
+        seenaddr = set()
+        tnums = []
+        hitcap = False
+        tpat = struct.pack('<I', tnum) if tnum != None else None
+        for base, size in regs:
+            for cbase, craw in mr.readchunks(h, base, size):
+                for enc, pat in pats:
+                    st = 0
+                    while True:
+                        i = craw.find(pat, st)
+                        if i < 0:
+                            break
+                        a = cbase + i
+                        if a not in seenaddr:
+                            seenaddr.add(a)
+                            hits.append((a, enc))
+                            if len(hits) >= 200:
+                                hitcap = True
+                        st = i + 1
+                    if hitcap:
+                        break
+                if tpat != None:
+                    st = 0
+                    while True:
+                        i = craw.find(tpat, st)
+                        if i < 0:
+                            break
+                        tnums.append(cbase + i)
+                        st = i + 1
+                        if len(tnums) >= 500:
+                            break
+                if hitcap:
+                    break
+            if hitcap:
+                break
+        say('[1] 문자열 발견 : %d곳%s' % (len(hits), ' (200개에서 끊음 — 더 있을 수 있다)' if hitcap else ''))
+        for a, enc in hits[:100]:
+            before, after = _neighbors(h, a, name, enc)
+            line = '  0x%X (%s)' % (a, enc)
+            if before or after:
+                line += '  이웃: ' + (' | '.join(before) if before else '-') \
+                    + '  << ' + name + ' >>  ' \
+                    + (' | '.join(after) if after else '-')
+            say(line)
+        for a, enc in hits[100:]:
+            say('  0x%X (%s)' % (a, enc))
+        if len(hits) == 0:
+            say('  이름 문자열을 못 찾았다. 게임이 떠 있는지, 이름이 정확한지 확인한다')
+            say('  (인코딩이 다르면 못 찾는다 — 다른 이름으로 다시 시도해본다)')
+            return
+        say()
+        #--- 2패스 : 문자열을 가리키는 포인터 (= 타입 테이블 슬롯) ---
+        targets = [a for a, _e in hits[:30]]
+        if len(hits) > 30:
+            say('[2] 포인터 스캔은 앞 30곳만 대상으로 한다 (%d곳 중)' % len(hits))
+        else:
+            say('[2] 포인터 스캔 대상 : %d곳' % len(targets))
+        tpacks = [(a, struct.pack('<I', a)) for a in targets]
+        refs = []
+        for base, size in regs:
+            for cbase, craw in mr.readchunks(h, base, size):
+                for a, pat in tpacks:
+                    st = 0
+                    while True:
+                        i = craw.find(pat, st)
+                        if i < 0:
+                            break
+                        #4바이트 정렬된 슬롯만 (포인터 배열의 슬롯은 정렬돼 있다)
+                        if (cbase + i) % 4 == 0:
+                            refs.append((cbase + i, a))
+                        st = i + 1
+        say('포인터 발견 : %d곳' % len(refs))
+        for slot, target in refs[:20]:
+            say('  슬롯 0x%X  -> 문자열 0x%X' % (slot, target))
+            raw = mr.readmem(h, slot - 128, 256)
+            if raw == None or len(raw) < 256:
+                say('    주변 읽기 실패')
+                continue
+            vals = struct.unpack('<64I', raw)
+            if tnum != None and tnum in vals:
+                say('    ★ 타입 번호 %d가 슬롯에서 %+d 바이트 위치에 있다'
+                    % (tnum, (vals.index(tnum) - 32) * 4))
+            for j, v in enumerate(vals):
+                off = (j - 32) * 4
+                mark = ' <= 슬롯' if off == 0 else ''
+                got = _trystr(h, v)
+                if got or mark:
+                    say('    %+5d  0x%08X%s%s' % (off, v, mark,
+                        ('  -> \'%s\' (%s)' % (got[1], got[0])) if got else ''))
+        if len(refs) > 20:
+            for slot, target in refs[20:]:
+                say('  슬롯 0x%X  -> 문자열 0x%X' % (slot, target))
+        say()
+        #--- 3) 타입 번호가 메모리 어디에 있는지 (주변 u32 맥락) ---
+        if tnum != None:
+            say('[3] 타입 번호 %d 발견 : %d곳' % (tnum, len(tnums)))
+            for a in tnums[:50]:
+                raw = mr.readmem(h, a - 16, 36)
+                if raw == None or len(raw) < 36:
+                    say('  0x%X  (주변 읽기 실패)' % a)
+                    continue
+                vals = struct.unpack('<9I', raw)
+                ctx = ' '.join('0x%X' % v for v in vals)
+                say('  0x%X : %s   (가운데가 타입 번호)' % (a, ctx))
+            if len(tnums) > 50:
+                say('  ... %d곳은 생략' % (len(tnums) - 50))
+        say()
+        say('끝. 이 출력을 그대로 보내주면 연결 구조를 분석한다')
+    finally:
+        mr.closeproc(h)
+
+
 def main():
     #--where 는 경로만 찍으므로 Windows 체크보다 먼저 둔다 (어디서든 쓸 수 있게)
     if has('--where'):
@@ -1647,6 +1873,10 @@ def main():
 
     if has('--objdump'):
         dumpobj(arg('--objdump'), pid)
+        return
+
+    if has('--findname'):
+        dofindname(pid, arg('--findname'), arg('--typenum'))
         return
 
     if has('--findplayer'):
