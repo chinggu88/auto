@@ -1214,6 +1214,34 @@ def dumpenttable(pid):
         m.detach()
 
 
+def dosecure(pid):
+    #보안 홀더(HP/MP) 디코드 검증. 버퍼 chains 값과 나란히 찍어 맞는지 본다
+    #  python memprobe.py --secure
+    m = mr.Mem(MEM_PATH, say)
+    if not m.attach(pid):
+        say('붙기 실패 : ' + str(m.err))
+        return
+    try:
+        say()
+        say('보안 홀더 디코드 (lin.exe+57C20, XOR + 랜덤 슬롯):')
+        for name in ('hp', 'mp'):
+            d = m.secure_detail(name)
+            if d == None:
+                say('  ' + name + ' : 못 읽음'
+                    + ' (홀더/인덱스/배열 중 하나가 안 읽히거나 인덱스가 0~15를 벗어남)')
+                continue
+            say('  ' + name + ' : holder 0x%X  index %d  array 0x%X  key 0x%08X'
+                % (d['holder'], d['index'], d['array'], d['key']))
+            say('      encoded 0x%08X  ->  디코드 %d' % (d['encoded'], d['value']))
+        say()
+        say('버퍼 chains 값 (비교용, 스파이크 가능) : hp ' + str(m.value('hp'))
+            + '  mp ' + str(m.value('mp')))
+        say('  디코드 값이 게임 화면 HP/MP 와 같으면 보안 홀더 경로가 맞다')
+        say('  버퍼만 튀고 디코드가 화면과 같으면, 디코드가 정답이다')
+    finally:
+        m.detach()
+
+
 def dumpobj(ptrarg, pid):
     m = mr.Mem(MEM_PATH, say)
     if not m.attach(pid):
@@ -1403,6 +1431,10 @@ def main():
 
     if has('--table'):
         dumpenttable(pid)
+        return
+
+    if has('--secure'):
+        dosecure(pid)
         return
 
     if has('--objdump'):
