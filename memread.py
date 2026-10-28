@@ -493,6 +493,9 @@ DEFAULT_PATH = 'mem.json'
 def _decode_name(raw):
     #이름 문자열 디코드 (CP949 우선 — 몹 이름 테이블이 CP949, UTF-16LE 폴백)
     #널 종결자 안에서 끝나고 1~32자, 제어 문자 없음. 아니면 None
+    #UTF-16LE 폴백은 첫 바이트가 0x00이면 거부한다. 플레이어 +0x54가 가리키는
+    #16바이트 레코드 테이블(첫 바이트 0x00)이 UTF-16LE로 '씀얾'처럼 오독되는 것을 막기 위함.
+    #진짜 이름이 X00 음절(가 등)로 시작하면 못 읽지만, 오표시보다 미표시가 낫다 (2026-10-28 확인)
     for enc in ('cp949', 'utf-16le'):
         term = b'\x00' if enc == 'cp949' else b'\x00\x00'
         cut = raw.find(term)
@@ -500,6 +503,8 @@ def _decode_name(raw):
             continue
         body = raw[:cut]
         if enc == 'utf-16le' and (cut % 2 != 0 or len(body) % 2 != 0):
+            continue
+        if enc == 'utf-16le' and raw[0] == 0:
             continue
         try:
             s = body.decode(enc)
