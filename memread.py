@@ -984,8 +984,9 @@ class Mem(object):
     #엔티티 포인터 테이블 순회. (객체 목록, 테이블 베이스, 개수) 를 돌려준다.
     #테이블 베이스 = [lin.exe+0x1FEAB0] (mem.json chains.ent_table, offsets [0] 으로 한 번 거른다),
     #개수 = lin.exe+0x1FEAA8 (mem.json chains.ent_count, u32).
-    #각 원소는 4바이트 객체 포인터. 객체 필드 (2026-10-25 실측):
-    #  id@+0x04 u32, x@+0x28 u32, y@+0x2C u32, hp@+0x50 u16, hp_max@+0x52 u16
+    #각 원소는 4바이트 객체 포인터. 객체 필드 (2026-10-25 실측, 타입은 2026-10-28):
+    #  id@+0x04 u32, x@+0x28 u32, y@+0x2C u32, hp@+0x50 u16, hp_max@+0x52 u16,
+    #  type@+0x4C u32 (종류 마커. 12543=냉혹한 샤벨타이거, 13567=미확인 종류)
     #주의: lock 안에서 value() 를 부르면 데드락이 나므로 (Lock 은 재진입이 안 된다)
     #개수는 resolve + readmem 으로 직접 읽는다
     def entity_table(self):
@@ -1026,12 +1027,13 @@ class Mem(object):
                     y   = struct.unpack_from('<I', ob, 0x2C)[0]
                     hp  = struct.unpack_from('<H', ob, 0x50)[0]
                     mx  = struct.unpack_from('<H', ob, 0x52)[0]
+                    typ = struct.unpack_from('<I', ob, 0x4C)[0]
                 except Exception:
                     continue
                 if oid == 0:
                     continue
                 out.append({'ptr': p, 'id': oid, 'x': x, 'y': y,
-                            'hp': hp, 'hp_max': mx})
+                            'hp': hp, 'hp_max': mx, 'type': typ})
             return out, head, count
 
     #좌표 일치 객체 전부. (객체 dict 리스트).
