@@ -1324,6 +1324,98 @@ def dosecurewatch(pid, sec):
         m.detach()
 
 
+def dotablewatch(pid, sec):
+    #엔티티(몹) 테이블을 계속 찍어 몹의 생성/소멸/이동/HP 변화를 본다
+    #  python memprobe.py --tablewatch [--sec 1]
+    #첫 틱은 전체 목록, 이후 틱은 변화만 찍는다. 콘솔 + table_track.log 에 남긴다
+    #식별은 (id, ptr) 쌍으로 한다. id 만으로는 같은 종류 몹이 겹칠 수 있고,
+    #ptr 만으로는 주소가 재사용될 때 엉뚱한 몹으로 이어질 수 있기 때문이다
+    m = mr.Mem(MEM_PATH, say)
+    if not m.attach(pid):
+        say('붙기 실패 : ' + str(m.err))
+        return
+    logpath = os.path.join(os.path.dirname(os.path.abspath(MEM_PATH)),
+                            'table_track.log')
+    try:
+        f = open(logpath, 'a', encoding='utf-8')
+    except Exception:
+        f = None
+        logpath = '(로그 파일 열기 실패 - 콘솔만 찍는다)'
+
+    def out(s):
+        say(s)
+        if f != None:
+            try:
+                f.write(s + '\n')
+                f.flush()
+            except Exception:
+                pass
+
+    out('')
+    out('몹 테이블 연속 트래킹 시작 (간격 ' + str(sec) + '초, 멈추려면 Ctrl+C)')
+    out('로그 : ' + logpath)
+    out('  첫 틱은 전체 목록, 이후는 NEW/GONE/HP변화/이동만 찍는다')
+    ticks = 0
+    fails = 0
+    seen  = {}
+    first = True
+    try:
+        while True:
+            objs, head, count = m.entity_table()
+            ticks += 1
+            now = time.strftime('%H:%M:%S')
+            if head == None or count == None:
+                fails += 1
+                out('  %s  테이블 못 읽음' % now)
+                time.sleep(sec)
+                continue
+            cur = {}
+            for o in objs:
+                cur[(o['id'], o['ptr'])] = o
+            if first:
+                out('  %s  테이블 베이스 0x%X  개수 %d' % (now, head, count))
+                if len(objs) == 0:
+                    out('    (비었다)')
+                for o in objs:
+                    out('    id %-10d ptr 0x%X  x %-6d y %-6d hp %d/%d'
+                        % (o['id'], o['ptr'], o['x'], o['y'], o['hp'], o['hp_max']))
+                first = False
+            else:
+                lines = []
+                for key, o in cur.items():
+                    if key not in seen:
+                        lines.append('NEW id %d ptr 0x%X x %d y %d hp %d/%d'
+                                     % (o['id'], o['ptr'], o['x'], o['y'],
+                                        o['hp'], o['hp_max']))
+                    else:
+                        p = seen[key]
+                        if o['hp'] != p['hp']:
+                            lines.append('HP id %d %d->%d (max %d)'
+                                         % (o['id'], p['hp'], o['hp'], o['hp_max']))
+                        if (o['x'], o['y']) != (p['x'], p['y']):
+                            lines.append('MOVED id %d (%d,%d)->(%d,%d)'
+                                         % (o['id'], p['x'], p['y'], o['x'], o['y']))
+                for key, p in seen.items():
+                    if key not in cur:
+                        lines.append('GONE id %d (마지막 x %d y %d hp %d/%d)'
+                                     % (p['id'], p['x'], p['y'], p['hp'], p['hp_max']))
+                out('  %s  개수 %d%s' % (now, count,
+                                         '' if not lines else '  ' + ' | '.join(lines)))
+            seen = cur
+            time.sleep(sec)
+    except KeyboardInterrupt:
+        out('')
+        out('트래킹 종료 : %d틱, 테이블 실패 %d회, 본 적 있는 몹 %d종'
+            % (ticks, fails, len(seen)))
+    finally:
+        if f != None:
+            try:
+                f.close()
+            except Exception:
+                pass
+        m.detach()
+
+
 def dumpobj(ptrarg, pid):
     m = mr.Mem(MEM_PATH, say)
     if not m.attach(pid):
@@ -1525,6 +1617,14 @@ def main():
         except ValueError:
             sec = 1.0
         dosecurewatch(pid, max(0.1, sec))
+        return
+
+    if has('--tablewatch'):
+        try:
+            sec = float(arg('--sec', '1'))
+        except ValueError:
+            sec = 1.0
+        dotablewatch(pid, max(0.1, sec))
         return
 
     if has('--objdump'):
