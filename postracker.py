@@ -1,11 +1,19 @@
 # postracker.py — 내 캐릭터 위치 실시간 추적 GUI (진단용)
-# 사용법: repo 폴더에서 python postracker.py (memread.py + mem.json이 같은 폴더에 있어야 함)
-# 첫 줄: 내 캐릭터(기본 여포)의 게임 좌표를 실시간으로 표시한다.
+# 사용법: repo 폴더에서 python postracker.py
+#   (memread.py + mem.json + turnundead_mem.py가 같은 폴더에 있어야 함)
+# 첫 줄: 내 캐릭터(기본 여포)의 모니터 위치를 실시간으로 표시한다 (게임 좌표 아님).
 #   (sweep 중심/방향이 맞는지 눈으로 확인하는 용도. 클릭은 안 한다.)
-# 아래 줄: 게임 창 중심 + 모니터 중심 (sweep 중심 비교용), 가장 가까운 근위병.
-# 폴링: 백그라운드 스레드가 0.5초마다 테이블을 읽고, GUI는 큐로 받아 표시한다.
+# 아래: 게임 창 중심 vs 모니터 중심, 근위병 리스트 (모니터 위치, 가까운 순).
+# 모니터 위치 계산:
+#   - calib.json이 있으면 turnundead_mem의 캘리브레이션(아핀)으로 게임 좌표 -> 화면 좌표 변환.
+#     (아핀은 상대 게임 좌표(몹-self) -> 절대 화면 좌표. self 화면 위치 = 아핀(0,0).)
+#   - calib.json이 없으면 정확한 몹 화면 px는 스케일을 몰라 계산 불가.
+#     self는 게임 창 중심(가정), 몹은 중심에서 방향(단위벡터)만 표시한다.
+#     F9 캘리브레이션(turnundead_mem)을 한 번 하면 정확한 모니터 위치가 나온다.
+# 폴링: 백그라운드 스레드가 0.1초마다 테이블을 읽고, GUI는 큐로 받아 표시한다.
 
 import math
+import os
 import queue
 import threading
 import time
@@ -15,43 +23,20 @@ from tkinter import ttk
 import pyautogui as gu
 
 import memread as mr
+from turnundead_mem import (
+    CALIB_FILE,
+    TARGET_NAMES,
+    apply_affine,
+    game_window_center,
+    load_calib,
+    raw_to_game,
+)
 
-TARGET_NAMES = [
-    '야히의 근위병(데몬)',
-    '야히의 근위병(베레스)',
-    '야히의 근위병(서큐버스)',
-]
-POLL_INTERVAL = 0.5  # 초. 테이블 재읽기 간격.
-
-
-def raw_to_game(rx, ry):
-    """엔티티 테이블 raw 좌표 -> 게임 좌표. x는 (raw+32768)/2, y는 raw 그대로."""
-    return ((rx & 0xFFFF) + 32768) // 2, ry
-
-
-def game_window_center():
-    """Lineage 게임 창의 중심 좌표 (x, y). 못 찾으면 None."""
-    try:
-        wins = gu.getWindowsWithTitle('Lineage')
-    except Exception:
-        return None
-    if not wins:
-        return None
-    for w in wins:
-        try:
-            if w.title == 'Lineage Windows Client':
-                return (w.left + w.width // 2, w.top + w.height // 2)
-        except Exception:
-            continue
-    try:
-        w = wins[0]
-        return (w.left + w.width // 2, w.top + w.height // 2)
-    except Exception:
-        return None
+POLL_INTERVAL = 0.1  # 초. 테이블 재읽기 간격.
 
 
 class Poller(threading.Thread):
-    """0.5초마다 테이블을 읽어 (self, 근위병, 창 중심)을 큐에 넣는다."""
+    """0.1초마다 테이블을 읽어 (self 모니터 위치, 근위병 리스트, 창 중심)을 큐에 넣는다."""
 
     def __init__(self, char_name, outq):
         super(Poller, self).__init__(daemon=True)
@@ -60,6 +45,8 @@ class Poller(threading.Thread):
         self.stop_flag = threading.Event()
         self.mem = None
         self.err = None
+        self.coef = None
+        self.calib_mtime = None
 
     def attach(self):
         path, found, _tried = mr.findfile('mem.json')
@@ -74,30 +61,85 @@ class Poller(threading.Thread):
         self.err = None
         return True
 
+    def _reload_calib_if_changed(self):
+        """calib.json이 바뀌었을 때만 다시 읽어 아핀 계수를 갱신한다."""
+        try:
+            mt = os.path.getmtime(CALIB_FILE)
+        except Exception:
+            mt = None
+        if mt == self.calib_mtime:
+            return
+        self.calib_mtime = mt
+        try:
+            _pts, fit = load_calib()
+            self.coef = fit[:6] if fit else None
+        except Exception:
+            self.coef = None
+
     def run(self):
         while not self.stop_flag.is_set():
             try:
+                self._reload_calib_if_changed()
                 objs, _head, _count = self.mem.entity_table()
                 self_ent = None
                 guards = []
                 for o in objs:
                     gx, gy = raw_to_game(o['x'], o['y'])
                     if o.get('name') == self.char_name and self_ent is None:
-                        self_ent = {'id': o['id'], 'gx': gx, 'gy': gy,
-                                    'rx': o['x'], 'ry': o['y'], 'name': o.get('name')}
+                        self_ent = {'id': o['id'], 'gx': gx, 'gy': gy}
                     if o.get('name') in TARGET_NAMES:
                         guards.append({'id': o['id'], 'gx': gx, 'gy': gy,
                                        'name': o.get('name')})
+                sw, sh = gu.size()
+                mon_center = (sw // 2, sh // 2)
+                wc = game_window_center()
+                self_mon = None
+                self_mon_src = None
                 if self_ent is not None:
                     for g in guards:
                         g['dist'] = math.hypot(g['gx'] - self_ent['gx'],
                                                g['gy'] - self_ent['gy'])
                     guards.sort(key=lambda g: g['dist'])
-                sw, sh = gu.size()
-                wc = game_window_center()
-                self.outq.put({'self': self_ent, 'guards': guards,
-                               'win_center': wc, 'mon_center': (sw // 2, sh // 2),
-                               'time': time.strftime('%H:%M:%S')})
+                    if self.coef is not None:
+                        # 캘리브레이션 있음: 아핀으로 모니터 위치 계산.
+                        fx, fy = apply_affine(self.coef, 0, 0)
+                        self_mon = (int(round(fx)), int(round(fy)))
+                        self_mon_src = '캘리브레이션'
+                        for g in guards:
+                            mx, my = apply_affine(
+                                self.coef,
+                                g['gx'] - self_ent['gx'],
+                                g['gy'] - self_ent['gy'])
+                            g['mon'] = (int(round(mx)), int(round(my)))
+                            g['dir'] = None
+                    else:
+                        # 캘리브레이션 없음: self는 창 중심(가정), 몹은 방향만.
+                        if wc is not None:
+                            self_mon = wc
+                            self_mon_src = '창 중심'
+                        else:
+                            self_mon = mon_center
+                            self_mon_src = '모니터 중심(폴백)'
+                        for g in guards:
+                            dx = g['gx'] - self_ent['gx']
+                            dy = g['gy'] - self_ent['gy']
+                            dist = math.hypot(dx, dy)
+                            if dist < 1e-9:
+                                g['dir'] = (0.0, 0.0)
+                            else:
+                                g['dir'] = (dx / dist, dy / dist)
+                            g['mon'] = None
+                else:
+                    for g in guards:
+                        g['mon'] = None
+                        g['dir'] = None
+                self.outq.put({
+                    'self_id': self_ent['id'] if self_ent else None,
+                    'self_mon': self_mon, 'self_mon_src': self_mon_src,
+                    'guards': guards, 'win_center': wc,
+                    'mon_center': mon_center,
+                    'calib': self.coef is not None,
+                    'time': time.strftime('%H:%M:%S')})
             except Exception as e:
                 self.outq.put({'error': str(e)})
             self.stop_flag.wait(POLL_INTERVAL)
@@ -127,21 +169,28 @@ class App:
         self.btn = ttk.Button(top, text='추적 시작', command=self.toggle)
         self.btn.pack(side='left', padx=4)
 
-        # 첫 줄: 내 캐릭터 위치 (실시간). 가장 크게.
+        # 첫 줄: 내 캐릭터 모니터 위치 (실시간). 가장 크게.
         self.line1 = ttk.Label(root, text='추적 시작을 눌러주세요.',
                                font=('', 16, 'bold'), padding=(10, 12))
         self.line1.pack(fill='x')
-        # 둘째 줄: sweep 중심 비교용 (게임 창 중심 vs 모니터 중심).
+        # 둘째 줄: sweep 중심 비교용 (게임 창 중심 vs 모니터 중심 + 캘리브레이션 여부).
         self.line2 = ttk.Label(root, text='', padding=(10, 2))
         self.line2.pack(fill='x')
-        # 셋째 줄: 가장 가까운 근위병.
-        self.line3 = ttk.Label(root, text='', padding=(10, 2))
-        self.line3.pack(fill='x')
+        # 근위병 리스트 (모니터 위치, 가까운 순).
+        list_frame = ttk.Frame(root, padding=(10, 4))
+        list_frame.pack(fill='both', expand=True)
+        ttk.Label(list_frame, text='근위병 리스트 (가까운 순):').pack(anchor='w')
+        self.listbox = tk.Listbox(list_frame, height=10)
+        self.listbox.pack(side='left', fill='both', expand=True)
+        sb = ttk.Scrollbar(list_frame, orient='vertical',
+                           command=self.listbox.yview)
+        sb.pack(side='right', fill='y')
+        self.listbox.config(yscrollcommand=sb.set)
         # 상태 줄.
         self.status = ttk.Label(root, text='', padding=(10, 6))
         self.status.pack(fill='x')
 
-        self.root.after(200, self.drain)
+        self.root.after(100, self.drain)
         self.root.protocol('WM_DELETE_WINDOW', self.on_close)
 
     def toggle(self):
@@ -158,7 +207,7 @@ class App:
         self.poller = p
         p.start()
         self.btn.config(text='중지')
-        self.status.config(text='추적 중 (0.5초마다 갱신)')
+        self.status.config(text='추적 중 (0.1초마다 갱신)')
 
     def drain(self):
         try:
@@ -167,37 +216,46 @@ class App:
                 self.show(item)
         except queue.Empty:
             pass
-        self.root.after(200, self.drain)
+        self.root.after(100, self.drain)
 
     def show(self, item):
         if 'error' in item:
             self.status.config(text='오류: ' + item['error'])
             return
         name = self.name_var.get().strip() or '여포'
-        self_ent = item['self']
-        if self_ent is None:
+        if item['self_mon'] is None:
             self.line1.config(text='%s를 못 찾음 (게임 실행 중? 이름 확인)' % name)
-            self.line3.config(text='')
         else:
             self.line1.config(
-                text='%s (id %d): 게임 (%d, %d)  [raw %d, %d]  %s' % (
-                    name, self_ent['id'], self_ent['gx'], self_ent['gy'],
-                    self_ent['rx'], self_ent['ry'], item['time']))
-            guards = item['guards']
-            if guards:
-                g = guards[0]
-                self.line3.config(
-                    text='가장 가까운 근위병: %s id %d (게임 %d,%d) 거리 %.0f (총 %d마리)' % (
-                        g['name'], g['id'], g['gx'], g['gy'], g['dist'], len(guards)))
-            else:
-                self.line3.config(text='근위병 없음')
+                text='%s (id %s): 모니터 (%d, %d)  [%s]  %s' % (
+                    name, item['self_id'], item['self_mon'][0],
+                    item['self_mon'][1], item['self_mon_src'], item['time']))
         wc = item['win_center']
         mc = item['mon_center']
+        calib_txt = '캘리브레이션 있음' if item['calib'] else '캘리브레이션 없음'
         if wc is None:
-            self.line2.config(text='게임 창 중심: 못 찾음 (모니터 중심 %d,%d로 폴백)' % mc)
+            self.line2.config(text='게임 창 중심: 못 찾음 (모니터 중심 %d,%d)  |  %s' % (
+                mc[0], mc[1], calib_txt))
         else:
-            self.line2.config(text='게임 창 중심: %d,%d  |  모니터 중심: %d,%d' % (
-                wc[0], wc[1], mc[0], mc[1]))
+            self.line2.config(text='게임 창 중심: %d,%d  |  모니터 중심: %d,%d  |  %s' % (
+                wc[0], wc[1], mc[0], mc[1], calib_txt))
+        self.listbox.delete(0, 'end')
+        guards = item['guards']
+        if not guards:
+            self.listbox.insert('end', '근위병 없음')
+        elif item['self_mon'] is None:
+            for g in guards:
+                self.listbox.insert('end', '%s id %d (self 없음)' % (g['name'], g['id']))
+        elif item['calib']:
+            for i, g in enumerate(guards, 1):
+                self.listbox.insert(
+                    'end', '#%d %s id %d: 모니터 (%d, %d)' % (
+                        i, g['name'], g['id'], g['mon'][0], g['mon'][1]))
+        else:
+            for i, g in enumerate(guards, 1):
+                self.listbox.insert(
+                    'end', '#%d %s id %d: 방향 (%.2f, %.2f)' % (
+                        i, g['name'], g['id'], g['dir'][0], g['dir'][1]))
 
     def on_close(self):
         if self.poller is not None:
