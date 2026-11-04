@@ -5,8 +5,10 @@
 # 여러 사람이 쓸 수 있게, 캐릭터명을 입력받아 그 캐릭터를 self 기준으로 삼는다.
 #
 # 동작: 엔티티 테이블 스캔 -> 입력한 캐릭터명으로 self 찾기 -> 근위병 3종 중
-#   self에게 가장 가까운 몹 선택 -> 게임 좌표를 화면 픽셀로 변환(캘리브레이션)
-#   -> 휠클릭(턴언데드) -> 반복 (좌클릭 없음 — 휠클릭만으로 시전)
+#   self에게 가장 가까운 (살아있는) 몹 선택 -> 게임 좌표를 화면 픽셀로 변환(캘리브레이션)
+#   -> 목표 위치 기준 근접 순서 휠클릭(중심부터 바깥으로, 턴언데드) -> 죽음 확인
+#   (시전 후 타겟 재스캔: 사라짐 or hp 0이면 사망, hp>0이면 생존·재시도) -> 반복
+#   (좌클릭 없음 — 휠클릭만으로 시전)
 #
 # 사용 순서 (게임 실행 중, 게임과 같은 권한(관리자)으로 실행할 것):
 #   1. 캐릭터명 입력 (기본값 여포 — 자기 캐릭터명으로 바꿀 것) -> "연결" 클릭
@@ -27,8 +29,10 @@
 #   - F9는 게임에서 쓰는 키와 겹치면 안 된다. 겹치면 아래 CALIB_HOTKEY를 바꿀 것.
 #   - 게임 창이 맨 앞에 있을 때만 클릭이 게임에 닿는다. 시작 전에 게임 창을 포커스할 것.
 #   - 클릭 방식이라, 캘리브레이션이 틀리면 엉뚱한 곳을 클릭한다. 시작 전 오차를 확인할 것.
-#   - 길2(내부 함수 호출)로 바꾸는 건 힐 함수 사냥이 끝나면 그때. 그때는 act() 안의
-#     휠클릭 부분을 함수 호출로 교체하면 된다.
+#   - 길2(내부 함수 호출)로 바꾸는 건 힐 함수 사냥이 끝나면 그때. 그때는 _act() 안의
+#     _wheel_spread 부분을 함수 호출로 교체하면 된다.
+#   - 죽음 판정(hp 0·사라짐)은 아직 실측 검증 전이다. 몹 hp가 0이 되는지,
+#     아니면 목록에서 사라지는지 게임에서 직접 확인하고 확정할 것. (2026-11-05)
 #   - 메모리 읽기는 읽기 전용이다. 쓰기는 하지 않는다.
 #
 # Windows 전용 (memread, pyautogui, keyboard, tkinter 필요 — main.py와 같은 환경).
@@ -70,6 +74,10 @@ CLICK_JITTER = 8
 CLICK_DELAY = (0.04, 0.13)
 AFTER_CAST_DELAY = 2.0
 LOOP_DELAY = 1.0
+SPREAD_STEP = 14        # 근접 클릭 간격(px). 중심에서 한 칸씩.
+SPREAD_RINGS = 1      # 1이면 3x3=9개 위치 (중심 + 8곳). 0이면 중심만 (구 동작).
+SPREAD_DELAY = 0.25   # 근접 클릭 사이 간격(초). 너무 빠르면 게임이 못 따라감.
+DEATH_CHECK_DELAY = 0.8  # 시전 후 죽음 확인 재스캔까지 대기(초)
 
 
 # ---------------- 좌표·캘리브레이션 (순수 계산, numpy 불필요) ----------------
@@ -268,7 +276,8 @@ class Scanner(object):
         for o in objs:
             gx, gy = raw_to_game(o['x'], o['y'])
             ent = {'id': o['id'], 'ptr': o['ptr'], 'gx': gx, 'gy': gy,
-                   'name': o.get('name')}
+                   'name': o.get('name'), 'hp': o.get('hp'),
+                   'hp_max': o.get('hp_max'), 'type': o.get('type')}
             if o.get('name'):
                 names.add(o['name'])
             if o.get('name') == char_name and self_ent is None:
@@ -279,8 +288,37 @@ class Scanner(object):
             for g in guards:
                 g['dist'] = math.hypot(g['gx'] - self_ent['gx'],
                                        g['gy'] - self_ent['gy'])
-            guards.sort(key=lambda g: g['dist'])
+            # hp==0인 몹은 죽은 것으로 보고 뒤로 미룬다 (살아있는 몹 우선).
+            # hp가 None(읽기 실패)이면 살아있다고 보고 앞에 둔다.
+            guards.sort(key=lambda g: (1 if g.get('hp') == 0 else 0, g['dist']))
         return self_ent, guards, sorted(names)
+
+    def find_by_id(self, eid):
+        """테이블에서 id로 엔티티 하나를 찾는다. 없으면 None (사라짐).
+        죽음 확인용: 시전 후 타겟이 테이블에 남아있는지, hp가 0인지 본다."""
+        if self.mem is None:
+            return None
+        objs, _head, _count = self.mem.entity_table()
+        for o in objs:
+            if o['id'] == eid:
+                gx, gy = raw_to_game(o['x'], o['y'])
+                return {'id': o['id'], 'ptr': o['ptr'], 'gx': gx, 'gy': gy,
+                        'name': o.get('name'), 'hp': o.get('hp'),
+                        'hp_max': o.get('hp_max'), 'type': o.get('type')}
+        return None
+
+
+def spread_offsets(step, rings):
+    """중심부터 바깥 순서의 화면 오프셋 목록. rings=1이면 3x3=9개.
+    거리 순으로 정렬한다 (중심 0, 직교 step, 대각 step*sqrt(2)).
+    캘리브레이션 오차·몹 이동으로 중심 클릭이 빗나가도, 가까운 곳부터
+    순서대로 찍으면 맞을 확률이 올라간다."""
+    offs = []
+    for dy in range(-rings, rings + 1):
+        for dx in range(-rings, rings + 1):
+            offs.append((dx * step, dy * step))
+    offs.sort(key=lambda p: (math.hypot(p[0], p[1]), p[0], p[1]))
+    return offs
 
 
 # ---------------- 작업 스레드 ----------------
@@ -299,12 +337,21 @@ class Worker(threading.Thread):
     def log(self, msg):
         self.logq.put(msg)
 
-    def _wheel(self, x, y):
-        import random
-        gu.moveTo(x + random.randint(-CLICK_JITTER, CLICK_JITTER),
-                  y + random.randint(-CLICK_JITTER, CLICK_JITTER))
-        time.sleep(random.uniform(*CLICK_DELAY))
-        gu.click(button='middle')
+    def _wheel_spread(self, x, y):
+        """중심부터 바깥 순서로 휠클릭. 캘리브레이션 오차·몹 이동에 강하다.
+        쿨타임이 실제 시전을 걸러주므로, 빗나간 클릭은 해가 없다 (맞은 것만 시전됨).
+        화면 안인 위치만 찍고, 찍은 개수를 돌려준다."""
+        n = 0
+        sw, sh = gu.size()
+        for ox, oy in spread_offsets(SPREAD_STEP, SPREAD_RINGS):
+            tx, ty = x + ox, y + oy
+            if not (0 <= tx < sw and 0 <= ty < sh):
+                continue
+            gu.moveTo(tx, ty)
+            time.sleep(SPREAD_DELAY)
+            gu.click(button='middle')
+            n += 1
+        return n
 
     def _act(self, tgt, self_ent):
         dx = tgt['gx'] - self_ent['gx']
@@ -315,10 +362,11 @@ class Worker(threading.Thread):
         if not (0 <= ix < sw and 0 <= iy < sh):
             self.log('타겟 화면좌표가 화면 밖(%d,%d)이라 건너뜀: %s' % (ix, iy, tgt['name']))
             return False
-        self.log('타겟: %s id %d (게임 %d,%d -> 화면 %d,%d)' % (
-            tgt['name'], tgt['id'], tgt['gx'], tgt['gy'], ix, iy))
-        self._wheel(ix, iy)
-        self.log('턴언데드 시전(휠클릭): %s' % tgt['name'])
+        hp_txt = ('hp %s' % tgt['hp']) if tgt.get('hp') is not None else 'hp ?'
+        self.log('타겟: %s id %d (게임 %d,%d -> 화면 %d,%d, %s)' % (
+            tgt['name'], tgt['id'], tgt['gx'], tgt['gy'], ix, iy, hp_txt))
+        n = self._wheel_spread(ix, iy)
+        self.log('턴언데드 시전(근접 순서 휠클릭 %d회): %s' % (n, tgt['name']))
         return True
 
     def run(self):
@@ -337,7 +385,23 @@ class Worker(threading.Thread):
                     self.stop_flag.wait(LOOP_DELAY)
                     continue
                 tgt = guards[0]
+                if tgt.get('hp') == 0:
+                    self.log('가장 가까운 근위병이 hp 0이라 죽은 것으로 보임: %s id %d (전부 hp 0이면 그래도 시도)' % (tgt['name'], tgt['id']))
                 casted = self._act(tgt, self_ent)
+                if casted:
+                    # 죽음 확인: 시전 후 잠깐 기다렸다가 타겟을 다시 찾는다.
+                    #  - 테이블에서 사라짐 -> 처치 or 범위 이탈
+                    #  - hp == 0 -> 사망 확인
+                    #  - hp > 0 -> 생존 (빗나갔거나, 한 방에 안 죽음) -> 다음 루프에서 재시도
+                    self.stop_flag.wait(DEATH_CHECK_DELAY)
+                    if not self.stop_flag.is_set():
+                        cur = self.scanner.find_by_id(tgt['id'])
+                        if cur is None:
+                            self.log('타겟 사라짐 (처치 or 범위 이탈): %s id %d' % (tgt['name'], tgt['id']))
+                        elif cur.get('hp') == 0:
+                            self.log('타겟 사망 확인 (hp 0): %s id %d' % (tgt['name'], tgt['id']))
+                        else:
+                            self.log('타겟 생존 (hp %s): %s id %d — 다음 루프에서 재시도' % (cur.get('hp'), tgt['name'], tgt['id']))
                 self.stop_flag.wait(AFTER_CAST_DELAY if casted else LOOP_DELAY)
             except Exception as e:
                 self.log('오류: %r' % (e,))
@@ -454,8 +518,9 @@ class App(object):
                 name, self_ent['id'], self_ent['gx'], self_ent['gy']))
         self.guard_list.delete(0, 'end')
         for g in guards:
-            self.guard_list.insert('end', '%s id %d (%d,%d) 거리 %.0f' % (
-                g['name'], g['id'], g['gx'], g['gy'], g.get('dist', 0)))
+            hp_txt = ('hp %s' % g['hp']) if g.get('hp') is not None else 'hp ?'
+            self.guard_list.insert('end', '%s id %d (%d,%d) 거리 %.0f %s' % (
+                g['name'], g['id'], g['gx'], g['gy'], g.get('dist', 0), hp_txt))
         if self.worker is not None:
             with self.worker.latest_lock:
                 self.worker.latest = (self_ent, guards)
