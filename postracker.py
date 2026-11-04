@@ -25,6 +25,9 @@
 # 아핀을 계산해, 이후 모니터 위치를 스케일 추정치가 아닌 아핀으로 표시한다.
 # (turnundead_mem의 calib.json과는 별개 파일이라, 그쪽 캘리브레이션은 건드리지 않는다.)
 # F9는 keyboard 모듈의 전역 훅 (게임 창에 포커스가 있어도 동작). 없으면 pip install keyboard.
+# 허수아비 fit은 퍼짐 게이트를 완화한다 (λmax 25.0 → 2.0): 허수아비는 한 곳에
+# 몰려 있어 25를 못 넘기지만, 움직이지 않아 클릭이 정밀하고 클릭 대상이 self
+# 근처라 LOO 30px 검사만으로 충분하다. turnundead_mem의 근위병 fit은 그대로.
 
 import json
 import math
@@ -46,9 +49,10 @@ except Exception:
 import memread as mr
 from turnundead_mem import (
     CALIB_FILE,
+    LOO_MAX_ERR,
     TARGET_NAMES,
     apply_affine,
-    fit_affine,
+    fit_affine_nocheck,
     game_window_center,
     load_calib,
     raw_to_game,
@@ -65,13 +69,68 @@ SC_CALIB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 SC_CALIB_HOTKEY = 'f9'  # 허수아비 캘리브레이션 포인트 추가 키 (turnundead_mem F9와 동일).
 
 
+SC_SPREAD_MIN = 2.0  # 허수아비 캘리브레이션용 퍼짐 하한 (게임단위 공분산 λmax).
+# 허수아비는 한 곳에 몰려 있어 λmax가 ~7.6 수준이라, 근위병용 25.0 게이트로는
+# 아무리 정확히 찍어도 탈락한다. 허수아비는 움직이지 않아 클릭이 정밀하고,
+# 클릭 대상이 self 근처라 외삽 오차가 작으니, 퍼짐 게이트를 완화하고
+# LOO 30px(정확도 검사)를 주 게이트로 쓴다.
+
+
+def fit_affine_sc(points):
+    """허수아비용 아핀 fit. fit_affine과 동일하나 퍼짐 게이트만 완화한다.
+    돌려주는 것: (a, b, c, d, e, f, 평균오차px, LOO오차px) 또는 None.
+    None인 경우: 3개 미만 / 공선·특이행렬 / 퍼짐 극히 부족(λmax < 2.0) /
+    LOO 오차 초과. 실제 풀이는 fit_affine_nocheck에 위임한다."""
+    if len(points) < 3:
+        return None
+    n = len(points)
+    mx = sum(p[0] for p in points) / n
+    my = sum(p[1] for p in points) / n
+    vxx = sum((p[0] - mx) ** 2 for p in points) / n
+    vyy = sum((p[1] - my) ** 2 for p in points) / n
+    vxy = sum((p[0] - mx) * (p[1] - my) for p in points) / n
+    tr = vxx + vyy
+    det = vxx * vyy - vxy * vxy
+    disc = max(0.0, tr * tr / 4.0 - det)
+    lam_max = tr / 2.0 + math.sqrt(disc)
+    lam_min = tr / 2.0 - math.sqrt(disc)
+    if lam_max < SC_SPREAD_MIN or (lam_max > 0 and lam_min / lam_max < 0.05):
+        return None
+    fit = fit_affine_nocheck(points)
+    if fit is None:
+        return None
+    a, b, c, d, e, f = fit
+    errs = []
+    for dx, dy, sx, sy in points:
+        px = a * dx + b * dy + c
+        py = d * dx + e * dy + f
+        errs.append(math.hypot(px - sx, py - sy))
+    mean_err = sum(errs) / len(errs)
+    loo_errs = []
+    for i in range(len(points)):
+        sub = points[:i] + points[i + 1:]
+        if len(sub) < 3:
+            continue
+        sub_fit = fit_affine_nocheck(sub)
+        if sub_fit is None:
+            return None
+        dx, dy, sx, sy = points[i]
+        px = sub_fit[0] * dx + sub_fit[1] * dy + sub_fit[2]
+        py = sub_fit[3] * dx + sub_fit[4] * dy + sub_fit[5]
+        loo_errs.append(math.hypot(px - sx, py - sy))
+    loo_err = sum(loo_errs) / len(loo_errs) if loo_errs else 0.0
+    if loo_err > LOO_MAX_ERR:
+        return None
+    return (a, b, c, d, e, f, mean_err, loo_err)
+
+
 def load_sc_calib():
     try:
         with open(SC_CALIB_FILE, 'r', encoding='utf-8') as fh:
             data = json.load(fh)
         pts = [(float(p[0]), float(p[1]), float(p[2]), float(p[3]))
                for p in data.get('points', [])]
-        return pts, fit_affine(pts)
+        return pts, fit_affine_sc(pts)
     except Exception:
         return [], None
 
@@ -486,7 +545,7 @@ class App:
         dx = tgt['gx'] - self_ent['gx']
         dy = tgt['gy'] - self_ent['gy']
         self.sc_points.append((float(dx), float(dy), float(mx), float(my)))
-        self.sc_fit = fit_affine(self.sc_points)
+        self.sc_fit = fit_affine_sc(self.sc_points)
         try:
             save_sc_calib(self.sc_points)
         except Exception as e:
