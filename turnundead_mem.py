@@ -6,7 +6,7 @@
 #
 # 동작: 엔티티 테이블 스캔 -> 입력한 캐릭터명으로 self 찾기 -> 근위병 3종 중
 #   self에게 가장 가까운 몹 선택 -> 게임 좌표를 화면 픽셀로 변환(캘리브레이션)
-#   -> 좌클릭(타겟) -> 같은 위치 휠클릭(턴언데드) -> 반복
+#   -> 휠클릭(턴언데드) -> 반복 (좌클릭 없음 — 휠클릭만으로 시전)
 #
 # 사용 순서 (게임 실행 중, 게임과 같은 권한(관리자)으로 실행할 것):
 #   1. 캐릭터명 입력 (기본값 여포 — 자기 캐릭터명으로 바꿀 것) -> "연결" 클릭
@@ -28,7 +28,7 @@
 #   - 게임 창이 맨 앞에 있을 때만 클릭이 게임에 닿는다. 시작 전에 게임 창을 포커스할 것.
 #   - 클릭 방식이라, 캘리브레이션이 틀리면 엉뚱한 곳을 클릭한다. 시작 전 오차를 확인할 것.
 #   - 길2(내부 함수 호출)로 바꾸는 건 힐 함수 사냥이 끝나면 그때. 그때는 act() 안의
-#     클릭/휠클릭 부분을 함수 호출로 교체하면 된다.
+#     휠클릭 부분을 함수 호출로 교체하면 된다.
 #   - 메모리 읽기는 읽기 전용이다. 쓰기는 하지 않는다.
 #
 # Windows 전용 (memread, pyautogui, keyboard, tkinter 필요 — main.py와 같은 환경).
@@ -65,11 +65,9 @@ TARGET_NAMES = [
 CALIB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'calib.json')
 CALIB_HOTKEY = 'F9'        # 캘리브레이션 포인트 추가 키. 게임에서 쓰는 키면 바꿀 것.
 MIN_CALIB_POINTS = 3       # 최소 포인트 수 (3개 미만이면 시작 불가)
-SKILL_FIRST_DEFAULT = False  # True면 휠클릭 -> 좌클릭 순서
 
 CLICK_JITTER = 8
 CLICK_DELAY = (0.04, 0.13)
-CAST_DELAY = 0.5
 AFTER_CAST_DELAY = 2.0
 LOOP_DELAY = 1.0
 
@@ -288,12 +286,11 @@ class Scanner(object):
 # ---------------- 작업 스레드 ----------------
 
 class Worker(threading.Thread):
-    def __init__(self, scanner, char_name, calib_coef, skill_first, logq):
+    def __init__(self, scanner, char_name, calib_coef, logq):
         super(Worker, self).__init__(daemon=True)
         self.scanner = scanner
         self.char_name = char_name
         self.coef = calib_coef
-        self.skill_first = skill_first
         self.logq = logq
         self.stop_flag = threading.Event()
         self.latest = None  # (self_ent, guards) — GUI 캘리브레이션용, lock으로 보호
@@ -301,13 +298,6 @@ class Worker(threading.Thread):
 
     def log(self, msg):
         self.logq.put(msg)
-
-    def _click(self, x, y):
-        import random
-        gu.moveTo(x + random.randint(-CLICK_JITTER, CLICK_JITTER),
-                  y + random.randint(-CLICK_JITTER, CLICK_JITTER))
-        time.sleep(random.uniform(*CLICK_DELAY))
-        gu.click()
 
     def _wheel(self, x, y):
         import random
@@ -327,14 +317,7 @@ class Worker(threading.Thread):
             return False
         self.log('타겟: %s id %d (게임 %d,%d -> 화면 %d,%d)' % (
             tgt['name'], tgt['id'], tgt['gx'], tgt['gy'], ix, iy))
-        if self.skill_first:
-            self._wheel(ix, iy)
-            time.sleep(CAST_DELAY)
-            self._click(ix, iy)
-        else:
-            self._click(ix, iy)
-            time.sleep(CAST_DELAY)
-            self._wheel(ix, iy)
+        self._wheel(ix, iy)
         self.log('턴언데드 시전(휠클릭): %s' % tgt['name'])
         return True
 
@@ -403,12 +386,9 @@ class App(object):
         self._refresh_cal_label()
 
         # 실행
-        self.skill_first_var = tk.BooleanVar(value=SKILL_FIRST_DEFAULT)
-        ttk.Checkbutton(frm, text='휠클릭 먼저 (기본: 좌클릭 -> 휠클릭)',
-                        variable=self.skill_first_var).grid(row=5, column=0, columnspan=2, sticky='w')
         self.start_btn = ttk.Button(frm, text='시작', command=self.on_start)
-        self.start_btn.grid(row=5, column=2)
-        ttk.Button(frm, text='중지', command=self.on_stop).grid(row=5, column=3)
+        self.start_btn.grid(row=5, column=0)
+        ttk.Button(frm, text='중지', command=self.on_stop).grid(row=5, column=1)
         self.status_label = ttk.Label(frm, text='대기 중')
         self.status_label.grid(row=6, column=0, columnspan=4, sticky='w', pady=4)
 
@@ -543,12 +523,10 @@ class App(object):
         if not name:
             self.log('캐릭터명을 입력할 것')
             return
-        self.worker = Worker(self.scanner, name, self.coef,
-                             self.skill_first_var.get(), self.logq)
+        self.worker = Worker(self.scanner, name, self.coef, self.logq)
         self.worker.start()
         self.status_label.config(text='실행 중')
-        self.log('시작됨 (순서: %s)' % (
-            '휠클릭->좌클릭' if self.skill_first_var.get() else '좌클릭->휠클릭'))
+        self.log('시작됨 (휠클릭만)')
 
     def on_stop(self):
         if self.worker is not None:
