@@ -10,6 +10,14 @@
 #   (시전 후 타겟 재스캔: 사라지면 사망, 남아있으면 생존·재시도. hp는 항상 0이라 못 씀) -> 반복
 #   (좌클릭 없음 — 휠클릭만으로 시전)
 #
+# 노캘리브 모드 (캘리브레이션 없이, GUI 체크박스):
+#   캘리브레이션을 안 하고, self 화면위치 = 화면 정중앙이라고 가정한다.
+#   몹 게임좌표 - self 게임좌표로 방향을 구하고, 중심에서 그 방향으로
+#   거리를 늘려가며 sweep (반경 0→150px, 방향 수직 ±12px). 스케일을 모르므로
+#   거리로 커버하고, 쿨타임이 실제 시전을 걸러준다. 캘리브레이션보다 부정확하고,
+#   self가 정중앙이 아니거나 스케일이 크게 다르면 빗나갈 수 있다.
+#   그럴 땐 NOCALIB_CENTER_OFFSET으로 중심을 보정하거나, 캘리브레이션 모드로 돌아갈 것.
+#
 # 사용 순서 (게임 실행 중, 게임과 같은 권한(관리자)으로 실행할 것):
 #   1. 캐릭터명 입력 (기본값 여포 — 자기 캐릭터명으로 바꿀 것) -> "연결" 클릭
 #   2. "새로고침"으로 주변 근위병 목록 확인 (self가 잡히는지, 근위병이 보이는지)
@@ -81,6 +89,9 @@ SPREAD_STEP = 14        # 근접 클릭 간격(px). 중심에서 한 칸씩.
 SPREAD_RINGS = 1      # 1이면 3x3=9개 위치 (중심 + 8곳). 0이면 중심만 (구 동작).
 SPREAD_DELAY = 0.25   # 근접 클릭 사이 간격(초). 너무 빠르면 게임이 못 따라감.
 DEATH_CHECK_DELAY = 0.8  # 시전 후 죽음 확인 재스캔까지 대기(초)
+NOCALIB_PERP = 12       # 노캘리브 sweep에서 방향 수직 오프셋(px). 방향 오차 보정용.
+NOCALIB_RADII = [0, 25, 50, 75, 100, 150]  # 노캘리브 sweep 거리(px). 중심부터 바깥 순서.
+NOCALIB_CENTER_OFFSET = (0, 0)  # self 화면위치 보정. self가 화면 정중앙이 아니면 (dx, dy)로 조정.
 
 
 # ---------------- 좌표·캘리브레이션 (순수 계산, numpy 불필요) ----------------
@@ -327,12 +338,13 @@ def spread_offsets(step, rings):
 # ---------------- 작업 스레드 ----------------
 
 class Worker(threading.Thread):
-    def __init__(self, scanner, char_name, calib_coef, logq):
+    def __init__(self, scanner, char_name, calib_coef, logq, nocalib=False):
         super(Worker, self).__init__(daemon=True)
         self.scanner = scanner
         self.char_name = char_name
         self.coef = calib_coef
         self.logq = logq
+        self.nocalib = nocalib
         self.stop_flag = threading.Event()
         self.latest = None  # (self_ent, guards) — GUI 캘리브레이션용, lock으로 보호
         self.latest_lock = threading.Lock()
@@ -355,6 +367,44 @@ class Worker(threading.Thread):
             gu.click(button='middle')
             n += 1
         return n
+
+    def _act_nocalib(self, tgt, self_ent):
+        """캘리브레이션 없이: self 화면위치 = 화면 정중앙으로 가정하고,
+        몹 방향으로 거리를 늘려가며 sweep한다. 스케일을 모르므로 거리로 커버한다.
+        가정: self가 화면 정중앙에 있고, 게임 x/y 스케일이 비슷하며 축이 화면과 평행하다.
+        어긋나면 NOCALIB_CENTER_OFFSET으로 중심을 보정하거나 캘리브레이션 모드로 갈 것."""
+        dx = tgt['gx'] - self_ent['gx']
+        dy = tgt['gy'] - self_ent['gy']
+        dist = math.hypot(dx, dy)
+        sw, sh = gu.size()
+        cx = sw // 2 + NOCALIB_CENTER_OFFSET[0]
+        cy = sh // 2 + NOCALIB_CENTER_OFFSET[1]
+        if dist < 1e-9:
+            self.log('타겟(노캘리브): %s id %d (self와 같은 타일, 중심만 클릭)' % (tgt['name'], tgt['id']))
+            gu.moveTo(cx, cy)
+            time.sleep(SPREAD_DELAY)
+            gu.click(button='middle')
+            self.log('턴언데드 시전(노캘리브 중심 1회): %s' % tgt['name'])
+            return True
+        ux, uy = dx / dist, dy / dist
+        px, py = -uy, ux
+        self.log('타겟(노캘리브): %s id %d (게임 %d,%d, dx %d dy %d 거리 %.0f, 중심 %d,%d, 방향 %.2f,%.2f)' % (
+            tgt['name'], tgt['id'], tgt['gx'], tgt['gy'], dx, dy, dist, cx, cy, ux, uy))
+        n = 0
+        for r in NOCALIB_RADII:
+            bx = cx + ux * r
+            by = cy + uy * r
+            for perp in (-NOCALIB_PERP, 0, NOCALIB_PERP):
+                tx = int(round(bx + px * perp))
+                ty = int(round(by + py * perp))
+                if not (0 <= tx < sw and 0 <= ty < sh):
+                    continue
+                gu.moveTo(tx, ty)
+                time.sleep(SPREAD_DELAY)
+                gu.click(button='middle')
+                n += 1
+        self.log('턴언데드 시전(노캘리브 중심+방향 sweep %d회): %s' % (n, tgt['name']))
+        return True
 
     def _act(self, tgt, self_ent):
         dx = tgt['gx'] - self_ent['gx']
@@ -388,7 +438,7 @@ class Worker(threading.Thread):
                     self.stop_flag.wait(LOOP_DELAY)
                     continue
                 tgt = guards[0]
-                casted = self._act(tgt, self_ent)
+                casted = self._act_nocalib(tgt, self_ent) if self.nocalib else self._act(tgt, self_ent)
                 if casted:
                     # 죽음 확인: 시전 후 잠깐 기다렸다가 타겟을 다시 찾는다.
                     #  hp는 근위병에서 항상 0이라 못 쓴다 (2026-11-05 확인).
@@ -446,6 +496,8 @@ class App(object):
         self.cal_label.grid(row=0, column=0, sticky='w')
         ttk.Label(cal, text='방법: 목록에서 근위병을 선택하고, 게임에서 그 몹 위에 마우스를 올린 뒤 %s를 누른다. 서로 떨어진 위치에서 3번 이상 반복.' % CALIB_HOTKEY, wraplength=520, justify='left').grid(row=1, column=0, sticky='w')
         ttk.Button(cal, text='포인트 초기화', command=self.on_clear_calib).grid(row=2, column=0, sticky='w', pady=4)
+        self.nocalib_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(cal, text='캘리브레이션 없이 시작 (중심+방향 sweep, 정확도 낮음)', variable=self.nocalib_var).grid(row=3, column=0, sticky='w')
         self._refresh_cal_label()
 
         # 실행
@@ -577,8 +629,9 @@ class App(object):
         if self.scanner.mem is None:
             self.log('먼저 연결을 눌러 게임에 붙을 것')
             return
-        if self.coef is None:
-            self.log('캘리브레이션 필요: 포인트 %d개 (최소 %d개)' % (
+        nocalib = self.nocalib_var.get()
+        if self.coef is None and not nocalib:
+            self.log('캘리브레이션 필요: 포인트 %d개 (최소 %d개) — 또는 아래 노캘리브 체크박스를 켤 것' % (
                 len(self.points), MIN_CALIB_POINTS))
             return
         if self.fit and self.fit[6] > 50:
@@ -587,10 +640,10 @@ class App(object):
         if not name:
             self.log('캐릭터명을 입력할 것')
             return
-        self.worker = Worker(self.scanner, name, self.coef, self.logq)
+        self.worker = Worker(self.scanner, name, self.coef, self.logq, nocalib=nocalib)
         self.worker.start()
         self.status_label.config(text='실행 중')
-        self.log('시작됨 (휠클릭만)')
+        self.log('시작됨 (%s)' % ('노캘리브 중심+방향 sweep' if nocalib else '휠클릭만'))
 
     def on_stop(self):
         if self.worker is not None:
