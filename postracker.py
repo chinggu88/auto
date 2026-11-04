@@ -4,11 +4,15 @@
 # 첫 줄: 내 캐릭터(기본 여포)의 모니터 위치를 실시간으로 표시한다 (게임 좌표 아님).
 #   (sweep 중심/방향이 맞는지 눈으로 확인하는 용도. 클릭은 안 한다.)
 # 아래: 게임 창 중심 vs 모니터 중심, 근위병 리스트 (모니터 위치, 가까운 순).
+#   - 움직이는 근위병: 굵은 검은색. 움직이지 않는 근위병: 회색.
+#   - '움직이는' = 최근 1초 안에 위치가 바뀐 것 (0.1초 폴링이라 한 번 스텝만으로는
+#     깜빡거려서, 움직인 뒤 1초간 굵은색을 유지한다. 첫 발견은 회색.)
 # 모니터 위치 계산:
-#   - calib.json이 있으면 turnundead_mem의 캘리브레이션(아핀)으로 게임 좌표 -> 화면 좌표 변환.
-#     (아핀은 상대 게임 좌표(몹-self) -> 절대 화면 좌표. self 화면 위치 = 아핀(0,0).)
-#   - calib.json이 없으면 정확한 몹 화면 px는 스케일을 몰라 계산 불가.
-#     self는 게임 창 중심(가정), 몹은 중심에서 방향(단위벡터)만 표시한다.
+#   - calib.json이 있으면 turnundead_mem의 캘리브레이션(아핀)으로 정확한 화면 좌표.
+#     (아핀은 상대 게임 좌표(몹-self) -> 절대 화면 좌표. self = 아핀(0,0).)
+#   - calib.json이 없으면 스케일(기본 8px/게임단위, GUI에서 조절)로 추정치 계산:
+#     몹 모니터 위치 = 게임 창 중심 + (몹 게임 좌표 - self 게임 좌표) * 스케일.
+#     추정치라 화면의 실제 몹 위치와 다를 수 있다. 스케일 값을 바꿔가며 맞춘다.
 #     F9 캘리브레이션(turnundead_mem)을 한 번 하면 정확한 모니터 위치가 나온다.
 # 폴링: 백그라운드 스레드가 0.1초마다 테이블을 읽고, GUI는 큐로 받아 표시한다.
 
@@ -18,6 +22,7 @@ import queue
 import threading
 import time
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import ttk
 
 import pyautogui as gu
@@ -33,6 +38,8 @@ from turnundead_mem import (
 )
 
 POLL_INTERVAL = 0.1  # 초. 테이블 재읽기 간격.
+MOVE_STICKY = 1.0  # 초. 움직인 뒤 굵은색을 유지하는 시간.
+DEFAULT_SCALE = 8.0  # px/게임단위. 캘리브레이션 없을 때 몹 모니터 위치 추정치용.
 
 
 class Poller(threading.Thread):
@@ -47,6 +54,9 @@ class Poller(threading.Thread):
         self.err = None
         self.coef = None
         self.calib_mtime = None
+        self.scale = DEFAULT_SCALE
+        self.prev_pos = {}  # id -> (gx, gy). 이동 판정용.
+        self.last_move = {}  # id -> 마지막으로 위치가 바뀐 시각.
 
     def attach(self):
         path, found, _tried = mr.findfile('mem.json')
@@ -93,6 +103,19 @@ class Poller(threading.Thread):
                 sw, sh = gu.size()
                 mon_center = (sw // 2, sh // 2)
                 wc = game_window_center()
+                now = time.time()
+                # 이동 판정 (id별 이전 위치와 비교, 1초간 굵은색 유지).
+                cur_ids = set()
+                for g in guards:
+                    cur_ids.add(g['id'])
+                    prev = self.prev_pos.get(g['id'])
+                    if prev is not None and prev != (g['gx'], g['gy']):
+                        self.last_move[g['id']] = now
+                    g['moved'] = (g['id'] in self.last_move and
+                                  now - self.last_move[g['id']] < MOVE_STICKY)
+                self.prev_pos = {g['id']: (g['gx'], g['gy']) for g in guards}
+                self.last_move = {i: t for i, t in self.last_move.items()
+                                  if i in cur_ids}
                 self_mon = None
                 self_mon_src = None
                 if self_ent is not None:
@@ -101,7 +124,7 @@ class Poller(threading.Thread):
                                                g['gy'] - self_ent['gy'])
                     guards.sort(key=lambda g: g['dist'])
                     if self.coef is not None:
-                        # 캘리브레이션 있음: 아핀으로 모니터 위치 계산.
+                        # 캘리브레이션 있음: 아핀으로 정확한 모니터 위치.
                         fx, fy = apply_affine(self.coef, 0, 0)
                         self_mon = (int(round(fx)), int(round(fy)))
                         self_mon_src = '캘리브레이션'
@@ -111,28 +134,26 @@ class Poller(threading.Thread):
                                 g['gx'] - self_ent['gx'],
                                 g['gy'] - self_ent['gy'])
                             g['mon'] = (int(round(mx)), int(round(my)))
-                            g['dir'] = None
+                            g['estimated'] = False
                     else:
-                        # 캘리브레이션 없음: self는 창 중심(가정), 몹은 방향만.
+                        # 캘리브레이션 없음: self는 창 중심, 몹은 스케일 추정치.
                         if wc is not None:
                             self_mon = wc
                             self_mon_src = '창 중심'
                         else:
                             self_mon = mon_center
                             self_mon_src = '모니터 중심(폴백)'
+                        cx, cy = self_mon
+                        sc = self.scale
                         for g in guards:
-                            dx = g['gx'] - self_ent['gx']
-                            dy = g['gy'] - self_ent['gy']
-                            dist = math.hypot(dx, dy)
-                            if dist < 1e-9:
-                                g['dir'] = (0.0, 0.0)
-                            else:
-                                g['dir'] = (dx / dist, dy / dist)
-                            g['mon'] = None
+                            mx = cx + (g['gx'] - self_ent['gx']) * sc
+                            my = cy + (g['gy'] - self_ent['gy']) * sc
+                            g['mon'] = (int(round(mx)), int(round(my)))
+                            g['estimated'] = True
                 else:
                     for g in guards:
                         g['mon'] = None
-                        g['dir'] = None
+                        g['estimated'] = False
                 self.outq.put({
                     'self_id': self_ent['id'] if self_ent else None,
                     'self_mon': self_mon, 'self_mon_src': self_mon_src,
@@ -160,6 +181,7 @@ class App:
         root.title('내 캐릭터 위치 실시간 추적')
         self.q = queue.Queue()
         self.poller = None
+        self.font_bold = tkfont.Font(root, weight='bold')
 
         top = ttk.Frame(root, padding=10)
         top.pack(fill='x')
@@ -169,6 +191,15 @@ class App:
         self.btn = ttk.Button(top, text='추적 시작', command=self.toggle)
         self.btn.pack(side='left', padx=4)
 
+        # 스케일 조절 (캘리브레이션 없을 때만 사용).
+        scale_row = ttk.Frame(root, padding=(10, 0))
+        scale_row.pack(fill='x')
+        ttk.Label(scale_row, text='스케일 (px/게임단위):').pack(side='left')
+        self.scale_var = tk.StringVar(value=str(DEFAULT_SCALE))
+        ttk.Entry(scale_row, textvariable=self.scale_var, width=8).pack(side='left', padx=4)
+        ttk.Button(scale_row, text='적용', command=self.apply_scale).pack(side='left')
+        ttk.Label(scale_row, text='(캘리브레이션 없을 때만 사용)').pack(side='left', padx=4)
+
         # 첫 줄: 내 캐릭터 모니터 위치 (실시간). 가장 크게.
         self.line1 = ttk.Label(root, text='추적 시작을 눌러주세요.',
                                font=('', 16, 'bold'), padding=(10, 12))
@@ -176,7 +207,7 @@ class App:
         # 둘째 줄: sweep 중심 비교용 (게임 창 중심 vs 모니터 중심 + 캘리브레이션 여부).
         self.line2 = ttk.Label(root, text='', padding=(10, 2))
         self.line2.pack(fill='x')
-        # 근위병 리스트 (모니터 위치, 가까운 순).
+        # 근위병 리스트 (모니터 위치, 가까운 순. 움직이면 굵은 검은색, 안 움직이면 회색).
         list_frame = ttk.Frame(root, padding=(10, 4))
         list_frame.pack(fill='both', expand=True)
         ttk.Label(list_frame, text='근위병 리스트 (가까운 순):').pack(anchor='w')
@@ -193,6 +224,24 @@ class App:
         self.root.after(100, self.drain)
         self.root.protocol('WM_DELETE_WINDOW', self.on_close)
 
+    def _read_scale(self):
+        try:
+            v = float(self.scale_var.get())
+            if v <= 0:
+                return None
+            return v
+        except Exception:
+            return None
+
+    def apply_scale(self):
+        v = self._read_scale()
+        if v is None:
+            self.status.config(text='스케일은 0보다 큰 숫자여야 해')
+            return
+        if self.poller is not None:
+            self.poller.scale = v
+        self.status.config(text='스케일 %.2f로 적용' % v)
+
     def toggle(self):
         if self.poller is not None:
             self.poller.stop()
@@ -201,6 +250,9 @@ class App:
             self.status.config(text='중지됨')
             return
         p = Poller(self.name_var.get().strip() or '여포', self.q)
+        v = self._read_scale()
+        if v is not None:
+            p.scale = v
         if not p.attach():
             self.status.config(text=p.err)
             return
@@ -246,16 +298,20 @@ class App:
         elif item['self_mon'] is None:
             for g in guards:
                 self.listbox.insert('end', '%s id %d (self 없음)' % (g['name'], g['id']))
-        elif item['calib']:
-            for i, g in enumerate(guards, 1):
-                self.listbox.insert(
-                    'end', '#%d %s id %d: 모니터 (%d, %d)' % (
-                        i, g['name'], g['id'], g['mon'][0], g['mon'][1]))
+                self.listbox.itemconfig('end', fg='gray')
         else:
             for i, g in enumerate(guards, 1):
-                self.listbox.insert(
-                    'end', '#%d %s id %d: 방향 (%.2f, %.2f)' % (
-                        i, g['name'], g['id'], g['dir'][0], g['dir'][1]))
+                if g.get('estimated'):
+                    txt = '#%d %s id %d: 모니터 (%d, %d) (추정)' % (
+                        i, g['name'], g['id'], g['mon'][0], g['mon'][1])
+                else:
+                    txt = '#%d %s id %d: 모니터 (%d, %d)' % (
+                        i, g['name'], g['id'], g['mon'][0], g['mon'][1])
+                self.listbox.insert('end', txt)
+                if g.get('moved'):
+                    self.listbox.itemconfig('end', fg='black', font=self.font_bold)
+                else:
+                    self.listbox.itemconfig('end', fg='gray')
 
     def on_close(self):
         if self.poller is not None:
