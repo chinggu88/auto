@@ -282,6 +282,8 @@ class Poller(threading.Thread):
                     self.latest = (self_ent, scarecrows)
                 self.outq.put({
                     'self_id': self_ent['id'] if self_ent else None,
+                    'self_gx': self_ent['gx'] if self_ent else None,
+                    'self_gy': self_ent['gy'] if self_ent else None,
                     'self_mon': self_mon, 'self_mon_src': self_mon_src,
                     'guards': guards, 'win_center': wc,
                     'mon_center': mon_center,
@@ -565,6 +567,12 @@ class App:
         name = self.name_var.get().strip() or '여포'
         if item['self_mon'] is None:
             self.line1.config(text='%s를 못 찾음 (게임 실행 중? 이름 확인)' % name)
+        elif item.get('self_gx') is not None:
+            self.line1.config(
+                text='%s (id %s): 게임 (%d, %d)  모니터 (%d, %d)  [%s]  %s' % (
+                    name, item['self_id'], item['self_gx'], item['self_gy'],
+                    item['self_mon'][0], item['self_mon'][1],
+                    item['self_mon_src'], item['time']))
         else:
             self.line1.config(
                 text='%s (id %s): 모니터 (%d, %d)  [%s]  %s' % (
