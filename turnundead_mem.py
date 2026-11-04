@@ -99,10 +99,31 @@ def _solve3(a, b):
     return [m[i][n] for i in range(n)]
 
 
+LOO_MAX_ERR = 30.0  # leave-one-out 검증 오차 상한(px). 넘으면 불안정한 fit으로 거절.
+
+
 def fit_affine(points):
     """points: (dx, dy, sx, sy) 리스트. 화면 = M*(dx,dy)+C 를 최소제곱으로 푼다.
-    돌려주는 것: (a, b, c, d, e, f, 평균오차px) 또는 None (3개 미만/공선/특이)."""
+    돌려주는 것: (a, b, c, d, e, f, 평균오차px, LOO오차px) 또는 None.
+    None인 경우: 3개 미만 / 공선·특이행렬 / 포인트가 한 곳에 몰리거나 거의
+    일직선임(퍼짐 부족) / LOO 오차 초과. 이 경우 넓게 퍼뜨려 다시 찍어야 함."""
     if len(points) < 3:
+        return None
+    # 퍼짐 검사: (dx, dy) 공분산의 고유값으로 판정한다. 주 방향 표준편차가
+    # 5 게임단위 미만이거나, 부 방향/주 방향 비율이 0.05 미만이면 한 곳에
+    # 몰렸거나 거의 일직선이라, 그 fit으로는 먼 타겟 예측이 크게 틀어진다.
+    n = len(points)
+    mx = sum(p[0] for p in points) / n
+    my = sum(p[1] for p in points) / n
+    vxx = sum((p[0] - mx) ** 2 for p in points) / n
+    vyy = sum((p[1] - my) ** 2 for p in points) / n
+    vxy = sum((p[0] - mx) * (p[1] - my) for p in points) / n
+    tr = vxx + vyy
+    det = vxx * vyy - vxy * vxy
+    disc = max(0.0, tr * tr / 4.0 - det)
+    lam_max = tr / 2.0 + math.sqrt(disc)
+    lam_min = tr / 2.0 - math.sqrt(disc)
+    if lam_max < 25.0 or (lam_max > 0 and lam_min / lam_max < 0.05):
         return None
     # 정규방정식: [sum dx*dx, sum dx*dy, sum dx; ...] * [a,b,c] = [sum dx*sx, ...]
     sxx = sxy = sx_ = syy = sy_ = n = 0
@@ -134,7 +155,55 @@ def fit_affine(points):
         px = a * dx + b * dy + c
         py = d * dx + e * dy + f
         errs.append(math.hypot(px - sx, py - sy))
-    return (a, b, c, d, e, f, sum(errs) / len(errs))
+    mean_err = sum(errs) / len(errs)
+    # leave-one-out 검증: 한 포인트씩 빼고 fit해서 그 포인트를 예측해본다.
+    # 포인트가 한 곳에 몰리거나 거의 일직선이면, 빼는 포인트에 따라 fit이 크게
+    # 흔들려 LOO 오차가 커진다. 이 경우 예측을 믿을 수 없으니 거절한다.
+    loo_errs = []
+    for i in range(len(points)):
+        sub = points[:i] + points[i + 1:]
+        if len(sub) < 3:
+            continue
+        sub_fit = fit_affine_nocheck(sub)
+        if sub_fit is None:
+            return None
+        dx, dy, sx, sy = points[i]
+        px = sub_fit[0] * dx + sub_fit[1] * dy + sub_fit[2]
+        py = sub_fit[3] * dx + sub_fit[4] * dy + sub_fit[5]
+        loo_errs.append(math.hypot(px - sx, py - sy))
+    loo_err = sum(loo_errs) / len(loo_errs) if loo_errs else 0.0
+    if loo_err > LOO_MAX_ERR:
+        return None
+    return (a, b, c, d, e, f, mean_err, loo_err)
+
+
+def fit_affine_nocheck(points):
+    """fit_affine의 LOO 검사를 뺀 버전 (LOO 내부 재귀용)."""
+    if len(points) < 3:
+        return None
+    sxx = sxy = sx_ = syy = sy_ = n = 0
+    tx = ty = 0
+    sxs = sys_ = 0
+    dxs = dys = 0
+    for dx, dy, sx, sy in points:
+        sxx += dx * dx
+        sxy += dx * dy
+        sx_ += dx
+        syy += dy * dy
+        sy_ += dy
+        n += 1
+        dxs += dx * sx
+        dys += dy * sx
+        tx += sx
+        sxs += dx * sy
+        sys_ += dy * sy
+        ty += sy
+    mat = [[sxx, sxy, sx_], [sxy, syy, sy_], [sx_, sy_, n]]
+    coef_x = _solve3(mat, [dxs, dys, tx])
+    coef_y = _solve3(mat, [sxs, sys_, ty])
+    if coef_x is None or coef_y is None:
+        return None
+    return (coef_x[0], coef_x[1], coef_x[2], coef_y[0], coef_y[1], coef_y[2])
 
 
 def apply_affine(coef, dx, dy):
@@ -370,7 +439,9 @@ class App(object):
     def _refresh_cal_label(self):
         n = len(self.points)
         if self.fit:
-            self.cal_label.config(text='포인트 %d개, 평균오차 %.1fpx (시작 가능)' % (n, self.fit[6]))
+            self.cal_label.config(text='포인트 %d개, 평균오차 %.1fpx, LOO %.1fpx (시작 가능)' % (n, self.fit[6], self.fit[7]))
+        elif n >= MIN_CALIB_POINTS:
+            self.cal_label.config(text='포인트 %d개 — 불안정 (서로 떨어진 위치에서 다시 찍을 것), 시작 불가' % n)
         else:
             self.cal_label.config(text='포인트 %d개 (최소 %d개 필요, 시작 불가)' % (n, MIN_CALIB_POINTS))
 
