@@ -605,6 +605,10 @@ class App:
                         i, g['name'], g['id'], g['mon'][0], g['mon'][1])
                 tag = 'moving' if g.get('moved') else 'still'
                 self.tree.insert('', 'end', values=(txt,), tags=(tag,))
+        # 새로고침(0.1초마다 전부 지우고 다시 그림)으로 선택이 날아가는 문제 방지:
+        # 지우기 전에 선택한 허수아비 id를 기억해뒀다가, 다시 그린 뒤 같은 id를 재선택한다.
+        sc_sel = self.sc_tree.selection()
+        sc_sel_id = sc_sel[0] if sc_sel else None
         for row in self.sc_tree.get_children():
             self.sc_tree.delete(row)
         scs = item.get('scarecrows', [])
@@ -634,6 +638,13 @@ class App:
         if sc_cal is not None:
             self._refresh_sc_cal_label(sc_cal['n'], sc_cal.get('mean'),
                                        sc_cal.get('loo'), sc_cal.get('fitted'))
+        if sc_sel_id is not None:
+            try:
+                if self.sc_tree.exists(sc_sel_id):
+                    self.sc_tree.selection_set(sc_sel_id)
+                    self.sc_tree.focus(sc_sel_id)
+            except Exception:
+                pass
 
     def on_close(self):
         if self.poller is not None:
