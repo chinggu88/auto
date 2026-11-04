@@ -211,12 +211,18 @@ class App:
         list_frame = ttk.Frame(root, padding=(10, 4))
         list_frame.pack(fill='both', expand=True)
         ttk.Label(list_frame, text='근위병 리스트 (가까운 순):').pack(anchor='w')
-        self.listbox = tk.Listbox(list_frame, height=10)
-        self.listbox.pack(side='left', fill='both', expand=True)
+        # Listbox는 행별 font를 지원하지 않아 (itemconfig에 -font 없음) Treeview로 교체.
+        # Treeview 태그는 행별 font/foreground를 지원한다.
+        self.tree = ttk.Treeview(list_frame, columns=('info',), show='headings', height=10)
+        self.tree.heading('info', text='이름 / id / 모니터 위치')
+        self.tree.column('info', width=520)
+        self.tree.pack(side='left', fill='both', expand=True)
         sb = ttk.Scrollbar(list_frame, orient='vertical',
-                           command=self.listbox.yview)
+                           command=self.tree.yview)
         sb.pack(side='right', fill='y')
-        self.listbox.config(yscrollcommand=sb.set)
+        self.tree.config(yscrollcommand=sb.set)
+        self.tree.tag_configure('moving', font=self.font_bold, foreground='black')
+        self.tree.tag_configure('still', foreground='gray')
         # 상태 줄.
         self.status = ttk.Label(root, text='', padding=(10, 6))
         self.status.pack(fill='x')
@@ -291,14 +297,16 @@ class App:
         else:
             self.line2.config(text='게임 창 중심: %d,%d  |  모니터 중심: %d,%d  |  %s' % (
                 wc[0], wc[1], mc[0], mc[1], calib_txt))
-        self.listbox.delete(0, 'end')
+        for row in self.tree.get_children():
+            self.tree.delete(row)
         guards = item['guards']
         if not guards:
-            self.listbox.insert('end', '근위병 없음')
+            self.tree.insert('', 'end', values=('근위병 없음',), tags=('still',))
         elif item['self_mon'] is None:
             for g in guards:
-                self.listbox.insert('end', '%s id %d (self 없음)' % (g['name'], g['id']))
-                self.listbox.itemconfig('end', fg='gray')
+                self.tree.insert('', 'end',
+                                values=('%s id %d (self 없음)' % (g['name'], g['id']),),
+                                tags=('still',))
         else:
             for i, g in enumerate(guards, 1):
                 if g.get('estimated'):
@@ -307,11 +315,8 @@ class App:
                 else:
                     txt = '#%d %s id %d: 모니터 (%d, %d)' % (
                         i, g['name'], g['id'], g['mon'][0], g['mon'][1])
-                self.listbox.insert('end', txt)
-                if g.get('moved'):
-                    self.listbox.itemconfig('end', fg='black', font=self.font_bold)
-                else:
-                    self.listbox.itemconfig('end', fg='gray')
+                tag = 'moving' if g.get('moved') else 'still'
+                self.tree.insert('', 'end', values=(txt,), tags=(tag,))
 
     def on_close(self):
         if self.poller is not None:
