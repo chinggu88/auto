@@ -15,6 +15,9 @@
 #     추정치라 화면의 실제 몹 위치와 다를 수 있다. 스케일 값을 바꿔가며 맞춘다.
 #     F9 캘리브레이션(turnundead_mem)을 한 번 하면 정확한 모니터 위치가 나온다.
 # 폴링: 백그라운드 스레드가 0.1초마다 테이블을 읽고, GUI는 큐로 받아 표시한다.
+# 휠클릭 (체크박스로 켤 것, 기본 꺼짐): 움직이는 몹 중 게임 거리 10 이하인 것을
+# 가까운 순으로, 2초 쿨타임마다 1마리씩 모니터 위치에 휠클릭한다.
+# 클릭 위치는 calib이 있으면 정확한 아핀 위치, 없으면 스케일 추정치다.
 
 import math
 import os
@@ -40,6 +43,8 @@ from turnundead_mem import (
 POLL_INTERVAL = 0.1  # 초. 테이블 재읽기 간격.
 MOVE_STICKY = 1.0  # 초. 움직인 뒤 굵은색을 유지하는 시간.
 DEFAULT_SCALE = 8.0  # px/게임단위. 캘리브레이션 없을 때 몹 모니터 위치 추정치용.
+CLICK_DIST_MAX = 10  # 게임 거리. 이 이하의 움직이는 몹만 휠클릭한다.
+CLICK_COOLDOWN = 2.0  # 초. 휠클릭 간격 (스킬 쿨타임 고려, 한 번에 가장 가까운 1마리만).
 
 
 class Poller(threading.Thread):
@@ -55,6 +60,8 @@ class Poller(threading.Thread):
         self.coef = None
         self.calib_mtime = None
         self.scale = DEFAULT_SCALE
+        self.click_enabled = False  # GUI 휠클릭 체크박스로 켠다.
+        self.last_click = 0.0
         self.prev_pos = {}  # id -> (gx, gy). 이동 판정용.
         self.last_move = {}  # id -> 마지막으로 위치가 바뀐 시각.
 
@@ -154,12 +161,30 @@ class Poller(threading.Thread):
                     for g in guards:
                         g['mon'] = None
                         g['estimated'] = False
+                # 휠클릭: 켜져 있을 때만, 쿨타임마다 가장 가까운 대상 1마리.
+                # 대상 = 움직이는 몹 + 게임 거리 10 이하 + 모니터 위치 있음. 가까운 순 정렬됨.
+                clicked = None
+                if (self.click_enabled and self_ent is not None and
+                        now - self.last_click >= CLICK_COOLDOWN):
+                    for g in guards:
+                        if (g.get('moved') and g.get('dist', 999) <= CLICK_DIST_MAX
+                                and g.get('mon') is not None):
+                            try:
+                                gu.moveTo(g['mon'][0], g['mon'][1])
+                                gu.click(button='middle')
+                                self.last_click = now
+                                clicked = {'name': g['name'], 'id': g['id'],
+                                           'mon': g['mon']}
+                            except Exception:
+                                pass
+                            break
                 self.outq.put({
                     'self_id': self_ent['id'] if self_ent else None,
                     'self_mon': self_mon, 'self_mon_src': self_mon_src,
                     'guards': guards, 'win_center': wc,
                     'mon_center': mon_center,
                     'calib': self.coef is not None,
+                    'clicked': clicked,
                     'time': time.strftime('%H:%M:%S')})
             except Exception as e:
                 self.outq.put({'error': str(e)})
@@ -200,6 +225,13 @@ class App:
         ttk.Button(scale_row, text='적용', command=self.apply_scale).pack(side='left')
         ttk.Label(scale_row, text='(캘리브레이션 없을 때만 사용)').pack(side='left', padx=4)
 
+        # 휠클릭 켜기 (기본 꺼짐. 켜면 움직이는 몹 + 거리 10 이하를 가까운 순으로 클릭).
+        click_row = ttk.Frame(root, padding=(10, 0))
+        click_row.pack(fill='x')
+        self.click_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(click_row, text='휠클릭 켜기 (움직이는 몹, 거리 10 이하, 가까운 순)',
+                        variable=self.click_var, command=self.on_click_toggle).pack(side='left')
+
         # 첫 줄: 내 캐릭터 모니터 위치 (실시간). 가장 크게.
         self.line1 = ttk.Label(root, text='추적 시작을 눌러주세요.',
                                font=('', 16, 'bold'), padding=(10, 12))
@@ -223,6 +255,9 @@ class App:
         self.tree.config(yscrollcommand=sb.set)
         self.tree.tag_configure('moving', font=self.font_bold, foreground='black')
         self.tree.tag_configure('still', foreground='gray')
+        # 마지막 휠클릭 표시.
+        self.click_label = ttk.Label(root, text='', padding=(10, 2))
+        self.click_label.pack(fill='x')
         # 상태 줄.
         self.status = ttk.Label(root, text='', padding=(10, 6))
         self.status.pack(fill='x')
@@ -248,6 +283,12 @@ class App:
             self.poller.scale = v
         self.status.config(text='스케일 %.2f로 적용' % v)
 
+    def on_click_toggle(self):
+        if self.poller is not None:
+            self.poller.click_enabled = self.click_var.get()
+        if not self.click_var.get():
+            self.click_label.config(text='휠클릭 꺼짐')
+
     def toggle(self):
         if self.poller is not None:
             self.poller.stop()
@@ -263,6 +304,7 @@ class App:
             self.status.config(text=p.err)
             return
         self.poller = p
+        p.click_enabled = self.click_var.get()
         p.start()
         self.btn.config(text='중지')
         self.status.config(text='추적 중 (0.1초마다 갱신)')
@@ -280,6 +322,12 @@ class App:
         if 'error' in item:
             self.status.config(text='오류: ' + item['error'])
             return
+        clicked = item.get('clicked')
+        if clicked:
+            self.click_label.config(
+                text='휠클릭: %s id %d 모니터 (%d, %d) %s' % (
+                    clicked['name'], clicked['id'],
+                    clicked['mon'][0], clicked['mon'][1], item['time']))
         name = self.name_var.get().strip() or '여포'
         if item['self_mon'] is None:
             self.line1.config(text='%s를 못 찾음 (게임 실행 중? 이름 확인)' % name)
