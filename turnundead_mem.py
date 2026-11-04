@@ -7,7 +7,7 @@
 # 동작: 엔티티 테이블 스캔 -> 입력한 캐릭터명으로 self 찾기 -> 근위병 3종 중
 #   self에게 가장 가까운 (살아있는) 몹 선택 -> 게임 좌표를 화면 픽셀로 변환(캘리브레이션)
 #   -> 목표 위치 기준 근접 순서 휠클릭(중심부터 바깥으로, 턴언데드) -> 죽음 확인
-#   (시전 후 타겟 재스캔: 사라짐 or hp 0이면 사망, hp>0이면 생존·재시도) -> 반복
+#   (시전 후 타겟 재스캔: 사라지면 사망, 남아있으면 생존·재시도. hp는 항상 0이라 못 씀) -> 반복
 #   (좌클릭 없음 — 휠클릭만으로 시전)
 #
 # 사용 순서 (게임 실행 중, 게임과 같은 권한(관리자)으로 실행할 것):
@@ -31,8 +31,11 @@
 #   - 클릭 방식이라, 캘리브레이션이 틀리면 엉뚱한 곳을 클릭한다. 시작 전 오차를 확인할 것.
 #   - 길2(내부 함수 호출)로 바꾸는 건 힐 함수 사냥이 끝나면 그때. 그때는 _act() 안의
 #     _wheel_spread 부분을 함수 호출로 교체하면 된다.
-#   - 죽음 판정(hp 0·사라짐)은 아직 실측 검증 전이다. 몹 hp가 0이 되는지,
-#     아니면 목록에서 사라지는지 게임에서 직접 확인하고 확정할 것. (2026-11-05)
+#   - 죽음 판정은 사라짐으로만 한다. hp는 근위병에서 항상 0 (2026-11-05 사용자 확인:
+#     베레스 id 7553 hp 0)이라 사망 신호가 아니다. +0x50은 몹 HP가 아닌 것으로 보인다.
+#     사라짐이 처치인지 범위 이탈인지는 게임에서 직접 확인 필요 (안 움직이고 잡았는데
+#     사라지면 처치). 다른 사망 신호(0xD0 구조체 내 사망 플래그)는 미발굴 — 필요하면
+#     살아있는 몹 전체 덤프와 비교해서 찾을 것.
 #   - 메모리 읽기는 읽기 전용이다. 쓰기는 하지 않는다.
 #
 # Windows 전용 (memread, pyautogui, keyboard, tkinter 필요 — main.py와 같은 환경).
@@ -288,14 +291,14 @@ class Scanner(object):
             for g in guards:
                 g['dist'] = math.hypot(g['gx'] - self_ent['gx'],
                                        g['gy'] - self_ent['gy'])
-            # hp==0인 몹은 죽은 것으로 보고 뒤로 미룬다 (살아있는 몹 우선).
-            # hp가 None(읽기 실패)이면 살아있다고 보고 앞에 둔다.
-            guards.sort(key=lambda g: (1 if g.get('hp') == 0 else 0, g['dist']))
+            # hp는 근위병에서 항상 0으로 나와 (2026-11-05 사용자 확인) 죽음 판정에 못 쓴다.
+            # +0x50은 몹 HP가 아닌 것으로 보인다. 죽음 판정은 사라짐으로만 한다.
+            guards.sort(key=lambda g: g['dist'])
         return self_ent, guards, sorted(names)
 
     def find_by_id(self, eid):
         """테이블에서 id로 엔티티 하나를 찾는다. 없으면 None (사라짐).
-        죽음 확인용: 시전 후 타겟이 테이블에 남아있는지, hp가 0인지 본다."""
+        죽음 확인용: 시전 후 타겟이 테이블에 남아있는지 본다 (hp는 항상 0이라 못 씀)."""
         if self.mem is None:
             return None
         objs, _head, _count = self.mem.entity_table()
@@ -385,23 +388,19 @@ class Worker(threading.Thread):
                     self.stop_flag.wait(LOOP_DELAY)
                     continue
                 tgt = guards[0]
-                if tgt.get('hp') == 0:
-                    self.log('가장 가까운 근위병이 hp 0이라 죽은 것으로 보임: %s id %d (전부 hp 0이면 그래도 시도)' % (tgt['name'], tgt['id']))
                 casted = self._act(tgt, self_ent)
                 if casted:
                     # 죽음 확인: 시전 후 잠깐 기다렸다가 타겟을 다시 찾는다.
-                    #  - 테이블에서 사라짐 -> 처치 or 범위 이탈
-                    #  - hp == 0 -> 사망 확인
-                    #  - hp > 0 -> 생존 (빗나갔거나, 한 방에 안 죽음) -> 다음 루프에서 재시도
+                    #  hp는 근위병에서 항상 0이라 못 쓴다 (2026-11-05 확인).
+                    #  - 테이블에서 사라짐 -> 처치 or 범위 이탈 (유일한 사망 신호)
+                    #  - 아직 테이블에 있음 -> 생존 (빗나갔거나, 한 방에 안 죽음) -> 다음 루프에서 재시도
                     self.stop_flag.wait(DEATH_CHECK_DELAY)
                     if not self.stop_flag.is_set():
                         cur = self.scanner.find_by_id(tgt['id'])
                         if cur is None:
                             self.log('타겟 사라짐 (처치 or 범위 이탈): %s id %d' % (tgt['name'], tgt['id']))
-                        elif cur.get('hp') == 0:
-                            self.log('타겟 사망 확인 (hp 0): %s id %d' % (tgt['name'], tgt['id']))
                         else:
-                            self.log('타겟 생존 (hp %s): %s id %d — 다음 루프에서 재시도' % (cur.get('hp'), tgt['name'], tgt['id']))
+                            self.log('타겟 생존 (테이블에 남아있음): %s id %d — 다음 루프에서 재시도' % (tgt['name'], tgt['id']))
                 self.stop_flag.wait(AFTER_CAST_DELAY if casted else LOOP_DELAY)
             except Exception as e:
                 self.log('오류: %r' % (e,))
