@@ -11,12 +11,16 @@
 #   (좌클릭 없음 — 휠클릭만으로 시전)
 #
 # 노캘리브 모드 (캘리브레이션 없이, GUI 체크박스):
-#   캘리브레이션을 안 하고, self 화면위치 = 화면 정중앙이라고 가정한다.
+#   캘리브레이션을 안 하고, self 화면위치 = 게임 창 중심으로 가정한다
+#   (모니터 중심이 아니라 게임 창 중심 — 창이 전체화면이 아닐 때 어긋남 방지.
+#   게임 창을 못 찾으면 모니터 중심으로 폴백하고 로그에 남긴다).
 #   몹 게임좌표 - self 게임좌표로 방향을 구하고, 중심에서 그 방향으로
 #   거리를 늘려가며 sweep (반경 0→150px, 방향 수직 ±12px). 스케일을 모르므로
 #   거리로 커버하고, 쿨타임이 실제 시전을 걸러준다. 캘리브레이션보다 부정확하고,
-#   self가 정중앙이 아니거나 스케일이 크게 다르면 빗나갈 수 있다.
+#   self가 창 중심이 아니거나 스케일이 크게 다르면 빗나갈 수 있다.
 #   그럴 땐 NOCALIB_CENTER_OFFSET으로 중심을 보정하거나, 캘리브레이션 모드로 돌아갈 것.
+#   움직이는 몹(스캔 사이 위치 변경)은 sweep이 느려서 도망가버리므로 중심 1회만 찍는다.
+#   고정된 몹은 전체 sweep을 한다. 이동 여부는 id별 이전 위치와 비교해서 판정한다.
 #
 # 사용 순서 (게임 실행 중, 게임과 같은 권한(관리자)으로 실행할 것):
 #   1. 캐릭터명 입력 (기본값 여포 — 자기 캐릭터명으로 바꿀 것) -> "연결" 클릭
@@ -335,6 +339,28 @@ def spread_offsets(step, rings):
     return offs
 
 
+def game_window_center():
+    """Lineage 게임 창의 중심 좌표 (x, y). 못 찾으면 None (호출자가 모니터 중심으로 폴백).
+    pyautogui의 창 목록에서 제목에 'Lineage'가 든 창을 찾는다."""
+    try:
+        wins = gu.getWindowsWithTitle('Lineage')
+    except Exception:
+        return None
+    if not wins:
+        return None
+    for w in wins:
+        try:
+            if w.title == 'Lineage Windows Client':
+                return (w.left + w.width // 2, w.top + w.height // 2)
+        except Exception:
+            continue
+    try:
+        w = wins[0]
+        return (w.left + w.width // 2, w.top + w.height // 2)
+    except Exception:
+        return None
+
+
 # ---------------- 작업 스레드 ----------------
 
 class Worker(threading.Thread):
@@ -345,6 +371,7 @@ class Worker(threading.Thread):
         self.coef = calib_coef
         self.logq = logq
         self.nocalib = nocalib
+        self.prev_pos = {}  # id -> (gx, gy). 이동 여부 판정용 (노캘리브 모드).
         self.stop_flag = threading.Event()
         self.latest = None  # (self_ent, guards) — GUI 캘리브레이션용, lock으로 보호
         self.latest_lock = threading.Lock()
@@ -368,17 +395,25 @@ class Worker(threading.Thread):
             n += 1
         return n
 
-    def _act_nocalib(self, tgt, self_ent):
-        """캘리브레이션 없이: self 화면위치 = 화면 정중앙으로 가정하고,
+    def _act_nocalib(self, tgt, self_ent, moved=False):
+        """캘리브레이션 없이: self 화면위치 = 게임 창 중심으로 가정하고,
         몹 방향으로 거리를 늘려가며 sweep한다. 스케일을 모르므로 거리로 커버한다.
-        가정: self가 화면 정중앙에 있고, 게임 x/y 스케일이 비슷하며 축이 화면과 평행하다.
-        어긋나면 NOCALIB_CENTER_OFFSET으로 중심을 보정하거나 캘리브레이션 모드로 갈 것."""
+        가정: self가 게임 창 중심에 있고, 게임 x/y 스케일이 비슷하며 축이 화면과 평행하다.
+        어긋나면 NOCALIB_CENTER_OFFSET으로 중심을 보정하거나 캘리브레이션 모드로 갈 것.
+        움직이는 몹(moved=True)은 sweep이 느려서 (4.5초) 도망가버리므로 중심 1회만 찍는다."""
         dx = tgt['gx'] - self_ent['gx']
         dy = tgt['gy'] - self_ent['gy']
         dist = math.hypot(dx, dy)
         sw, sh = gu.size()
-        cx = sw // 2 + NOCALIB_CENTER_OFFSET[0]
-        cy = sh // 2 + NOCALIB_CENTER_OFFSET[1]
+        wc = game_window_center()
+        if wc is None:
+            cx0, cy0 = sw // 2, sh // 2
+            center_src = '모니터 중심(폴백)'
+        else:
+            cx0, cy0 = wc
+            center_src = '게임 창 중심'
+        cx = cx0 + NOCALIB_CENTER_OFFSET[0]
+        cy = cy0 + NOCALIB_CENTER_OFFSET[1]
         if dist < 1e-9:
             self.log('타겟(노캘리브): %s id %d (self와 같은 타일, 중심만 클릭)' % (tgt['name'], tgt['id']))
             gu.moveTo(cx, cy)
@@ -386,10 +421,17 @@ class Worker(threading.Thread):
             gu.click(button='middle')
             self.log('턴언데드 시전(노캘리브 중심 1회): %s' % tgt['name'])
             return True
+        if moved:
+            self.log('타겟(노캘리브, 이동 중): %s id %d (%s %d,%d) — sweep 대신 중심 1회만 클릭' % (tgt['name'], tgt['id'], center_src, cx, cy))
+            gu.moveTo(cx, cy)
+            time.sleep(SPREAD_DELAY)
+            gu.click(button='middle')
+            self.log('턴언데드 시전(노캘리브 중심 1회, 이동 몹): %s' % tgt['name'])
+            return True
         ux, uy = dx / dist, dy / dist
         px, py = -uy, ux
-        self.log('타겟(노캘리브): %s id %d (게임 %d,%d, dx %d dy %d 거리 %.0f, 중심 %d,%d, 방향 %.2f,%.2f)' % (
-            tgt['name'], tgt['id'], tgt['gx'], tgt['gy'], dx, dy, dist, cx, cy, ux, uy))
+        self.log('타겟(노캘리브, 고정): %s id %d (게임 %d,%d, dx %d dy %d 거리 %.0f, %s %d,%d, 방향 %.2f,%.2f)' % (
+            tgt['name'], tgt['id'], tgt['gx'], tgt['gy'], dx, dy, dist, center_src, cx, cy, ux, uy))
         n = 0
         for r in NOCALIB_RADII:
             bx = cx + ux * r
@@ -438,7 +480,10 @@ class Worker(threading.Thread):
                     self.stop_flag.wait(LOOP_DELAY)
                     continue
                 tgt = guards[0]
-                casted = self._act_nocalib(tgt, self_ent) if self.nocalib else self._act(tgt, self_ent)
+                prev = self.prev_pos.get(tgt['id'])
+                moved = (prev is not None and prev != (tgt['gx'], tgt['gy']))
+                self.prev_pos = {g['id']: (g['gx'], g['gy']) for g in guards}
+                casted = self._act_nocalib(tgt, self_ent, moved) if self.nocalib else self._act(tgt, self_ent)
                 if casted:
                     # 죽음 확인: 시전 후 잠깐 기다렸다가 타겟을 다시 찾는다.
                     #  hp는 근위병에서 항상 0이라 못 쓴다 (2026-11-05 확인).
