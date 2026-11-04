@@ -685,6 +685,8 @@ class App(object):
             self.log('calib.json 저장 실패: %r' % (e,))
         self.log('포인트 추가: %s (dx %d, dy %d -> 화면 %d,%d), 총 %d개' % (
             tgt['name'], dx, dy, mx, my, len(self.points)))
+        if self.fit is None and len(self.points) >= MIN_CALIB_POINTS:
+            self.log('캘리브레이션 fit 불안정: 퍼짐 부족 또는 LOO 30px 초과 — 서로 떨어진 위치에서 다시 찍을 것 (포인트 초기화 후 재시도 가능)')
         self._refresh_cal_label()
 
     def on_clear_calib(self):
@@ -708,8 +710,11 @@ class App(object):
             return
         nocalib = self.nocalib_var.get()
         if self.coef is None and not nocalib:
-            self.log('캘리브레이션 필요: 포인트 %d개 (최소 %d개) — 또는 아래 노캘리브 체크박스를 켤 것' % (
-                len(self.points), MIN_CALIB_POINTS))
+            if len(self.points) >= MIN_CALIB_POINTS:
+                self.log('캘리브레이션 fit 불안정: 포인트 %d개가 있지만 fit이 안 됨 (퍼짐 부족 또는 LOO 30px 초과) — 포인트 초기화 후 서로 떨어진 위치에서 다시 찍거나, 아래 노캘리브 체크박스를 켤 것' % len(self.points))
+            else:
+                self.log('캘리브레이션 필요: 포인트 %d개 (최소 %d개) — 또는 아래 노캘리브 체크박스를 켤 것' % (
+                    len(self.points), MIN_CALIB_POINTS))
             return
         if self.fit and self.fit[6] > 50:
             self.log('경고: 캘리브레이션 평균오차가 큼 (%.1fpx). 포인트를 더 찍거나 다시 할 것' % self.fit[6])
