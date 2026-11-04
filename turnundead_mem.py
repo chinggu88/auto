@@ -21,6 +21,9 @@
 #   그럴 땐 NOCALIB_CENTER_OFFSET으로 중심을 보정하거나, 캘리브레이션 모드로 돌아갈 것.
 #   움직이는 몹(스캔 사이 위치 변경)은 sweep이 느려서 도망가버리므로 중심 1회만 찍는다.
 #   고정된 몹은 전체 sweep을 한다. 이동 여부는 id별 이전 위치와 비교해서 판정한다.
+#   고정 몹 sweep은 매 클릭 전 테이블을 재스캔해서 방향을 다시 계산한다
+#   (실시간 추적 — sweep 중 몹/self가 움직여도 클릭이 따라간다. 대신 느려진다).
+#   타겟이 재스캔에서 사라지면 sweep을 중단한다.
 #
 # 사용 순서 (게임 실행 중, 게임과 같은 권한(관리자)으로 실행할 것):
 #   1. 캐릭터명 입력 (기본값 여포 — 자기 캐릭터명으로 바꿀 것) -> "연결" 클릭
@@ -400,7 +403,8 @@ class Worker(threading.Thread):
         몹 방향으로 거리를 늘려가며 sweep한다. 스케일을 모르므로 거리로 커버한다.
         가정: self가 게임 창 중심에 있고, 게임 x/y 스케일이 비슷하며 축이 화면과 평행하다.
         어긋나면 NOCALIB_CENTER_OFFSET으로 중심을 보정하거나 캘리브레이션 모드로 갈 것.
-        움직이는 몹(moved=True)은 sweep이 느려서 (4.5초) 도망가버리므로 중심 1회만 찍는다."""
+        움직이는 몹(moved=True)은 sweep이 느려서 (4.5초) 도망가버리므로 중심 1회만 찍는다.
+        고정 몹 sweep은 매 클릭 전 테이블을 재스캔해서 방향을 다시 계산한다 (실시간 추적)."""
         dx = tgt['gx'] - self_ent['gx']
         dy = tgt['gy'] - self_ent['gy']
         dist = math.hypot(dx, dy)
@@ -432,20 +436,48 @@ class Worker(threading.Thread):
         px, py = -uy, ux
         self.log('타겟(노캘리브, 고정): %s id %d (게임 %d,%d, dx %d dy %d 거리 %.0f, %s %d,%d, 방향 %.2f,%.2f)' % (
             tgt['name'], tgt['id'], tgt['gx'], tgt['gy'], dx, dy, dist, center_src, cx, cy, ux, uy))
-        n = 0
+        # 매 클릭 전 재스캔 (실시간 추적): sweep이 4.5초나 걸려서, 그 사이 몹/self가
+        # 움직이면 스냅샷 방향이 빗나간다. 클릭마다 테이블을 새로 읽어 방향을 다시 계산한다.
+        # 타겟이 재스캔에서 사라지면 (처치/이탈) sweep을 중단하고, 메인 루프가 다음 타겟으로 간다.
+        steps = []
         for r in NOCALIB_RADII:
-            bx = cx + ux * r
-            by = cy + uy * r
             for perp in (-NOCALIB_PERP, 0, NOCALIB_PERP):
-                tx = int(round(bx + px * perp))
-                ty = int(round(by + py * perp))
-                if not (0 <= tx < sw and 0 <= ty < sh):
-                    continue
-                gu.moveTo(tx, ty)
-                time.sleep(SPREAD_DELAY)
-                gu.click(button='middle')
-                n += 1
-        self.log('턴언데드 시전(노캘리브 중심+방향 sweep %d회): %s' % (n, tgt['name']))
+                steps.append((r, perp))
+        n = 0
+        for (r, perp) in steps:
+            try:
+                fresh_self, fresh_guards, _ = self.scanner.scan(self.char_name)
+            except Exception as e:
+                self.log('재스캔 실패 (%s) — sweep 중단' % e)
+                break
+            if fresh_self is None:
+                self.log('self를 못 찾음 — sweep 중단')
+                break
+            fresh_tgt = None
+            for g in fresh_guards:
+                if g['id'] == tgt['id']:
+                    fresh_tgt = g
+                    break
+            if fresh_tgt is None:
+                self.log('타겟 사라짐 (재스캔에서 없음) — sweep 중단: %s id %d' % (tgt['name'], tgt['id']))
+                break
+            fdx = fresh_tgt['gx'] - fresh_self['gx']
+            fdy = fresh_tgt['gy'] - fresh_self['gy']
+            fdist = math.hypot(fdx, fdy)
+            if fdist < 1e-9:
+                tx, ty = cx, cy
+            else:
+                fux, fuy = fdx / fdist, fdy / fdist
+                fpx, fpy = -fuy, fux
+                tx = int(round(cx + fux * r + fpx * perp))
+                ty = int(round(cy + fuy * r + fpy * perp))
+            if not (0 <= tx < sw and 0 <= ty < sh):
+                continue
+            gu.moveTo(tx, ty)
+            time.sleep(SPREAD_DELAY)
+            gu.click(button='middle')
+            n += 1
+        self.log('턴언데드 시전(노캘리브 중심+방향 sweep %d회, 매 클릭 재스캔): %s' % (n, tgt['name']))
         return True
 
     def _act(self, tgt, self_ent):
