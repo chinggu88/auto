@@ -15,35 +15,14 @@
 # 그건 ptr이 엔티티 테이블 범위 안에 있어서 구분한다.
 # 엔티티 테이블 밖의 후보가 있으면 그게 플레이어 구조체일 가능성이 크다.
 #
+# memread.regions()/readchunks()를 쓴다 (VirtualQueryEx argtypes는 memread에 있음).
+#
 # 같은 폴더에 memread.py + mem.json이 있어야 한다.
 # 실행: python diag_findself.py
 
-import ctypes
 import struct
 
 import memread as mr
-
-# VirtualQuery용
-MEM_COMMIT = 0x1000
-PAGE_READONLY = 0x02
-PAGE_READWRITE = 0x04
-PAGE_WRITECOPY = 0x08
-PAGE_EXECUTE_READ = 0x20
-PAGE_EXECUTE_READWRITE = 0x40
-READABLE = (PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY,
-            PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE)
-
-
-class MEMORY_BASIC_INFORMATION(ctypes.Structure):
-    _fields_ = [
-        ("BaseAddress", ctypes.c_void_p),
-        ("AllocationBase", ctypes.c_void_p),
-        ("AllocationProtect", ctypes.c_ulong),
-        ("RegionSize", ctypes.c_size_t),
-        ("State", ctypes.c_ulong),
-        ("Protect", ctypes.c_ulong),
-        ("Type", ctypes.c_ulong),
-    ]
 
 
 def find_self_struct():
@@ -76,52 +55,32 @@ def find_self_struct():
     pat_x = struct.pack('<I', x_raw)
     pat_y = struct.pack('<I', y_raw)
 
-    k32 = mr.k32
-    h = mem.h
-    mbi = MEMORY_BASIC_INFORMATION()
-    addr = 0
     candidates = []
-    # 32비트 프로세스: 0x00000000 ~ 0x7FFFFFFF
-    while addr < 0x80000000:
-        ret = k32.VirtualQueryEx(mr.wt.HANDLE(h), ctypes.c_void_p(addr),
-                                 ctypes.byref(mbi), ctypes.sizeof(mbi))
-        if ret == 0:
-            break
-        base = mbi.BaseAddress
-        size = mbi.RegionSize
-        if (mbi.State == MEM_COMMIT and mbi.Protect in READABLE
-                and size > 0 and size < 0x40000000):
-            # 1MB씩 나눠서 읽기
-            off = 0
-            while off < size:
-                chunk = min(0x100000, size - off)
-                data = mr.readmem(h, base + off, chunk)
-                if data is None:
+    # 32비트 프로세스: 0x00000000 ~ 0x7FFFFFFF. 읽기 가능한 영역만 스캔.
+    for base, size in mr.regions(mem.h, writable=False, maxaddr=0x80000000):
+        if size <= 0 or size > 0x40000000:
+            continue
+        for chunk_base, data in mr.readchunks(mem.h, base, size):
+            start = 0
+            while True:
+                idx = data.find(pat_id, start)
+                if idx < 0:
                     break
-                # id 패턴 위치를 찾고 x/y 대조
-                start = 0
-                while True:
-                    idx = data.find(pat_id, start)
-                    if idx < 0:
-                        break
-                    # P = (base+off+idx) - 4  (id는 P+4에 있으므로)
-                    p = base + off + idx - 4
-                    # x/y 확인 (P+0x28, P+0x2C가 청크 안에 있어야 함)
-                    need = idx - 4 + 0x30
-                    if need <= len(data):
-                        xv = struct.unpack_from('<I', data, idx - 4 + 0x28)[0]
-                        yv = struct.unpack_from('<I', data, idx - 4 + 0x2C)[0]
-                        if xv == x_raw and yv == y_raw:
-                            candidates.append(p)
-                    start = idx + 1
-                off += chunk
-        addr = base + size
+                # P = (chunk_base+idx) - 4  (id는 P+4에 있으므로)
+                p = chunk_base + idx - 4
+                # x/y 확인 (P+0x28, P+0x2C가 청크 안에 있어야 함)
+                rel = idx - 4
+                if rel + 0x30 <= len(data):
+                    xv = struct.unpack_from('<I', data, rel + 0x28)[0]
+                    yv = struct.unpack_from('<I', data, rel + 0x2C)[0]
+                    if xv == x_raw and yv == y_raw:
+                        candidates.append(p)
+                start = idx + 1
 
     print('--- 후보 ---')
     if not candidates:
         print('후보 없음. self 구조체가 id/x/y를 이 레이아웃으로 안 들고 있거나, 스캔 범위 밖이다.')
     for p in candidates:
-        # 엔티티 테이블 범위 안에 있는지
         in_table = head <= p < head + count * 0xD0
         tag = '엔티티 테이블 안 (self 오브젝트)' if in_table else '엔티티 테이블 밖 (플레이어 구조체 후보)'
         print('P=0x%X  %s' % (p, tag))
