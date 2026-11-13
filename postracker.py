@@ -3,8 +3,10 @@
 #   (memread.py + mem.json + turnundead_mem.py가 같은 폴더에 있어야 함)
 # 첫 줄: 내 캐릭터(기본 여포)의 모니터 위치를 실시간으로 표시한다 (게임 좌표 아님).
 #   (sweep 중심/방향이 맞는지 눈으로 확인하는 용도. 휠클릭 체크박스로 클릭도 가능.)
-# 아래: 게임 창 중심 vs 모니터 중심, 근위병 리스트 (모니터 위치, 가까운 순).
-#   - 움직이는 근위병: 굵은 검은색. 움직이지 않는 근위병: 회색.
+# 아래: 게임 창 중심 vs 모니터 중심, 마법 대상 리스트 (모니터 위치, 가까운 순).
+#   - 마법 대상 = 야히의 근위병 3종(데몬/베레스/서큐버스) + 칠흑의해골 3종(돌격병/저격병/근위병).
+#     (칠흑의해골 3종은 postracker.py의 EXTRA_TARGET_NAMES에만 있음. turnundead_mem.py는 근위병 3종만.)
+#   - 움직이는 마법 대상: 굵은 검은색. 움직이지 않는 마법 대상: 회색.
 #   - '움직이는' = 최근 1초 안에 위치가 바뀐 것 (0.1초 폴링이라 한 번 스텝만으로는
 #     깜빡거려서, 움직인 뒤 1초간 굵은색을 유지한다. 첫 발견은 회색.)
 # 모니터 위치 계산:
@@ -17,6 +19,7 @@
 # 폴링: 백그라운드 스레드가 0.1초마다 테이블을 읽고, GUI는 큐로 받아 표시한다.
 # 휠클릭 (체크박스로 켤 것, 기본 꺼짐): 움직이는 몹 중 게임 거리 10 이하인 것을
 # 가까운 순으로, 0.3초마다 1마리씩 모니터 위치에 휠클릭한다.
+# 대상 = 마법 대상(근위병 3종 + 칠흑의해골 3종) 중 움직이는 몹 + 게임 거리 10 이하.
 # 클릭 위치는 calib이 있으면 정확한 아핀 위치, 없으면 스케일 추정치다.
 # 허수아비 목록: 이름에 '허수아비'가 든 엔티티를 별도 리스트로 표시
 # (게임 좌표 + 모니터 위치, 캘리브레이션 기준점용. 움직이지 않으므로 회색 고정).
@@ -57,6 +60,17 @@ from turnundead_mem import (
     load_calib,
     raw_to_game,
 )
+
+# postracker에서만 추가로 마법(턴언데드) 대상으로 삼는 몬스터 3종.
+# turnundead_mem.py의 TARGET_NAMES(야히의 근위병 3종)는 건드리지 않는다.
+# (사용자가 "칠흑의해결저격병"이라 썼는데, 앞뒤 패턴상 "칠흑의해골저격병"의 오타로 보고 해골로 넣음.
+#  실제 게임 내 이름이 다르면 알려줄 것.)
+EXTRA_TARGET_NAMES = [
+    '칠흑의해골돌격병',
+    '칠흑의해골저격병',
+    '칠흑의해골근위병',
+]
+ALL_TARGET_NAMES = TARGET_NAMES + EXTRA_TARGET_NAMES
 
 POLL_INTERVAL = 0.1  # 초. 테이블 재읽기 간격.
 MOVE_STICKY = 1.0  # 초. 움직인 뒤 굵은색을 유지하는 시간.
@@ -231,7 +245,7 @@ class Poller(threading.Thread):
                     gx, gy = raw_to_game(o['x'], o['y'])
                     if o.get('name') == self.char_name and self_ent is None:
                         self_ent = {'id': o['id'], 'gx': gx, 'gy': gy}
-                    if o.get('name') in TARGET_NAMES:
+                    if o.get('name') in ALL_TARGET_NAMES:
                         guards.append({'id': o['id'], 'gx': gx, 'gy': gy,
                                        'name': o.get('name')})
                     if o.get('name') and SCARECROW_SUBSTR in o.get('name'):
@@ -418,7 +432,7 @@ class App:
         # 근위병 리스트 (모니터 위치, 가까운 순. 움직이면 굵은 검은색, 안 움직이면 회색).
         list_frame = ttk.Frame(root, padding=(10, 4))
         list_frame.pack(fill='both', expand=True)
-        ttk.Label(list_frame, text='근위병 리스트 (가까운 순):').pack(anchor='w')
+        ttk.Label(list_frame, text='마법 대상 리스트 (가까운 순):').pack(anchor='w')
         # Listbox는 행별 font를 지원하지 않아 (itemconfig에 -font 없음) Treeview로 교체.
         # Treeview 태그는 행별 font/foreground를 지원한다.
         self.tree = ttk.Treeview(list_frame, columns=('info',), show='headings', height=10)
@@ -656,7 +670,7 @@ class App:
             self.tree.delete(row)
         guards = item['guards']
         if not guards:
-            self.tree.insert('', 'end', values=('근위병 없음',), tags=('still',))
+            self.tree.insert('', 'end', values=('마법 대상 없음',), tags=('still',))
         elif item['self_mon'] is None:
             for g in guards:
                 self.tree.insert('', 'end',
