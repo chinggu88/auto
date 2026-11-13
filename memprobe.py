@@ -13,7 +13,7 @@
 #   python memprobe.py --watch hp,mp --sec 0.5    감시 주기 바꾸기
 #   python memprobe.py --objs                     객체 목록 덤프
 #   python memprobe.py --table                    bsearch 엔티티 테이블 순회 (플레이어 객체 찾기)
-#   python memprobe.py --spells                   스킬(마법) 창 순회 - 배운 스킬의 슬롯/id/아이콘/이름
+#   python memprobe.py --spells                   스킬(마법) 창 순회 - 배운 스킬의 슬롯/id/아이콘/메모리 주소/이름
 #   python memprobe.py --objdump                   플레이어 좌표 일치 객체 전부 덤프
 #   python memprobe.py --objdump 0x12031030        그 주소의 객체 덤프
 #   python memprobe.py --findplayer                테이블 객체 안에서 현재 HP/MaxHP 쌍 찾기 (플레이어 객체 특정)

@@ -1122,7 +1122,9 @@ class Mem(object):
                     raw = readmem(self.h, nptr, 64)
                     if raw != None:
                         nm = _decode_name(raw)
-                out.append({'slot': i, 'ptr': p, 'id': sid, 'icon': icon,
+                #slot_addr = 엔트리 포인터가 들어 있는 칸, ptr = 엔트리 자체, name_ptr = 이름 문자열
+                out.append({'slot': i, 'slot_addr': win + 0x4C + i * 4, 'ptr': p,
+                            'id': sid, 'icon': icon,
                             'name': nm, 'name_ptr': nptr})
             return out, win, count
 
@@ -1133,9 +1135,11 @@ class Mem(object):
             self.log('스킬 창을 못 읽었다 - 캐릭터로 월드에 들어간 뒤에 다시 읽는다 (mem.json chains.spell_win 확인)')
             return []
         self.log('스킬 창 : 0x%X   슬롯 %s개   배운 스킬 %d개' % (win, str(count), len(out)))
+        self.log('  (칸 = 엔트리 포인터가 든 주소, 엔트리 = 스킬 객체. id 는 엔트리+0x04, 아이콘은 엔트리+0x68)')
         for s in out:
-            self.log('  슬롯 %-3d id %-5d 아이콘 %-5d %s'
+            self.log('  슬롯 %-3d id %-5d 아이콘 %-5d 칸 0x%08X  엔트리 0x%08X  이름 0x%08X  %s'
                      % (s['slot'], s['id'], s['icon'],
+                        s['slot_addr'], s['ptr'], s['name_ptr'],
                         s['name'] if s['name'] != None else '(이름 못 읽음)'))
         return out
 
