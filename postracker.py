@@ -66,6 +66,21 @@ DEFAULT_SCALE = 8.0  # px/게임단위. 캘리브레이션 없을 때 몹 모니
 CLICK_DIST_MAX = 10  # 게임 거리. 이 이하의 살아 있는 몹만 시전한다.
 CLICK_COOLDOWN = 0.3  # 초. 시전 간격 (한 번에 가장 가까운 1마리만).
 CAST_SPELL = '턴언데드'  # 시전할 마법 이름. 스킬 창 로그(--spells)에 나오는 이름과 같아야 한다 (띄어쓰기는 무시).
+# 마법 대상 = 근위병 3종 + 칠흑의해골 3종 + 오만 9층 불멸의 몹 6종.
+# 게임 화면 이름은 "칠흑의 해골 돌격병"처럼 띄어쓰기가 있고, 엔티티 테이블 이름도
+# 띄어쓰기가 있을 수 있어 양쪽 버전을 다 넣는다.
+EXTRA_TARGET_NAMES = [
+    '칠흑의 해골 돌격병', '칠흑의 해골 저격병', '칠흑의 해골 근위병',
+    '칠흑의해골돌격병', '칠흑의해골저격병', '칠흑의해골근위병',
+]
+# 오만 9층 (불멸 테마) 일반 몹 6종. 보스 불멸의 리치(분신) 오만은 제외.
+OMAN9_TARGET_NAMES = [
+    '불멸의 네크로맨서', '불멸의 해골 기사', '불멸의 해골 돌격병',
+    '불멸의 스파토이', '불멸의 해골 저격병', '불멸의 해골 근위병',
+    '불멸의네크로맨서', '불멸의해골기사', '불멸의해골돌격병',
+    '불멸의스파토이', '불멸의해골저격병', '불멸의해골근위병',
+]
+ALL_TARGET_NAMES = TARGET_NAMES + EXTRA_TARGET_NAMES + OMAN9_TARGET_NAMES
 SCARECROW_SUBSTR = '허수아비'  # 허수아비 목록: 이름에 이 문자열이 든 엔티티.
 SC_CALIB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              'scarecrow_calib.json')
@@ -236,7 +251,7 @@ class Poller(threading.Thread):
                     gx, gy = raw_to_game(o['x'], o['y'])
                     if o.get('name') == self.char_name and self_ent is None:
                         self_ent = {'id': o['id'], 'gx': gx, 'gy': gy}
-                    if o.get('name') in TARGET_NAMES:
+                    if o.get('name') in ALL_TARGET_NAMES:
                         guards.append({'id': o['id'], 'gx': gx, 'gy': gy,
                                        'name': o.get('name'), 'ptr': o.get('ptr'),
                                        'dead': o.get('dead'), 'act': o.get('act'),
@@ -437,10 +452,10 @@ class App:
         # 둘째 줄: sweep 중심 비교용 (게임 창 중심 vs 모니터 중심 + 캘리브레이션 여부).
         self.line2 = ttk.Label(root, text='', padding=(10, 2))
         self.line2.pack(fill='x')
-        # 근위병 리스트 (모니터 위치, 가까운 순. 살아 있으면 굵은 검은색, 죽었으면 회색).
+        # 마법 대상 리스트 (모니터 위치, 가까운 순. 살아 있으면 굵은 검은색, 죽었으면 회색).
         list_frame = ttk.Frame(root, padding=(10, 4))
         list_frame.pack(fill='both', expand=True)
-        ttk.Label(list_frame, text='근위병 리스트 (가까운 순):').pack(anchor='w')
+        ttk.Label(list_frame, text='마법 대상 리스트 (가까운 순):').pack(anchor='w')
         # Listbox는 행별 font를 지원하지 않아 (itemconfig에 -font 없음) Treeview로 교체.
         # Treeview 태그는 행별 font/foreground를 지원한다.
         self.tree = ttk.Treeview(list_frame, columns=('info',), show='headings', height=10)
@@ -679,7 +694,7 @@ class App:
             self.tree.delete(row)
         guards = item['guards']
         if not guards:
-            self.tree.insert('', 'end', values=('근위병 없음',), tags=('still',))
+            self.tree.insert('', 'end', values=('마법 대상 없음',), tags=('still',))
         elif item['self_mon'] is None:
             for g in guards:
                 self.tree.insert('', 'end',
