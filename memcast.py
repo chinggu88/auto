@@ -1,4 +1,5 @@
 #memcast.py - 대상 id 를 메모리에 써넣고 단축키를 눌러 마법을 시전한다.
+#누르는 키는 지정한 이름의 마법이 들어 있는 단축키 칸(F5~F12)이고, 메모리에서 찾는다.
 #memread.py 는 읽기 전용으로 남기고 쓰기는 이 파일에만 둔다.
 #쓰는 것은 spell_target 4바이트뿐이고 코드 주입은 없다.
 
@@ -16,6 +17,9 @@ PROCESS_VM_WRITE     = 0x0020
 CAST_WAIT   = 0.3    #초. 키를 누른 뒤 클라이언트가 처리할 때까지 기다리는 최대 시간
 CAST_STEP   = 0.01
 CAST_SETTLE = 0.02   #처리 감지 후 대상 값을 되돌리기 전에 두는 여유
+
+HOTKEY_N   = 8       #단축키 칸 수 (F5~F12)
+HOTKEY_LEN = 0x30    #칸 하나의 이름 바이트수
 
 #argtypes 를 안 정하면 64비트에서 핸들/주소가 조용히 잘린다 (memread.py 와 같은 이유)
 if mr.IS_WIN:
@@ -45,6 +49,17 @@ def writemem(h, addr, data):
     if not okay or put.value != len(data):
         return False
     return True
+
+
+#클라이언트의 이름 비교를 그대로 옮긴 것. a = 풀어 쓴 단축키 이름, b = 배운 마법 이름 (둘 다 bytes)
+#앞의 역슬래시 + 1바이트는 버리고, a 가 b 의 앞부분이면 같은 것으로 본다 (대소문자 구분)
+def samename(a, b):
+    if a[:1] == b'\\':
+        a = a[2:]
+    if b[:1] == b'\\':
+        b = b[2:]
+    a = a[:HOTKEY_LEN]
+    return b[:len(a)] == a
 
 
 class Caster:
@@ -78,18 +93,127 @@ class Caster:
         with self.mem.lock:
             return self.mem.resolve(spec)
 
-    #avoid = 누르면 안 되는 키 이름들 (호출한 쪽이 전역 단축키로 쓰는 키)
-    def cast(self, target_id, ent_ptr, avoid=()):
+    #주소에서 널 전까지 bytes 로 읽는다. 끝까지 못 읽으면 같은 4KiB 페이지 안의 남은 만큼만 다시 읽는다
+    def _cstr(self, addr, maxlen):
+        if addr == None or addr <= 0:
+            return None
+        raw = mr.readmem(self.mem.h, addr, maxlen)
+        if raw == None:
+            left = 0x1000 - (addr & 0xFFF)
+            if left >= maxlen:
+                return None
+            raw = mr.readmem(self.mem.h, addr, left)
+            if raw == None:
+                return None
+        cut = raw.find(b'\x00')
+        if cut >= 0:
+            raw = raw[:cut]
+        return raw
+
+    #단축키 이름의 $ 표기를 클라이언트처럼 푼다. $숫자 = 문자열 표의 n번째, $글자 = 글자 그대로
+    def _expand(self, raw):
+        out = b''
+        i   = 0
+        n   = len(raw)
+        while i < n:
+            c = raw[i:i + 1]
+            if c != b'$':
+                out += c
+                i   += 1
+                continue
+            i += 1
+            if i >= n:
+                break
+            if not (0x30 <= raw[i] <= 0x39):
+                out += raw[i:i + 1]
+                i   += 1
+                continue
+            j = i
+            while j < n and 0x30 <= raw[j] <= 0x39:
+                j += 1
+            idx = int(raw[i:j])
+            i   = j
+            if i < n and raw[i:i + 1] == b';':
+                i += 1
+            rep   = b'???'
+            count = self.mem.value('str_count')
+            base  = self.mem.value('str_table')
+            if count != None and base != None and 0 <= idx < count:
+                p = mr.readmem(self.mem.h, base + 4 * idx, 4)
+                if p != None:
+                    s = self._cstr(struct.unpack('<I', p)[0], 0x100)
+                    if s != None:
+                        rep = s
+            out += rep
+        return out
+
+    #이름이 spell 인 마법이 들어 있는 단축키 키를 찾는다. (키 or None, 못 찾은 이유)
+    def _findkey(self, spell, avoid):
+        spells, win, count = self.mem.spell_table()
+        if win == None:
+            return None, '스킬 창을 못 읽음'
+
+        ents = []
+        for e in spells:
+            raw = self._cstr(e['name_ptr'], 64)
+            if raw != None:
+                ents.append((e, raw))
+
+        def norm(s):
+            if s[:1] == '\\':
+                s = s[2:]
+            return ''.join(s.split())
+
+        want = norm(spell)
+        wanted = None
+        for e, raw in ents:
+            if e['name'] != None and norm(e['name']) == want:
+                wanted = e
+                break
+        if wanted == None:
+            return None, "배운 마법에 '%s' 없음" % spell
+
+        an = self._addr('hotkey_names')
+        af = self._addr('hotkey_flags')
+        if an == None or af == None:
+            return None, 'mem.json 단축키 체인을 못 읽음'
+        names = mr.readmem(self.mem.h, an, HOTKEY_N * HOTKEY_LEN)
+        flags = mr.readmem(self.mem.h, af, HOTKEY_N)
+        if names == None or flags == None:
+            return None, 'mem.json 단축키 체인을 못 읽음'
+
+        avoided = None
+        for idx in range(HOTKEY_N):
+            name = names[idx * HOTKEY_LEN:(idx + 1) * HOTKEY_LEN]
+            cut  = name.find(b'\x00')
+            if cut >= 0:
+                name = name[:cut]
+            if len(name) == 0 or flags[idx] != 0:
+                continue
+            exp = self._expand(name)
+            for e, raw in ents:
+                if samename(exp, raw):
+                    if e['ptr'] == wanted['ptr']:
+                        key = 'f%d' % (5 + idx)
+                        if key in avoid:
+                            if avoided == None:
+                                avoided = key
+                        else:
+                            return key, None
+                    break
+        if avoided != None:
+            return None, '다른 기능이 쓰는 키(%s)에만 등록돼 있음' % avoided.upper()
+        return None, "'%s' 이(가) 단축키(F5~F12)에 없음" % spell
+
+    #spell = 시전할 마법 이름. avoid = 누르면 안 되는 키 이름들 (호출한 쪽이 전역 단축키로 쓰는 키)
+    def cast(self, target_id, ent_ptr, spell, avoid=()):
         key = None
         if self.mem == None or self.mem.h == None:
             return {'state': 'error', 'key': key, 'msg': '게임에 안 붙음'}
 
-        sel = self.mem.value('hotkey_sel')
-        if sel == None or not (0 <= sel <= 7):
-            return {'state': 'error', 'key': key, 'msg': '선택된 단축키를 못 읽음'}
-        key = 'f%d' % (5 + sel)
-        if key in avoid:
-            return {'state': 'error', 'key': key, 'msg': '다른 기능이 쓰는 키라 누르지 않음'}
+        key, msg = self._findkey(spell, avoid)
+        if key == None:
+            return {'state': 'error', 'key': None, 'msg': msg}
 
         #키 입력이 다른 창으로 가는 것을 막는다
         if mr.frontpid() != self.mem.pid:
