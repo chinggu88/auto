@@ -71,6 +71,27 @@
       "base": "0x1FD884",
       "offsets": [0],
       "type": "u32"
+    },
+    "_cast": "memcast.py 가 쓰는 값들. spell_target 은 클라이언트의 '고정 공격마법 대상' 엔티티 id 로 0 이면 꺼짐이고, memcast 가 시전 순간에만 대상 id 를 써넣고 원래 값으로 되돌린다. hotkey_sel 은 휠로 고른 단축키 칸 0~7 (F5~F12). hotkey_time 은 단축키 처리 시각, cast_ready 는 다음 시전 가능 시각으로 시전 패킷이 나갔을 때만 바뀐다. 전부 정적 분석으로 찾은 값이라 실기 확인 전이다",
+    "spell_target": {
+      "base": "0x991DC",
+      "offsets": [],
+      "type": "u32"
+    },
+    "hotkey_sel": {
+      "base": "0xA358C",
+      "offsets": [],
+      "type": "u32"
+    },
+    "hotkey_time": {
+      "base": "0x1FD878",
+      "offsets": [],
+      "type": "u32"
+    },
+    "cast_ready": {
+      "base": "0x1FD874",
+      "offsets": [],
+      "type": "u32"
     }
   },
   "_secure": "보안 값 홀더 (2026-10-28, lin.exe+57C20). HP/MP를 평문으로 저장하지 않고 XOR + 랜덤 슬롯에 숨긴다. holder는 정적 주소(RVA), 배열 포인터·키·인덱스는 패킷마다 바뀌므로 매번 읽는다. 디코드: index=[holder] XOR xor; array=[holder+4]; key=[holder+8]; 값=([array+index*4] XOR key) & mask. 검증: MP 홀더 0x1FAA10 → 1658, HP 홀더 0x1FAA20 → 2170 (2026-10-28 실측)",

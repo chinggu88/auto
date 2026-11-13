@@ -2,7 +2,7 @@
 # 사용법: repo 폴더에서 python postracker.py
 #   (memread.py + mem.json + turnundead_mem.py가 같은 폴더에 있어야 함)
 # 첫 줄: 내 캐릭터(기본 여포)의 모니터 위치를 실시간으로 표시한다 (게임 좌표 아님).
-#   (sweep 중심/방향이 맞는지 눈으로 확인하는 용도. 휠클릭 체크박스로 클릭도 가능.)
+#   (sweep 중심/방향이 맞는지 눈으로 확인하는 용도. 마법 시전 체크박스로 시전도 가능.)
 # 아래: 게임 창 중심 vs 모니터 중심, 근위병 리스트 (모니터 위치, 가까운 순).
 #   - 움직이는 근위병: 굵은 검은색. 움직이지 않는 근위병: 회색.
 #   - '움직이는' = 최근 1초 안에 위치가 바뀐 것 (0.1초 폴링이라 한 번 스텝만으로는
@@ -15,9 +15,10 @@
 #     추정치라 화면의 실제 몹 위치와 다를 수 있다. 스케일 값을 바꿔가며 맞춘다.
 #     F9 캘리브레이션(turnundead_mem)을 한 번 하면 정확한 모니터 위치가 나온다.
 # 폴링: 백그라운드 스레드가 0.1초마다 테이블을 읽고, GUI는 큐로 받아 표시한다.
-# 휠클릭 (체크박스로 켤 것, 기본 꺼짐): 움직이는 몹 중 게임 거리 10 이하인 것을
-# 가까운 순으로, 0.3초마다 1마리씩 모니터 위치에 휠클릭한다.
-# 클릭 위치는 calib이 있으면 정확한 아핀 위치, 없으면 스케일 추정치다.
+# 마법 시전 (체크박스로 켤 것, 기본 꺼짐): 움직이는 몹 중 게임 거리 10 이하인 것을
+# 가까운 순으로, 0.3초마다 1마리씩 시전한다. 가운데 클릭 대신 대상 id 를 메모리
+# (spell_target)에 쓰고 휠로 선택해 둔 단축키(F5~F12)를 눌러 시전한다 (memcast.py).
+# 게임 창이 맨 앞이어야 한다.
 # 허수아비 목록: 이름에 '허수아비'가 든 엔티티를 별도 리스트로 표시
 # (게임 좌표 + 모니터 위치, 캘리브레이션 기준점용. 움직이지 않으므로 회색 고정).
 # 허수아비 캘리브레이션 모드: 허수아비 행 선택 → 게임에서 그 허수아비 위에 마우스 → F9.
@@ -47,6 +48,7 @@ except Exception:
     kb = None
 
 import memread as mr
+import memcast
 from turnundead_mem import (
     CALIB_FILE,
     LOO_MAX_ERR,
@@ -61,8 +63,8 @@ from turnundead_mem import (
 POLL_INTERVAL = 0.1  # 초. 테이블 재읽기 간격.
 MOVE_STICKY = 1.0  # 초. 움직인 뒤 굵은색을 유지하는 시간.
 DEFAULT_SCALE = 8.0  # px/게임단위. 캘리브레이션 없을 때 몹 모니터 위치 추정치용.
-CLICK_DIST_MAX = 10  # 게임 거리. 이 이하의 움직이는 몹만 휠클릭한다.
-CLICK_COOLDOWN = 0.3  # 초. 휠클릭 간격 (한 번에 가장 가까운 1마리만).
+CLICK_DIST_MAX = 10  # 게임 거리. 이 이하의 움직이는 몹만 시전한다.
+CLICK_COOLDOWN = 0.3  # 초. 시전 간격 (한 번에 가장 가까운 1마리만).
 SCARECROW_SUBSTR = '허수아비'  # 허수아비 목록: 이름에 이 문자열이 든 엔티티.
 SC_CALIB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              'scarecrow_calib.json')
@@ -149,6 +151,7 @@ class Poller(threading.Thread):
         self.outq = outq
         self.stop_flag = threading.Event()
         self.mem = None
+        self.caster = None
         self.err = None
         self.coef = None
         self.calib_mtime = None
@@ -160,7 +163,7 @@ class Poller(threading.Thread):
         self.latest = (None, [])
         self.latest_lock = threading.Lock()
         self.scale = DEFAULT_SCALE
-        self.click_enabled = False  # GUI 휠클릭 체크박스로 켠다.
+        self.click_enabled = False  # GUI 마법 시전 체크박스로 켠다.
         self.last_click = 0.0
         self.prev_pos = {}  # id -> (gx, gy). 이동 판정용.
         self.last_move = {}  # id -> 마지막으로 위치가 바뀐 시각.
@@ -175,6 +178,7 @@ class Poller(threading.Thread):
             self.err = '게임 붙기 실패: ' + str(self.mem.err)
             self.mem = None
             return False
+        self.caster = memcast.Caster(self.mem)
         self.err = None
         return True
 
@@ -233,7 +237,7 @@ class Poller(threading.Thread):
                         self_ent = {'id': o['id'], 'gx': gx, 'gy': gy}
                     if o.get('name') in TARGET_NAMES:
                         guards.append({'id': o['id'], 'gx': gx, 'gy': gy,
-                                       'name': o.get('name')})
+                                       'name': o.get('name'), 'ptr': o.get('ptr')})
                     if o.get('name') and SCARECROW_SUBSTR in o.get('name'):
                         scarecrows.append({'id': o['id'], 'gx': gx, 'gy': gy,
                                            'name': o.get('name')})
@@ -320,22 +324,31 @@ class Poller(threading.Thread):
                     for sc in scarecrows:
                         sc['mon'] = None
                         sc['estimated'] = False
-                # 휠클릭: 켜져 있을 때만, 쿨타임마다 가장 가까운 대상 1마리.
-                # 대상 = 움직이는 몹 + 게임 거리 10 이하 + 모니터 위치 있음. 가까운 순 정렬됨.
+                # 마법 시전: 켜져 있을 때만, 쿨타임마다 가장 가까운 대상 1마리.
+                # 대상 id 를 메모리에 쓰고 휠로 선택된 단축키(F5~F12)를 누른다. memcast.py.
+                # 대상 = 움직이는 몹 + 게임 거리 10 이하. 가까운 순 정렬됨.
                 clicked = None
                 if (self.click_enabled and self_ent is not None and
+                        self.caster is not None and
                         now - self.last_click >= CLICK_COOLDOWN):
                     for g in guards:
-                        if (g.get('moved') and g.get('dist', 999) <= CLICK_DIST_MAX
-                                and g.get('mon') is not None):
+                        if g.get('moved') and g.get('dist', 999) <= CLICK_DIST_MAX:
                             try:
-                                gu.moveTo(g['mon'][0], g['mon'][1])
-                                gu.click(button='middle')
+                                # 옛 휠클릭 방식 (모니터 위치로 이동해서 가운데 클릭)
+                                # gu.moveTo(g['mon'][0], g['mon'][1])
+                                # gu.click(button='middle')
+                                # F9 는 허수아비 캘리브레이션 전역 훅이라 누르지 않게 한다.
+                                res = self.caster.cast(g['id'], g.get('ptr'),
+                                                       avoid=(SC_CALIB_HOTKEY,))
                                 self.last_click = now
                                 clicked = {'name': g['name'], 'id': g['id'],
-                                           'mon': g['mon']}
-                            except Exception:
-                                pass
+                                           'key': res.get('key'),
+                                           'state': res.get('state'),
+                                           'msg': res.get('msg')}
+                            except Exception as e:
+                                # 실기에서 원인을 볼 수 있게 삼키지 않고 표시한다.
+                                clicked = {'name': g['name'], 'id': g['id'], 'key': None,
+                                           'state': 'error', 'msg': '오류: ' + str(e)}
                             break
                 with self.latest_lock:
                     self.latest = (self_ent, scarecrows)
@@ -359,6 +372,12 @@ class Poller(threading.Thread):
 
     def stop(self):
         self.stop_flag.set()
+        if self.caster is not None:
+            try:
+                self.caster.close()
+            except Exception:
+                pass
+            self.caster = None
         if self.mem is not None:
             try:
                 self.mem.detach()
@@ -401,11 +420,11 @@ class App:
         ttk.Button(scale_row, text='적용', command=self.apply_scale).pack(side='left')
         ttk.Label(scale_row, text='(캘리브레이션 없을 때만 사용)').pack(side='left', padx=4)
 
-        # 휠클릭 켜기 (기본 꺼짐. 켜면 움직이는 몹 + 거리 10 이하를 가까운 순으로 클릭).
+        # 마법 시전 켜기 (기본 꺼짐. 켜면 움직이는 몹 + 거리 10 이하를 가까운 순으로 시전).
         click_row = ttk.Frame(root, padding=(10, 0))
         click_row.pack(fill='x')
         self.click_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(click_row, text='휠클릭 켜기 (움직이는 몹, 거리 10 이하, 가까운 순)',
+        ttk.Checkbutton(click_row, text='마법 시전 켜기 (움직이는 몹, 거리 10 이하, 가까운 순)',
                         variable=self.click_var, command=self.on_click_toggle).pack(side='left')
 
         # 첫 줄: 내 캐릭터 모니터 위치 (실시간). 가장 크게.
@@ -459,7 +478,7 @@ class App:
         self.sc_cal_label.pack(anchor='w')
         ttk.Button(cal_frame, text='허수아비 포인트 초기화',
                    command=self.on_clear_sc_calib).pack(anchor='w')
-        # 마지막 휠클릭 표시.
+        # 마지막 시전 표시.
         self.click_label = ttk.Label(root, text='', padding=(10, 2))
         self.click_label.pack(fill='x')
         # 상태 줄.
@@ -491,7 +510,7 @@ class App:
         if self.poller is not None:
             self.poller.click_enabled = self.click_var.get()
         if not self.click_var.get():
-            self.click_label.config(text='휠클릭 꺼짐')
+            self.click_label.config(text='마법 시전 꺼짐')
 
     def _on_sc_hotkey(self):
         # 키보드 훅 스레드에서 실행됨 — tkinter를 직접 건드리지 않고 큐로 넘긴다.
@@ -620,9 +639,10 @@ class App:
         clicked = item.get('clicked')
         if clicked:
             self.click_label.config(
-                text='휠클릭: %s id %d 모니터 (%d, %d) %s' % (
+                text='시전: %s id %d [%s] %s %s' % (
                     clicked['name'], clicked['id'],
-                    clicked['mon'][0], clicked['mon'][1], item['time']))
+                    (clicked.get('key') or '-').upper(),
+                    clicked.get('msg') or '', item['time']))
         name = self.name_var.get().strip() or '여포'
         if item['self_mon'] is None:
             self.line1.config(text='%s를 못 찾음 (게임 실행 중? 이름 확인)' % name)
