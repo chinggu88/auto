@@ -38,8 +38,7 @@ TARGET_NAME_SUBSTR = '마패'  # 이름에 이 단어가 들어가면 매칭
 TARGET_CLAN_ID = 202         # 혈맹 ID(+0x44). 202 = 마패 (가설: 개이쁨 0, 씽씽 202)
 SELF_ID      = 1010177       # 실행 캐릭터(씽씽)의 id. self 찾기는 이름이 아니라 id로 한다.
 SELF_NAME    = '씽씽'        # 로그 표시용
-EXCLUDE_IDS  = {1006843}     # 타겟에서 제외할 id. 여포(1006843) — 와도 어스바인드 안 쏜다.
-CHAR_NAME  = '여포'          # (미사용) 예전 self 찾기용 이름. 지금은 SELF_ID로 찾는다.
+# (여포 제외 없음 — 모든 혈원에게 버프가 들어가야 해서 제외를 없앰)
 DIST_MAX   = 10              # 근처 거리 제한 (게임 단위). 이 안의 마패 캐릭터만 노린다.
 SCALE      = 8.0             # 캘리브레이션 없을 때만 쓰는 스케일 추정치 (px/게임단위)
 REPEAT_SEC = 0.5             # 한 바퀴 돌고 쉬는 시간(초). 타겟 재스캔 간격.
@@ -118,8 +117,6 @@ class MemScanner(object):
         for o in objs:
             if o['id'] == self_ent['id']:
                 continue  # self(씽씽) 제외
-            if o['id'] in EXCLUDE_IDS:
-                continue  # 여포 제외 — 와도 타겟 안 삼는다
             name = o.get('name')
             match_by = None
             if name and TARGET_NAME_SUBSTR in name:
@@ -196,7 +193,7 @@ def repeat():
     else:
         main.log('sweep_mem 시작 : 메모리 방식 (캘리브레이션 없음 - 스케일 추정치 %.1f 사용, 정확도 낮음, %s초 간격, 시전 간격 %s초, %s=종료)'
                  % (SCALE, REPEAT_SEC, CAST_COOLDOWN, STOP_KEY.upper()))
-    main.log('타겟 : 이름에 "%s" 포함 또는 혈맹 ID %d / 거리 %d 이하 / 실행 캐릭터 : %s(id %d) / 제외 : 여포(id 1006843)'
+    main.log('타겟 : 이름에 "%s" 포함 또는 혈맹 ID %d / 거리 %d 이하 / 실행 캐릭터 : %s(id %d)'
              % (TARGET_NAME_SUBSTR, TARGET_CLAN_ID, DIST_MAX, SELF_NAME, SELF_ID))
     last_cast = 0.0
     had_target = False
