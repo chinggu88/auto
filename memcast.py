@@ -1,5 +1,6 @@
 #memcast.py - 대상 id 를 메모리에 써넣고 단축키를 눌러 마법을 시전한다.
 #누르는 키는 지정한 이름의 마법이 들어 있는 단축키 칸(F5~F12)이고, 메모리에서 찾는다.
+#이름으로 못 찾으면 게임에서 클릭해 둔 칸을 대신 누르고, 그렇다고 msg 에 적는다.
 #memread.py 는 읽기 전용으로 남기고 쓰기는 이 파일에만 둔다.
 #쓰는 것은 spell_target 4바이트뿐이고 코드 주입은 없다.
 
@@ -157,7 +158,7 @@ class Caster:
         for e in spells:
             raw = self._cstr(e['name_ptr'], 64)
             if raw != None:
-                ents.append((e, raw))
+                ents.append((e, raw, raw.decode(self.mem.enc, 'ignore')))
 
         def norm(s):
             if s[:1] == '\\':
@@ -166,13 +167,28 @@ class Caster:
 
         want = norm(spell)
         wanted = None
-        for e, raw in ents:
-            if e['name'] != None and norm(e['name']) == want:
+        for e, raw, text in ents:
+            if norm(text) == want:
                 wanted = e
                 break
+        if wanted == None and want != '':
+            part = [(e, text) for e, raw, text in ents if want in norm(text)]
+            if len(part) == 1:
+                wanted = part[0][0]
+            elif len(part) > 1:
+                return None, "'%s' 이(가) 들어간 마법이 여러 개: %s" % (spell, ', '.join([t.strip() for e, t in part]))
         if wanted == None:
-            return None, "배운 마법에 '%s' 없음" % spell
+            shown = [text.strip() for e, raw, text in ents if text.strip() != '']
+            tail  = ''
+            if len(shown) > 0:
+                tail = ': ' + ', '.join(shown[:8])
+                if len(shown) > 8:
+                    tail += ' …'
+            return None, "배운 마법에 '%s' 없음 (읽은 마법 %d개%s)" % (spell, len(shown), tail)
 
+        chains = self.mem.cfg.get('chains') or {}
+        if chains.get('hotkey_names') == None or chains.get('hotkey_flags') == None:
+            return None, 'mem.json 에 hotkey_names/hotkey_flags 없음 (옛 mem.json)'
         an = self._addr('hotkey_names')
         af = self._addr('hotkey_flags')
         if an == None or af == None:
@@ -183,6 +199,7 @@ class Caster:
             return None, 'mem.json 단축키 체인을 못 읽음'
 
         avoided = None
+        seen    = []
         for idx in range(HOTKEY_N):
             name = names[idx * HOTKEY_LEN:(idx + 1) * HOTKEY_LEN]
             cut  = name.find(b'\x00')
@@ -191,7 +208,8 @@ class Caster:
             if len(name) == 0 or flags[idx] != 0:
                 continue
             exp = self._expand(name)
-            for e, raw in ents:
+            seen.append('F%d=%s' % (5 + idx, exp.decode(self.mem.enc, 'ignore')))
+            for e, raw, text in ents:
                 if samename(exp, raw):
                     if e['ptr'] == wanted['ptr']:
                         key = 'f%d' % (5 + idx)
@@ -203,7 +221,25 @@ class Caster:
                     break
         if avoided != None:
             return None, '다른 기능이 쓰는 키(%s)에만 등록돼 있음' % avoided.upper()
-        return None, "'%s' 이(가) 단축키(F5~F12)에 없음" % spell
+        desc = '마법 칸 없음'
+        if len(seen) > 0:
+            desc = '마법 칸: ' + ' '.join(seen)
+        return None, "'%s' 이(가) 단축키(F5~F12)에 없음 (%s)" % (spell, desc)
+
+    #게임 단축키 줄에서 클릭해 둔 칸의 키. 옛 방식이고 이름으로 못 찾았을 때만 쓴다
+    def _selkey(self, avoid):
+        sel = self.mem.value('hotkey_sel')
+        if sel == None or not 0 <= sel < HOTKEY_N:
+            return None
+        key = 'f%d' % (5 + sel)
+        if key in avoid:
+            return None
+        af = self._addr('hotkey_flags')
+        if af != None:
+            flags = mr.readmem(self.mem.h, af, HOTKEY_N)
+            if flags != None and flags[sel] != 0:
+                return None
+        return key
 
     #spell = 시전할 마법 이름. avoid = 누르면 안 되는 키 이름들 (호출한 쪽이 전역 단축키로 쓰는 키)
     def cast(self, target_id, ent_ptr, spell, avoid=()):
@@ -211,33 +247,37 @@ class Caster:
         if self.mem == None or self.mem.h == None:
             return {'state': 'error', 'key': key, 'msg': '게임에 안 붙음'}
 
+        note = ''
         key, msg = self._findkey(spell, avoid)
         if key == None:
-            return {'state': 'error', 'key': None, 'msg': msg}
+            key = self._selkey(avoid)
+            if key == None:
+                return {'state': 'error', 'key': None, 'msg': msg}
+            note = ' | 이름으로 못 찾아 선택된 칸을 누름: ' + msg
 
         #키 입력이 다른 창으로 가는 것을 막는다
         if mr.frontpid() != self.mem.pid:
-            return {'state': 'nofocus', 'key': key, 'msg': '게임 창이 맨 앞이 아님'}
+            return {'state': 'nofocus', 'key': key, 'msg': '게임 창이 맨 앞이 아님' + note}
 
         #엔티티 +0x1A 가 0 이 아니면 클라이언트가 고정 대상을 무시하고 대상 선택 모드로 들어간다
         flag = None
         if ent_ptr:
             flag = mr.readmem(self.mem.h, ent_ptr + 0x1A, 1)
         if flag == None or flag[0] != 0:
-            return {'state': 'skip', 'key': key, 'msg': '대상 상태 때문에 건너뜀'}
+            return {'state': 'skip', 'key': key, 'msg': '대상 상태 때문에 건너뜀' + note}
 
         addr = self._addr('spell_target')
         old  = self.mem.value('spell_target')
         t0   = self.mem.value('hotkey_time')
         r0   = self.mem.value('cast_ready')
         if addr == None or old == None or t0 == None or r0 == None:
-            return {'state': 'error', 'key': key, 'msg': 'mem.json 시전 체인을 못 읽음'}
+            return {'state': 'error', 'key': key, 'msg': 'mem.json 시전 체인을 못 읽음' + note}
 
         if not self._open():
-            return {'state': 'error', 'key': key, 'msg': '쓰기 권한으로 프로세스를 못 엶'}
+            return {'state': 'error', 'key': key, 'msg': '쓰기 권한으로 프로세스를 못 엶' + note}
 
         if not writemem(self.h, addr, struct.pack('<I', int(target_id) & 0xFFFFFFFF)):
-            return {'state': 'error', 'key': key, 'msg': '대상 id 쓰기 실패'}
+            return {'state': 'error', 'key': key, 'msg': '대상 id 쓰기 실패' + note}
 
         t1 = t0
         try:
@@ -255,8 +295,8 @@ class Caster:
             writemem(self.h, addr, struct.pack('<I', old))
 
         if t1 == t0:
-            return {'state': 'nokey', 'key': key, 'msg': '키 입력이 게임에 안 들어감'}
+            return {'state': 'nokey', 'key': key, 'msg': '키 입력이 게임에 안 들어감' + note}
         r1 = self.mem.value('cast_ready')
         if r1 != None and r1 != r0:
-            return {'state': 'sent', 'key': key, 'msg': '시전됨'}
-        return {'state': 'nocast', 'key': key, 'msg': '시전 안 됨 (쿨타임/사거리)'}
+            return {'state': 'sent', 'key': key, 'msg': '시전됨' + note}
+        return {'state': 'nocast', 'key': key, 'msg': '시전 안 됨 (쿨타임/사거리)' + note}
