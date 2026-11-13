@@ -1,23 +1,24 @@
 # sweep_mem.py
 #
-# sweep.py 메모리 버전 (테스트용). 이미지 매칭을 쓰지 않는다.
+# sweep.py 메모리 버전 (테스트용). 이미지 매칭을 쓰지 않는다. 마우스도 쓰지 않는다.
 #   0. 근처 유닛 중 "마패"가 들어간 캐릭터(플레이어)를 메모리에서 찾는다
-#      - 이름에 '마패' 포함 OR 혈맹 ID(+0x44) == 202 (마패 혈맹, +0x44 가설 기준)
+#      - 이름에 '마패' 포함 OR 혈맹 ID(+0x44) == 202 (마패 혈맹, 여포도 202로 실측 확인됨)
 #      - self(씽씽) 제외, 게임 거리 DIST_MAX 이하, 가까운 순으로 전부 (가장 가까운 1명만 아님)
 #   3. 이미지 스캔 없음 (제거됨)
-#   4. 타겟 위치를 구하고, 어스바인드 스킬을 그 캐릭터 위치에 사용한다
-#      - 매칭되는 혈원 전부를 순서대로(라운드 로빈) 한 명씩 휠클릭 1회로 시전.
-#        어스바인드가 휠클릭에 바인딩돼 있어야 함
-#      - 스킬 코드(DAT_005fd87c)를 메모리에서 읽어 확인하는 건 확장 예정
-#        (휠클릭 방식은 코드가 필요 없어서 지금은 안 읽음. 디스패처로 직접 부르려면 코드 필요)
-#   - 모니터 위치는 postracker.py 방식을 참조한다: 허수아비 캘리브레이션
-#     (scarecrow_calib.json, load_sc_calib) > turnundead_mem calib.json > 스케일 추정치.
-#     turnundead_mem calib.json만 쓰면 근위병 8포인트 fit 실패로 스케일 추정치로 떨어져
-#     클릭이 빗나가 "대상을 선택하십시오"가 뜬다. postracker의 허수아비 아핀이 정확하다.
+#   4. 디스패처로 어스바인드를 시전한다 (skillcast.py, 마우스 클릭 없음).
+#      - 매칭되는 혈원 전부를 순서대로(라운드 로빈) 한 명씩 디스패처로 쏜다.
+#      - 어스바인드 스킬 코드 156 (0x9C). FUN_0045e270(156, 0)을 게임 안에서 직접 호출.
+#        대상 id는 DAT_004991e0(현재 선택 타겟)에 쓰고, ECX=self 포인터로 스텁을 주입한다.
+#        패킷 "cccd" (20, 19, 4, target_id), 총 9바이트. 좌표 없이 대상 id만 보냄.
+#   - 모니터 위치(모니터 좌표)는 이제 시전에 안 쓰고 로그 표시용으로만 계산한다.
+#     (캘리브레이션은 postracker.py 방식 참조: 허수아비 캘리브레이션 > turnundead_mem calib.json > 스케일.)
 #
 # sweep.py 원본은 건드리지 않는다. 이 파일만 테스트용으로 따로 둔다.
-# 같은 폴더에 memread.py + mem.json + turnundead_mem.py + postracker.py가 있어야 한다.
+# 같은 폴더에 memread.py + mem.json + turnundead_mem.py + postracker.py + skillcast.py가 있어야 한다.
 # 실행: python sweep_mem.py
+#
+# 주의: 디스패처 호출은 인젝션(코드 주입)이라 감지 리스크가 있다. 읽기 전용 선을 넘는 방식이다.
+#   메인 스레드 컨텍스트 가설이 열려 있어 원격 스레드 호출이 실패할 수도 있다.
 
 import math
 import struct
@@ -36,12 +37,13 @@ from turnundead_mem import (
     raw_to_game,
 )
 from postracker import load_sc_calib  # postracker 방식 참조: 허수아비 캘리브레이션 우선
+from skillcast import SkillCaster, SKILL_EARTH_BIND  # 디스패처 시전 (마우스 안 씀)
 
 #=====================================================================
 # 설정 : 여기만 고치면 된다
 #=====================================================================
 TARGET_NAME_SUBSTR = '마패'  # 이름에 이 단어가 들어가면 매칭
-TARGET_CLAN_ID = 202         # 혈맹 ID(+0x44). 202 = 마패 (가설: 개이쁨 0, 씽씽 202)
+TARGET_CLAN_ID = 202         # 혈맹 ID(+0x44). 202 = 마패 (여포도 202로 실측 확인됨)
 SELF_ID      = 1010177       # 실행 캐릭터(씽씽)의 id. self 찾기는 이름이 아니라 id로 한다.
 SELF_NAME    = '씽씽'        # 로그 표시용
 # (여포 제외 없음 — 모든 혈원에게 버프가 들어가야 해서 제외를 없앰)
@@ -49,8 +51,7 @@ DIST_MAX   = 10              # 근처 거리 제한 (게임 단위). 이 안의 
 SCALE      = 8.0             # 캘리브레이션 없을 때만 쓰는 스케일 추정치 (px/게임단위)
 REPEAT_SEC = 0.5             # 한 바퀴 돌고 쉬는 시간(초). 타겟 재스캔 간격.
 CAST_COOLDOWN = 0.5          # 어스바인드 시전 간격(초). 스킬 쿨타임 고려해 너무 자주 안 쏨.
-CLICK_DY   = 0               # 클릭 지점 오프셋(px). 메모리는 몹 본체 위치를 직접 주니까 0.
-SETTLE_SEC = 0.1             # 이동 후 클릭까지 대기(초)
+CAST_TIMEOUT_MS = 2000       # 디스패처 호출 대기 한도(ms). 넘으면 실패로 보고 다음으로 넘어감.
 STOP_KEY   = 'esc'           # 이 키를 누르면 종료
 #=====================================================================
 
@@ -175,47 +176,45 @@ class MemScanner(object):
         return out
 
 
-def _safemove(x, y):
-    """마우스 이동. SetCursorPos 가 실패하면(화면 밖 좌표, 입력 차단 등)
-    pyautogui 방식(mouse_event)으로 폴백한다."""
-    sw, sh = gu.size()
-    x = max(0, min(sw - 1, int(x)))
-    y = max(0, min(sh - 1, int(y)))
-    try:
-        main._movefast(x, y)
-    except Exception as e:
-        main.log('SetCursorPos 실패(%d,%d) : %s -> pyautogui 로 폴백' % (x, y, e))
-        gu.moveTo(x, y)
-
-
-def cast_at(tgt):
-    """어스바인드 시전 : 타겟 모니터 위치에 휠(중간) 클릭 1회.
-    어스바인드가 휠클릭에 바인딩돼 있어야 한다 (postracker.py 턴언데드 방식과 같음)."""
-    tx, ty = tgt['x'], tgt['y'] + CLICK_DY
-    _safemove(tx, ty)
-    time.sleep(SETTLE_SEC)
-    gu.click(button='middle')  # postracker.py와 같은 방식
-    main.log('어스바인드 시전 : id=%s name=%s clan=%s dist=%.1f -> %d,%d (%s 매칭)'
-             % (tgt['id'], tgt['name'], tgt['clan'], tgt['dist'],
-                tx, ty, tgt['match_by']))
+def cast_at(caster, tgt):
+    """어스바인드 시전 : 디스패처로 직접 쏜다 (마우스 안 씀).
+    skillcast.SkillCaster가 대상 선택(DAT_004991e0) + FUN_0045e270(156, 0) 스텁 호출을 한다.
+    성공(True)은 스레드가 정상 종료됐다는 뜻이지, 패킷이 실제로 나갔다는 보장은 아니다.
+    게임에서 버프가 들어갔는지 별도로 확인할 것."""
+    ok = caster.cast_earth_bind(tgt['id'], timeout_ms=CAST_TIMEOUT_MS)
+    if ok:
+        main.log('어스바인드 시전(디스패처) : id=%s name=%s clan=%s dist=%.1f (모니터 %d,%d, %s 매칭)'
+                 % (tgt['id'], tgt['name'], tgt['clan'], tgt['dist'],
+                    tgt['x'], tgt['y'], tgt['match_by']))
+    else:
+        main.log('어스바인드 시전 실패 : id=%s name=%s - %s'
+                 % (tgt['id'], tgt['name'], caster.err))
+    return ok
 
 
 def repeat():
-    """0.5초 간격 반복 : 마패 혈원 재스캔 -> CAST_COOLDOWN마다 다음 혈원 1명에게 어스바인드.
-    혈원 전부를 순서대로(라운드 로빈) 돌아가면서 쏜다. 한 명만 있으면 그 한 명한테만 계속 쏜다."""
+    """0.5초 간격 반복 : 마패 혈원 재스캔 -> CAST_COOLDOWN마다 다음 혈원 1명에게 어스바인드(디스패처).
+    혈원 전부를 순서대로(라운드 로빈) 돌아가면서 쏜다. 한 명만 있으면 그 한 명한테만 계속 쏜다.
+    마우스는 쓰지 않는다."""
     sc = MemScanner()
     if not sc.attach():
         main.log('sweep_mem 시작 실패 : ' + str(sc.err))
         return
+    # 디스패처 시전용 핸들 (게임 PID로 연다). 실패하면 시작하지 않는다.
+    caster = SkillCaster(sc.mem.pid)
+    if caster.h is None:
+        main.log('sweep_mem 시작 실패 : 디스패처 핸들 열기 실패 - ' + str(caster.err))
+        sc.detach()
+        return
     if sc.calib_ok:
         calib_name = {'scarecrow': '허수아비 캘리브레이션(postracker)',
                       'turnundead': '캘리브레이션(turnundead_mem)'}[sc.calib_src]
-        main.log('sweep_mem 시작 : 메모리 방식 (%s 아핀 적용 중, %s초 간격, 시전 간격 %s초, %s=종료)'
+        main.log('sweep_mem 시작 : 디스패처 방식 (어스바인드 156, %s 아핀은 로그 표시용, %s초 간격, 시전 간격 %s초, %s=종료)'
                  % (calib_name, REPEAT_SEC, CAST_COOLDOWN, STOP_KEY.upper()))
     else:
-        main.log('sweep_mem 시작 : 메모리 방식 (캘리브레이션 없음 - 스케일 추정치 %.1f 사용, 정확도 낮음, %s초 간격, 시전 간격 %s초, %s=종료)'
+        main.log('sweep_mem 시작 : 디스패처 방식 (어스바인드 156, 캘리브레이션 없음 - 스케일 추정치 %.1f는 로그 표시용, %s초 간격, 시전 간격 %s초, %s=종료)'
                  % (SCALE, REPEAT_SEC, CAST_COOLDOWN, STOP_KEY.upper()))
-    main.log('타겟 : 이름에 "%s" 포함 또는 혈맹 ID %d / 거리 %d 이하 / 실행 캐릭터 : %s(id %d) / 방식 : 혈원 전부를 순서대로 돌아가며 시전'
+    main.log('타겟 : 이름에 "%s" 포함 또는 혈맹 ID %d / 거리 %d 이하 / 실행 캐릭터 : %s(id %d) / 방식 : 혈원 전부를 순서대로 돌아가며 디스패처 시전'
              % (TARGET_NAME_SUBSTR, TARGET_CLAN_ID, DIST_MAX, SELF_NAME, SELF_ID))
     last_cast = 0.0
     last_cast_id = None
@@ -244,11 +243,12 @@ def repeat():
                         nxt = tgts[0]
                     else:
                         nxt = tgts[(ids.index(last_cast_id) + 1) % len(tgts)]
-                    cast_at(nxt)
+                    cast_at(caster, nxt)
                     last_cast_id = nxt['id']
                     last_cast = now
             time.sleep(REPEAT_SEC)
     finally:
+        caster.close()
         sc.detach()
     main.log('sweep_mem 종료')
 
