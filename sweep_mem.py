@@ -3,10 +3,11 @@
 # sweep.py 메모리 버전 (테스트용). 이미지 매칭을 쓰지 않는다.
 #   0. 근처 유닛 중 "마패"가 들어간 캐릭터(플레이어)를 메모리에서 찾는다
 #      - 이름에 '마패' 포함 OR 혈맹 ID(+0x44) == 202 (마패 혈맹, +0x44 가설 기준)
-#      - self(여포) 제외, 게임 거리 DIST_MAX 이하, 가장 가까운 1명만
+#      - self(씽씽) 제외, 게임 거리 DIST_MAX 이하, 가까운 순으로 전부 (가장 가까운 1명만 아님)
 #   3. 이미지 스캔 없음 (제거됨)
 #   4. 타겟 위치를 구하고, 어스바인드 스킬을 그 캐릭터 위치에 사용한다
-#      - 휠클릭(가운데 클릭) 1회로 시전. 어스바인드가 휠클릭에 바인딩돼 있어야 함
+#      - 매칭되는 혈원 전부를 순서대로(라운드 로빈) 한 명씩 휠클릭 1회로 시전.
+#        어스바인드가 휠클릭에 바인딩돼 있어야 함
 #      - 스킬 코드(DAT_005fd87c)를 메모리에서 읽어 확인하는 건 확장 예정
 #        (휠클릭 방식은 코드가 필요 없어서 지금은 안 읽음. 디스패처로 직접 부르려면 코드 필요)
 #
@@ -99,12 +100,12 @@ class MemScanner(object):
         except Exception:
             return None
 
-    def find_target(self):
-        """가장 가까운 마패 캐릭터 1명을 찾는다.
-        돌려주는 것: {'x','y','id','name','clan','dist','match_by'} 또는 None.
+    def find_targets(self):
+        """매칭되는 마패 캐릭터 전부를 가까운 순으로 찾는다.
+        돌려주는 것: [{'x','y','id','name','clan','dist','match_by'}, ...] (가까운 순) 또는 [].
         x, y는 모니터 좌표. match_by는 'name'(이름 포함) 또는 'clan'(혈맹 ID)."""
         if self.mem is None:
-            return None
+            return []
         objs, _head, _count = self.mem.entity_table()
         self_ent = None
         cands = []
@@ -113,7 +114,7 @@ class MemScanner(object):
             if o['id'] == SELF_ID and self_ent is None:
                 self_ent = {'id': o['id'], 'gx': gx, 'gy': gy}
         if self_ent is None:
-            return None
+            return []
         for o in objs:
             if o['id'] == self_ent['id']:
                 continue  # self(씽씽) 제외
@@ -137,23 +138,25 @@ class MemScanner(object):
                           'gx': gx, 'gy': gy, 'dist': dist,
                           'match_by': match_by})
         if not cands:
-            return None
+            return []
         cands.sort(key=lambda t: t['dist'])
-        t = cands[0]
-        if self.coef is not None:
-            mx, my = apply_affine(self.coef,
-                                  t['gx'] - self_ent['gx'],
-                                  t['gy'] - self_ent['gy'])
-        else:
-            center = game_window_center()
-            if center is None:
-                sw, sh = gu.size()
-                center = (sw // 2, sh // 2)
-            mx = center[0] + (t['gx'] - self_ent['gx']) * SCALE
-            my = center[1] + (t['gy'] - self_ent['gy']) * SCALE
-        t['x'] = int(round(mx))
-        t['y'] = int(round(my))
-        return t
+        out = []
+        for t in cands:
+            if self.coef is not None:
+                mx, my = apply_affine(self.coef,
+                                      t['gx'] - self_ent['gx'],
+                                      t['gy'] - self_ent['gy'])
+            else:
+                center = game_window_center()
+                if center is None:
+                    sw, sh = gu.size()
+                    center = (sw // 2, sh // 2)
+                mx = center[0] + (t['gx'] - self_ent['gx']) * SCALE
+                my = center[1] + (t['gy'] - self_ent['gy']) * SCALE
+            t['x'] = int(round(mx))
+            t['y'] = int(round(my))
+            out.append(t)
+        return out
 
 
 def _safemove(x, y):
@@ -182,7 +185,8 @@ def cast_at(tgt):
 
 
 def repeat():
-    """0.5초 간격 반복 : 마패 캐릭터 재스캔 -> 있으면 CAST_COOLDOWN마다 어스바인드 1회."""
+    """0.5초 간격 반복 : 마패 혈원 재스캔 -> CAST_COOLDOWN마다 다음 혈원 1명에게 어스바인드.
+    혈원 전부를 순서대로(라운드 로빈) 돌아가면서 쏜다. 한 명만 있으면 그 한 명한테만 계속 쏜다."""
     sc = MemScanner()
     if not sc.attach():
         main.log('sweep_mem 시작 실패 : ' + str(sc.err))
@@ -193,27 +197,37 @@ def repeat():
     else:
         main.log('sweep_mem 시작 : 메모리 방식 (캘리브레이션 없음 - 스케일 추정치 %.1f 사용, 정확도 낮음, %s초 간격, 시전 간격 %s초, %s=종료)'
                  % (SCALE, REPEAT_SEC, CAST_COOLDOWN, STOP_KEY.upper()))
-    main.log('타겟 : 이름에 "%s" 포함 또는 혈맹 ID %d / 거리 %d 이하 / 실행 캐릭터 : %s(id %d)'
+    main.log('타겟 : 이름에 "%s" 포함 또는 혈맹 ID %d / 거리 %d 이하 / 실행 캐릭터 : %s(id %d) / 방식 : 혈원 전부를 순서대로 돌아가며 시전'
              % (TARGET_NAME_SUBSTR, TARGET_CLAN_ID, DIST_MAX, SELF_NAME, SELF_ID))
     last_cast = 0.0
+    last_cast_id = None
     had_target = False
     try:
         while True:
             if k.is_pressed(STOP_KEY):
                 break
-            tgt = sc.find_target()
-            if tgt is None:
+            tgts = sc.find_targets()
+            if not tgts:
                 if had_target:
                     main.log('마패 타겟 사라짐')
                     had_target = False
+                    last_cast_id = None
             else:
                 if not had_target:
-                    main.log('마패 타겟 발견 : id=%s name=%s clan=%s dist=%.1f'
-                             % (tgt['id'], tgt['name'], tgt['clan'], tgt['dist']))
+                    main.log('마패 타겟 발견 : %d명 (%s)'
+                             % (len(tgts),
+                                ', '.join('%s(id %s)' % (t['name'], t['id']) for t in tgts)))
                     had_target = True
                 now = time.time()
                 if now - last_cast >= CAST_COOLDOWN:
-                    cast_at(tgt)
+                    # 라운드 로빈 : 지난번에 쏜 혈원 다음 순서부터. 지난번 혈원이 없으면 첫 번째부터.
+                    ids = [t['id'] for t in tgts]
+                    if last_cast_id is None or last_cast_id not in ids:
+                        nxt = tgts[0]
+                    else:
+                        nxt = tgts[(ids.index(last_cast_id) + 1) % len(tgts)]
+                    cast_at(nxt)
+                    last_cast_id = nxt['id']
                     last_cast = now
             time.sleep(REPEAT_SEC)
     finally:
