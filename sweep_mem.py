@@ -44,6 +44,7 @@ import memcast  # memcast 시전 (대상 id 메모리 쓰기 + 단축키, 코드
 #=====================================================================
 TARGET_NAME_SUBSTR = '마패'  # 이름에 이 단어가 들어가면 매칭
 TARGET_CLAN_ID = 202         # 혈맹 ID(+0x44). 202 = 마패 (여포도 202로 실측 확인됨)
+EXCLUDE_NAMES = {'코카콜라'}  # 제외 캐릭터: 이름에 이 단어가 들어가면 버프를 주지 않는다 (마패/혈맹 매칭돼도 제외)
 SELF_ID      = 1010177       # 실행 캐릭터(씽씽)의 id. self 찾기는 이름이 아니라 id로 한다.
 SELF_NAME    = '씽씽'        # 로그 표시용
 # (여포 제외 없음 — 모든 혈원에게 버프가 들어가야 해서 제외를 없앰)
@@ -137,6 +138,9 @@ class MemScanner(object):
             if o['id'] == self_ent['id']:
                 continue  # self(씽씽) 제외
             name = o.get('name')
+            # 제외 캐릭터: 이름에 제외 단어가 들어가면 버프를 주지 않는다.
+            if name and any(ex in name for ex in EXCLUDE_NAMES):
+                continue
             match_by = None
             if name and TARGET_NAME_SUBSTR in name:
                 match_by = 'name'
