@@ -268,6 +268,14 @@ class Caster:
 
         addr = self._addr('spell_target')
         old  = self.mem.value('spell_target')
+        #턴언데드는 DAT_004991dc(0x4991DC)를, 아이언 스킨은 DAT_004991e0(0x4991E0)을
+        #읽는다 — 스킬마다 대상을 읽는 주소가 다르다. 둘 다 같은 id를 써 준다.
+        addr2 = (self.mem.base + 0x991E0) if self.mem.base else None
+        old2  = None
+        if addr2:
+            raw2 = mr.readmem(self.mem.h, addr2, 4)
+            if raw2 and len(raw2) == 4:
+                old2 = struct.unpack('<I', raw2)[0]
         t0   = self.mem.value('hotkey_time')
         r0   = self.mem.value('cast_ready')
         if addr == None or old == None or t0 == None or r0 == None:
@@ -278,6 +286,8 @@ class Caster:
 
         if not writemem(self.h, addr, struct.pack('<I', int(target_id) & 0xFFFFFFFF)):
             return {'state': 'error', 'key': key, 'msg': '대상 id 쓰기 실패' + note}
+        if addr2 and old2 != None:
+            writemem(self.h, addr2, struct.pack('<I', int(target_id) & 0xFFFFFFFF))
 
         t1 = t0
         try:
@@ -293,6 +303,8 @@ class Caster:
         finally:
             #사용자가 직접 쓰는 마법이 이 대상으로 끌려가지 않게 원래 값으로 되돌린다
             writemem(self.h, addr, struct.pack('<I', old))
+            if addr2 and old2 != None:
+                writemem(self.h, addr2, struct.pack('<I', old2))
 
         if t1 == t0:
             return {'state': 'nokey', 'key': key, 'msg': '키 입력이 게임에 안 들어감' + note}
