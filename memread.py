@@ -1072,6 +1072,73 @@ class Mem(object):
                             'name': nm, 'name_ptr': nptr})
             return out, head, count
 
+    #스킬(마법) 창 슬롯 순회. (스킬 목록, 창 주소, 슬롯 개수) 를 돌려준다.
+    #창 주소 = [lin.exe+0x1FD884] (mem.json chains.spell_win, offsets [0] 으로 한 번 거른다. 월드 밖이면 0).
+    #창+0x2C u32 = 슬롯 개수 (실제로는 0x38/0x50/0x58, 상한 0x100),
+    #창+0x4C + i*4 = 슬롯 i 엔트리 포인터 (엔트리는 0x6C 바이트).
+    #엔트리 필드: id@+0x04 u32 (0xFFFFFFFF = 빈 슬롯), name_ptr@+0x0C u32 (CP949),
+    #  icon@+0x68 i32 (빈 슬롯은 -1)
+    #정적 분석으로 찾은 값. 실기 확인 전
+    #주의: lock 안에서 value() 를 부르면 데드락이 나므로 (Lock 은 재진입이 안 된다)
+    #resolve + readmem 으로 직접 읽는다
+    def spell_table(self):
+        if self.h == None or self.cfg == None:
+            return [], None, None
+        chains = self.cfg.get('chains') or {}
+        spec = chains.get('spell_win')
+        if spec == None:
+            return [], None, None
+        with self.lock:
+            win = self.resolve(spec)
+            if win == None:
+                return [], None, None
+            raw = readmem(self.h, win + 0x2C, 4)
+            if raw == None:
+                return [], win, None
+            count = struct.unpack('<I', raw)[0]
+            if count <= 0 or count > 0x100:
+                return [], win, count
+            blob = readmem(self.h, win + 0x4C, 4 * count)
+            if blob == None:
+                return [], win, count
+            out = []
+            for i in range(count):
+                p = struct.unpack_from('<I', blob, i * 4)[0]
+                if p < 0x10000:
+                    continue
+                ent = readmem(self.h, p, 0x6C)
+                if ent == None:
+                    continue
+                try:
+                    sid  = struct.unpack_from('<I', ent, 0x04)[0]
+                    nptr = struct.unpack_from('<I', ent, 0x0C)[0]
+                    icon = struct.unpack_from('<i', ent, 0x68)[0]
+                except Exception:
+                    continue
+                if sid == 0xFFFFFFFF:
+                    continue
+                nm = None
+                if nptr >= 0x10000:
+                    raw = readmem(self.h, nptr, 64)
+                    if raw != None:
+                        nm = _decode_name(raw)
+                out.append({'slot': i, 'ptr': p, 'id': sid, 'icon': icon,
+                            'name': nm, 'name_ptr': nptr})
+            return out, win, count
+
+    #배운 스킬 목록을 로그에 찍는다 (lock 을 잡지 않고 spell_table 을 부른다)
+    def logspells(self):
+        out, win, count = self.spell_table()
+        if win == None:
+            self.log('스킬 창을 못 읽었다 - 캐릭터로 월드에 들어간 뒤에 다시 읽는다 (mem.json chains.spell_win 확인)')
+            return []
+        self.log('스킬 창 : 0x%X   슬롯 %s개   배운 스킬 %d개' % (win, str(count), len(out)))
+        for s in out:
+            self.log('  슬롯 %-3d id %-5d 아이콘 %-5d %s'
+                     % (s['slot'], s['id'], s['icon'],
+                        s['name'] if s['name'] != None else '(이름 못 읽음)'))
+        return out
+
     #좌표 일치 객체 전부. (객체 dict 리스트).
     #객체 안의 x/y 는 raw 좌표임이 --table 실측으로 확인됐으므로, 게임 좌표와
     #비교하면 엉뚱한 몹이 걸리는 오매치가 난다 (몹 raw_x 가 플레이어 게임_x 와

@@ -65,6 +65,12 @@
       "base": "0x1FEAA8",
       "offsets": [],
       "type": "u32"
+    },
+    "_spellwin": "스킬(마법) 창 객체. spell_win 은 [lin.exe+0x1FD884] 을 한 번 거른 창 객체 주소 (월드 밖이면 0). 창+0x2C = 슬롯 개수, 창+0x4C + i*4 = 슬롯 i 엔트리 포인터. 엔트리 +0x04 = 스킬 id (0xFFFFFFFF = 빈 슬롯), +0x0C = 이름 포인터(CP949), +0x68 = 아이콘 id. Lin.exe 정적 분석으로 찾은 값이고 실기 확인 전이다. memprobe.py --spells 가 순회한다",
+    "spell_win": {
+      "base": "0x1FD884",
+      "offsets": [0],
+      "type": "u32"
     }
   },
   "_secure": "보안 값 홀더 (2026-10-28, lin.exe+57C20). HP/MP를 평문으로 저장하지 않고 XOR + 랜덤 슬롯에 숨긴다. holder는 정적 주소(RVA), 배열 포인터·키·인덱스는 패킷마다 바뀌므로 매번 읽는다. 디코드: index=[holder] XOR xor; array=[holder+4]; key=[holder+8]; 값=([array+index*4] XOR key) & mask. 검증: MP 홀더 0x1FAA10 → 1658, HP 홀더 0x1FAA20 → 2170 (2026-10-28 실측)",

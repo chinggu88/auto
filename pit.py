@@ -545,6 +545,8 @@ def runmacro():
                     log('이미지 폴백으로 계속 돈다 (python memprobe.py 로 원인 확인)')
                     MEM.stale = True
                 else:
+                    #붙자마자 배운 스킬 목록을 로그에 한 번 찍는다 (읽기만 한다)
+                    MEM.logspells()
                     if not objready():
                         log('objlist 미설정 - 혈맹 판별은 마크 이미지로 돈다')
                     if objready() and not screenready():
