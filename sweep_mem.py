@@ -10,9 +10,13 @@
 #        어스바인드가 휠클릭에 바인딩돼 있어야 함
 #      - 스킬 코드(DAT_005fd87c)를 메모리에서 읽어 확인하는 건 확장 예정
 #        (휠클릭 방식은 코드가 필요 없어서 지금은 안 읽음. 디스패처로 직접 부르려면 코드 필요)
+#   - 모니터 위치는 postracker.py 방식을 참조한다: 허수아비 캘리브레이션
+#     (scarecrow_calib.json, load_sc_calib) > turnundead_mem calib.json > 스케일 추정치.
+#     turnundead_mem calib.json만 쓰면 근위병 8포인트 fit 실패로 스케일 추정치로 떨어져
+#     클릭이 빗나가 "대상을 선택하십시오"가 뜬다. postracker의 허수아비 아핀이 정확하다.
 #
 # sweep.py 원본은 건드리지 않는다. 이 파일만 테스트용으로 따로 둔다.
-# 같은 폴더에 memread.py + mem.json + turnundead_mem.py가 있어야 한다.
+# 같은 폴더에 memread.py + mem.json + turnundead_mem.py + postracker.py가 있어야 한다.
 # 실행: python sweep_mem.py
 
 import math
@@ -31,6 +35,7 @@ from turnundead_mem import (
     load_calib,
     raw_to_game,
 )
+from postracker import load_sc_calib  # postracker 방식 참조: 허수아비 캘리브레이션 우선
 
 #=====================================================================
 # 설정 : 여기만 고치면 된다
@@ -53,13 +58,15 @@ gu.FAILSAFE = True          # 마우스 모서리 탈출 켜둠 (sweep.py와 같
 
 
 class MemScanner(object):
-    """memread로 엔티티 테이블을 읽어 근처 마패 캐릭터 1명의 모니터 좌표를 돌려준다."""
+    """memread로 엔티티 테이블을 읽어 근처 마패 캐릭터 전부의 모니터 좌표를 돌려준다.
+    모니터 위치는 postracker.py 방식: 허수아비 캘리브레이션 > turnundead_mem calib.json > 스케일 추정치."""
 
     def __init__(self):
         self.mem = None
         self.err = None
         self.coef = None      # 캘리브레이션 아핀 계수 (없으면 None -> 스케일 추정치)
         self.calib_ok = False
+        self.calib_src = 'scale'  # 'scarecrow' / 'turnundead' / 'scale'
 
     def attach(self):
         path, found, _tried = mr.findfile('mem.json')
@@ -72,9 +79,18 @@ class MemScanner(object):
             self.mem = None
             return False
         # 캘리브레이션은 시작할 때 한 번만 읽는다. 다시 맞췄으면 스크립트를 재시작할 것.
-        _pts, fit = load_calib()
-        self.coef = fit
-        self.calib_ok = fit is not None
+        # postracker.py 방식 참조: 허수아비 캘리브레이션(scarecrow_calib.json) 우선,
+        # 없거나 fit 실패면 turnundead_mem calib.json, 둘 다 없으면 스케일 추정치.
+        _sc_pts, sc_fit = load_sc_calib()
+        if sc_fit is not None:
+            self.coef = sc_fit
+            self.calib_ok = True
+            self.calib_src = 'scarecrow'
+        else:
+            _pts, fit = load_calib()
+            self.coef = fit
+            self.calib_ok = fit is not None
+            self.calib_src = 'turnundead' if fit is not None else 'scale'
         self.err = None
         return True
 
@@ -174,11 +190,11 @@ def _safemove(x, y):
 
 def cast_at(tgt):
     """어스바인드 시전 : 타겟 모니터 위치에 휠(중간) 클릭 1회.
-    어스바인드가 휠클릭에 바인딩돼 있어야 한다 (턴언데드 방식과 같음)."""
+    어스바인드가 휠클릭에 바인딩돼 있어야 한다 (postracker.py 턴언데드 방식과 같음)."""
     tx, ty = tgt['x'], tgt['y'] + CLICK_DY
     _safemove(tx, ty)
     time.sleep(SETTLE_SEC)
-    gu.middleClick()
+    gu.click(button='middle')  # postracker.py와 같은 방식
     main.log('어스바인드 시전 : id=%s name=%s clan=%s dist=%.1f -> %d,%d (%s 매칭)'
              % (tgt['id'], tgt['name'], tgt['clan'], tgt['dist'],
                 tx, ty, tgt['match_by']))
@@ -192,8 +208,10 @@ def repeat():
         main.log('sweep_mem 시작 실패 : ' + str(sc.err))
         return
     if sc.calib_ok:
-        main.log('sweep_mem 시작 : 메모리 방식 (캘리브레이션 아핀 적용 중, %s초 간격, 시전 간격 %s초, %s=종료)'
-                 % (REPEAT_SEC, CAST_COOLDOWN, STOP_KEY.upper()))
+        calib_name = {'scarecrow': '허수아비 캘리브레이션(postracker)',
+                      'turnundead': '캘리브레이션(turnundead_mem)'}[sc.calib_src]
+        main.log('sweep_mem 시작 : 메모리 방식 (%s 아핀 적용 중, %s초 간격, 시전 간격 %s초, %s=종료)'
+                 % (calib_name, REPEAT_SEC, CAST_COOLDOWN, STOP_KEY.upper()))
     else:
         main.log('sweep_mem 시작 : 메모리 방식 (캘리브레이션 없음 - 스케일 추정치 %.1f 사용, 정확도 낮음, %s초 간격, 시전 간격 %s초, %s=종료)'
                  % (SCALE, REPEAT_SEC, CAST_COOLDOWN, STOP_KEY.upper()))
