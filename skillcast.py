@@ -1,16 +1,18 @@
 # skillcast.py
 #
 # 디스패처(길2)로 스킬을 시전하는 모듈. 마우스를 쓰지 않는다.
-# sweep_mem.py에서 어스바인드를 혈원에게 거는 데 쓴다.
+# sweep_mem.py에서 아이언 스킨을 혈원에게 거는 데 쓴다.
 #
-# 원리 (REA 분석, ~/workspace/game/earthbind-skill-code.md):
+# 원리 (REA 분석, ~/workspace/game/iron-skin-skill-code.md):
 #   스킬 사용 진입점 FUN_0045e270(스킬코드, 0)을 게임 프로세스 안에서 직접 호출한다.
 #   - ECX = self 구조체 포인터 (DAT_005ab548 = 0x5AB548의 값). __thiscall 유사 방식.
 #   - FUN_0045e270이 현재 스킬 필드(self+0x454), 쿨다운(DAT_005fd870)을 세팅하고
-#     어스바인드 핸들러 FUN_0045c270()으로 넘긴다.
+#     아이언 스킨 핸들러 FUN_0045c270()으로 넘긴다.
 #   - FUN_0045c270()은 대상 id를 DAT_004991e0(현재 선택 타겟)에서 읽어
-#     디스패처 FUN_0045a380("cccd", 20, 19, 4, target_id)로 패킷을 보낸다.
-#     (어스바인드=156, 156>>3=19, 156&7=4, 총 9바이트. 좌표 없이 대상 id만 보냄.)
+#     디스패처 FUN_0045a380("cccd", 20, 20, 7, target_id)로 패킷을 보낸다.
+#     (아이언 스킨=167, 167>>3=20, 167&7=7, 총 9바이트. 좌표 없이 대상 id만 보냄.)
+#   - 정정 (2026-11-13): 사용자가 쓰려는 스킬은 어스바인드가 아니라 아이언 스킨이다.
+#     어스바인드 코드 156은 잘못된 스킬이었음. EARTH_SKIN(150)과 IRON_SKIN(167)은 별개 스킬.
 #
 # 실행 방식 (v2 — 원격 스레드에서 APC로 변경):
 #   v1은 CreateRemoteThread로 스텁을 실행했는데 게임이 팅겼다 (2026-11-13).
@@ -35,8 +37,11 @@
 #     2026-10-27 사용자가 자동 프로그램 사용으로 계정 밴을 당한 적이 있다.
 #   - APC가 실행되려면 메인 스레드가 alertable wait에 들어가야 한다.
 #     타임아웃(기본 3초) 안에 완료 플래그가 안 서면 실패로 보고 다음으로 넘어간다.
-#   - 스킬 코드는 REA로 확인: 어스바인드=156 (0x9C), 턴언데드=17.
+#   - 스킬 코드는 REA로 확인: 아이언 스킨=167 (0xA7), 턴언데드=17.
 #     (L1J ID−1 규칙. 턴언데드 17은 CE 실측 패킷과 일치로 검증됨.)
+#     어스바인드=156은 잘못된 스킬이었음 (2026-11-13 정정, iron-skin-skill-code.md 참조).
+#   - 아이언 스킨 쿨다운 테이블 값(0x4915A0 + 167*2)은 0으로 확인됨 (REA, 파일에서 직접 읽음).
+#     쿨다운 게이트가 없어서 CAST_COOLDOWN 0.5초 간격으로 쏘는 데 지장 없다.
 #
 # 같은 폴더에 memread.py가 있어야 한다 (PID를 얻기 위해).
 # 실행은 sweep_mem.py에서 한다. 이 파일 단독으로는 동작하지 않는다.
@@ -53,7 +58,7 @@ FUNC_SKILL_USE = 0x45E270   # FUN_0045e270 : 스킬 사용 진입점
 ADDR_SELF_PTR  = 0x5AB548   # DAT_005ab548 : self 구조체 포인터
 ADDR_TARGET_SEL = 0x4991E0  # DAT_004991e0 : 현재 선택 타겟 id (4바이트)
 
-SKILL_EARTH_BIND = 156      # 어스바인드 (0x9C)
+SKILL_IRON_SKIN = 167        # 아이언 스킨 (0xA7)
 SKILL_TURN_UNDEAD = 17      # 턴언데드 (참고용)
 
 GAME_WINDOW_TITLE = 'Lineage Windows Client'  # 메인 스레드 찾기용 창 제목
@@ -155,7 +160,7 @@ class SkillCaster(object):
     """디스패처로 스킬을 시전한다. 마우스를 쓰지 않는다. 메인 스레드 APC 방식.
     사용법:
         caster = SkillCaster(pid)
-        caster.cast(SKILL_EARTH_BIND, target_id)
+        caster.cast(SKILL_IRON_SKIN, target_id)
         caster.close()
     cast()는 self 포인터 확인 + 대상 선택(DAT_004991e0 쓰기) + 스텁 APC 큐잉·완료 대기를 한 번에 한다.
     """
@@ -205,7 +210,7 @@ class SkillCaster(object):
         return self._write_u32(ADDR_TARGET_SEL, target_id)
 
     def cast(self, skill_code, target_id, timeout_ms=3000):
-        """스킬 시전. skill_code=스킬 코드(어스바인드 156), target_id=대상 id.
+        """스킬 시전. skill_code=스킬 코드(아이언 스킨 167), target_id=대상 id.
         돌려주는 것: True(스텁이 메인 스레드에서 실행 완료됨) / False(실패·타임아웃).
         True가 패킷이 실제로 나갔다는 보장은 아니다 — 게임 내 스킬 발동 여부는 별도로 확인해야 한다."""
         if self.h is None:
@@ -276,6 +281,6 @@ class SkillCaster(object):
         finally:
             _k32.CloseHandle(h_thread)
 
-    def cast_earth_bind(self, target_id, timeout_ms=3000):
-        """어스바인드(156) 시전. target_id=대상(혈원) id."""
-        return self.cast(SKILL_EARTH_BIND, target_id, timeout_ms)
+    def cast_iron_skin(self, target_id, timeout_ms=3000):
+        """아이언 스킨(167) 시전. target_id=대상(혈원) id."""
+        return self.cast(SKILL_IRON_SKIN, target_id, timeout_ms)
