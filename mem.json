@@ -65,6 +65,54 @@
       "base": "0x1FEAA8",
       "offsets": [],
       "type": "u32"
+    },
+    "_spellwin": "스킬(마법) 창 객체. spell_win 은 [lin.exe+0x1FD884] 을 한 번 거른 창 객체 주소 (월드 밖이면 0). 창+0x2C = 슬롯 개수, 창+0x4C + i*4 = 슬롯 i 엔트리 포인터. 엔트리 +0x04 = 스킬 id (0xFFFFFFFF = 빈 슬롯), +0x0C = 이름 포인터(CP949), +0x68 = 아이콘 id. Lin.exe 정적 분석으로 찾은 값이고 실기 확인 전이다. memprobe.py --spells 가 순회한다",
+    "spell_win": {
+      "base": "0x1FD884",
+      "offsets": [0],
+      "type": "u32"
+    },
+    "_cast": "memcast.py 가 쓰는 값들. spell_target 은 클라이언트의 '고정 공격마법 대상' 엔티티 id 로 0 이면 꺼짐이고, memcast 가 시전 순간에만 대상 id 를 써넣고 원래 값으로 되돌린다. hotkey_names 는 단축키 칸 8개의 이름(칸당 0x30바이트 C 문자열, F5~F12 순서)이고 hotkey_flags 는 칸마다 1바이트로 0 이면 마법, 아니면 아이템이다. str_count 와 str_table 은 이름 안의 $숫자 를 풀 때 쓰는 문자열 표의 개수와 char* 배열 포인터다. hotkey_time 은 단축키 처리 시각, cast_ready 는 다음 시전 가능 시각으로 시전 패킷이 나갔을 때만 바뀐다. 전부 정적 분석으로 찾은 값이라 실기 확인 전이다. hotkey_sel 은 게임 단축키 줄에서 클릭해 둔 칸 번호(0~7 = F5~F12)로, 이름으로 마법을 못 찾았을 때만 대신 쓴다.",
+    "spell_target": {
+      "base": "0x991DC",
+      "offsets": [],
+      "type": "u32"
+    },
+    "hotkey_names": {
+      "base": "0xA2850",
+      "offsets": [],
+      "type": "str",
+      "len": 48
+    },
+    "hotkey_flags": {
+      "base": "0xA27D8",
+      "offsets": [],
+      "type": "u8"
+    },
+    "hotkey_sel": {
+      "base": "0xA358C",
+      "offsets": [],
+      "type": "u32"
+    },
+    "str_count": {
+      "base": "0x1FDB50",
+      "offsets": [],
+      "type": "u32"
+    },
+    "str_table": {
+      "base": "0x1FDB54",
+      "offsets": [],
+      "type": "u32"
+    },
+    "hotkey_time": {
+      "base": "0x1FD878",
+      "offsets": [],
+      "type": "u32"
+    },
+    "cast_ready": {
+      "base": "0x1FD874",
+      "offsets": [],
+      "type": "u32"
     }
   },
   "_secure": "보안 값 홀더 (2026-10-28, lin.exe+57C20). HP/MP를 평문으로 저장하지 않고 XOR + 랜덤 슬롯에 숨긴다. holder는 정적 주소(RVA), 배열 포인터·키·인덱스는 패킷마다 바뀌므로 매번 읽는다. 디코드: index=[holder] XOR xor; array=[holder+4]; key=[holder+8]; 값=([array+index*4] XOR key) & mask. 검증: MP 홀더 0x1FAA10 → 1658, HP 홀더 0x1FAA20 → 2170 (2026-10-28 실측)",
