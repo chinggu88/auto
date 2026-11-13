@@ -1016,6 +1016,9 @@ class Mem(object):
     #  name_ptr@+0x54 u32 (이름 문자열 포인터, CP949. 2026-10-28 --findname 확정:
     #    슬롯-84=+0x00 vtable, 슬롯-8=+0x4C type, 슬롯=+0x54 name_ptr, 슬롯+124=+0xD0 서브 vtable, 2개체 일치)
     #  인라인 문자열은 객체 안에 없지만, 이름은 +0x54 포인터로 참조한다
+    #  act@+0x0C u8 (현재 행동 코드), base@+0x14 u8 (기본 자세). 죽으면 둘 다 8 이 된다
+    #    (Lin.exe 0x46F580, 0x471A00 정적 분석. 실기 확인 전). dead = base == 8
+    #  주의: hp@+0x50 는 등장 때 0 으로 초기화되는 칸이라 HP 가 아니다 (0x471C13)
     #주의: lock 안에서 value() 를 부르면 데드락이 나므로 (Lock 은 재진입이 안 된다)
     #개수는 resolve + readmem 으로 직접 읽는다
     def entity_table(self):
@@ -1058,6 +1061,8 @@ class Mem(object):
                     mx  = struct.unpack_from('<H', ob, 0x52)[0]
                     typ = struct.unpack_from('<I', ob, 0x4C)[0]
                     nptr = struct.unpack_from('<I', ob, 0x54)[0]
+                    act  = ob[0x0C]
+                    base = ob[0x14]
                 except Exception:
                     continue
                 if oid == 0:
@@ -1069,7 +1074,8 @@ class Mem(object):
                         nm = _decode_name(raw)
                 out.append({'ptr': p, 'id': oid, 'x': x, 'y': y,
                             'hp': hp, 'hp_max': mx, 'type': typ,
-                            'name': nm, 'name_ptr': nptr})
+                            'name': nm, 'name_ptr': nptr,
+                            'act': act, 'base': base, 'dead': base == 8})
             return out, head, count
 
     #스킬(마법) 창 슬롯 순회. (스킬 목록, 창 주소, 슬롯 개수) 를 돌려준다.

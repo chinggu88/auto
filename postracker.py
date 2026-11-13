@@ -4,9 +4,8 @@
 # 첫 줄: 내 캐릭터(기본 여포)의 모니터 위치를 실시간으로 표시한다 (게임 좌표 아님).
 #   (sweep 중심/방향이 맞는지 눈으로 확인하는 용도. 마법 시전 체크박스로 시전도 가능.)
 # 아래: 게임 창 중심 vs 모니터 중심, 근위병 리스트 (모니터 위치, 가까운 순).
-#   - 움직이는 근위병: 굵은 검은색. 움직이지 않는 근위병: 회색.
-#   - '움직이는' = 최근 1초 안에 위치가 바뀐 것 (0.1초 폴링이라 한 번 스텝만으로는
-#     깜빡거려서, 움직인 뒤 1초간 굵은색을 유지한다. 첫 발견은 회색.)
+#   - 살아 있는 근위병: 굵은 검은색. 죽은 근위병: 회색.
+#   - 생사 판정 = 엔티티 +0x14 가 8 이면 사망 (memread.entity_table 의 dead).
 # 모니터 위치 계산:
 #   - calib.json이 있으면 turnundead_mem의 캘리브레이션(아핀)으로 정확한 화면 좌표.
 #     (아핀은 상대 게임 좌표(몹-self) -> 절대 화면 좌표. self = 아핀(0,0).)
@@ -15,7 +14,7 @@
 #     추정치라 화면의 실제 몹 위치와 다를 수 있다. 스케일 값을 바꿔가며 맞춘다.
 #     F9 캘리브레이션(turnundead_mem)을 한 번 하면 정확한 모니터 위치가 나온다.
 # 폴링: 백그라운드 스레드가 0.1초마다 테이블을 읽고, GUI는 큐로 받아 표시한다.
-# 마법 시전 (체크박스로 켤 것, 기본 꺼짐): 움직이는 몹 중 게임 거리 10 이하인 것을
+# 마법 시전 (체크박스로 켤 것, 기본 꺼짐): 살아 있는 몹 중 게임 거리 10 이하인 것을
 # 가까운 순으로, 0.3초마다 1마리씩 시전한다. 가운데 클릭 대신 대상 id 를 메모리
 # (spell_target)에 쓰고, CAST_SPELL 이름의 마법을 메모리의 스킬 창에서 찾아 그 마법이
 # 들어 있는 단축키 칸(F5~F12)을 눌러 시전한다 (memcast.py).
@@ -62,9 +61,9 @@ from turnundead_mem import (
 )
 
 POLL_INTERVAL = 0.1  # 초. 테이블 재읽기 간격.
-MOVE_STICKY = 1.0  # 초. 움직인 뒤 굵은색을 유지하는 시간.
+# MOVE_STICKY = 1.0  # 초. 움직인 뒤 굵은색을 유지하는 시간.
 DEFAULT_SCALE = 8.0  # px/게임단위. 캘리브레이션 없을 때 몹 모니터 위치 추정치용.
-CLICK_DIST_MAX = 10  # 게임 거리. 이 이하의 움직이는 몹만 시전한다.
+CLICK_DIST_MAX = 10  # 게임 거리. 이 이하의 살아 있는 몹만 시전한다.
 CLICK_COOLDOWN = 0.3  # 초. 시전 간격 (한 번에 가장 가까운 1마리만).
 CAST_SPELL = '턴언데드'  # 시전할 마법 이름. 스킬 창 로그(--spells)에 나오는 이름과 같아야 한다 (띄어쓰기는 무시).
 SCARECROW_SUBSTR = '허수아비'  # 허수아비 목록: 이름에 이 문자열이 든 엔티티.
@@ -167,8 +166,8 @@ class Poller(threading.Thread):
         self.scale = DEFAULT_SCALE
         self.click_enabled = False  # GUI 마법 시전 체크박스로 켠다.
         self.last_click = 0.0
-        self.prev_pos = {}  # id -> (gx, gy). 이동 판정용.
-        self.last_move = {}  # id -> 마지막으로 위치가 바뀐 시각.
+        # self.prev_pos = {}  # id -> (gx, gy). 이동 판정용.
+        # self.last_move = {}  # id -> 마지막으로 위치가 바뀐 시각.
 
     def attach(self):
         path, found, _tried = mr.findfile('mem.json')
@@ -239,7 +238,9 @@ class Poller(threading.Thread):
                         self_ent = {'id': o['id'], 'gx': gx, 'gy': gy}
                     if o.get('name') in TARGET_NAMES:
                         guards.append({'id': o['id'], 'gx': gx, 'gy': gy,
-                                       'name': o.get('name'), 'ptr': o.get('ptr')})
+                                       'name': o.get('name'), 'ptr': o.get('ptr'),
+                                       'dead': o.get('dead'), 'act': o.get('act'),
+                                       'base': o.get('base')})
                     if o.get('name') and SCARECROW_SUBSTR in o.get('name'):
                         scarecrows.append({'id': o['id'], 'gx': gx, 'gy': gy,
                                            'name': o.get('name')})
@@ -247,18 +248,18 @@ class Poller(threading.Thread):
                 mon_center = (sw // 2, sh // 2)
                 wc = game_window_center()
                 now = time.time()
-                # 이동 판정 (id별 이전 위치와 비교, 1초간 굵은색 유지).
-                cur_ids = set()
-                for g in guards:
-                    cur_ids.add(g['id'])
-                    prev = self.prev_pos.get(g['id'])
-                    if prev is not None and prev != (g['gx'], g['gy']):
-                        self.last_move[g['id']] = now
-                    g['moved'] = (g['id'] in self.last_move and
-                                  now - self.last_move[g['id']] < MOVE_STICKY)
-                self.prev_pos = {g['id']: (g['gx'], g['gy']) for g in guards}
-                self.last_move = {i: t for i, t in self.last_move.items()
-                                  if i in cur_ids}
+                # 이동 판정은 사망 플래그(엔티티 +0x14 == 8, memread.entity_table 에서 읽음)로 대체됨.
+                # cur_ids = set()
+                # for g in guards:
+                #     cur_ids.add(g['id'])
+                #     prev = self.prev_pos.get(g['id'])
+                #     if prev is not None and prev != (g['gx'], g['gy']):
+                #         self.last_move[g['id']] = now
+                #     g['moved'] = (g['id'] in self.last_move and
+                #                   now - self.last_move[g['id']] < MOVE_STICKY)
+                # self.prev_pos = {g['id']: (g['gx'], g['gy']) for g in guards}
+                # self.last_move = {i: t for i, t in self.last_move.items()
+                #                   if i in cur_ids}
                 # 모니터 위치 우선순위: 허수아비 캘리브레이션 > calib.json > 스케일.
                 use_coef = self.sc_coef if self.sc_coef is not None else self.coef
                 self_mon = None
@@ -328,13 +329,13 @@ class Poller(threading.Thread):
                         sc['estimated'] = False
                 # 마법 시전: 켜져 있을 때만, 쿨타임마다 가장 가까운 대상 1마리.
                 # 대상 id 를 메모리에 쓰고, CAST_SPELL 마법을 스킬 창에서 찾아 그 마법이 든 F5~F12 칸을 누른다. memcast.py.
-                # 대상 = 움직이는 몹 + 게임 거리 10 이하. 가까운 순 정렬됨.
+                # 대상 = 살아 있는 몹 (엔티티 +0x14 != 8) + 게임 거리 10 이하. 가까운 순 정렬됨.
                 clicked = None
                 if (self.click_enabled and self_ent is not None and
                         self.caster is not None and
                         now - self.last_click >= CLICK_COOLDOWN):
                     for g in guards:
-                        if g.get('moved') and g.get('dist', 999) <= CLICK_DIST_MAX:
+                        if not g.get('dead') and g.get('dist', 999) <= CLICK_DIST_MAX:
                             try:
                                 # 옛 휠클릭 방식 (모니터 위치로 이동해서 가운데 클릭)
                                 # gu.moveTo(g['mon'][0], g['mon'][1])
@@ -422,11 +423,11 @@ class App:
         ttk.Button(scale_row, text='적용', command=self.apply_scale).pack(side='left')
         ttk.Label(scale_row, text='(캘리브레이션 없을 때만 사용)').pack(side='left', padx=4)
 
-        # 마법 시전 켜기 (기본 꺼짐. 켜면 움직이는 몹 + 거리 10 이하를 가까운 순으로 시전).
+        # 마법 시전 켜기 (기본 꺼짐. 켜면 살아 있는 몹 + 거리 10 이하를 가까운 순으로 시전).
         click_row = ttk.Frame(root, padding=(10, 0))
         click_row.pack(fill='x')
         self.click_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(click_row, text='마법 시전 켜기 (움직이는 몹, 거리 10 이하, 가까운 순)',
+        ttk.Checkbutton(click_row, text='마법 시전 켜기 (살아 있는 몹, 거리 10 이하, 가까운 순)',
                         variable=self.click_var, command=self.on_click_toggle).pack(side='left')
 
         # 첫 줄: 내 캐릭터 모니터 위치 (실시간). 가장 크게.
@@ -436,7 +437,7 @@ class App:
         # 둘째 줄: sweep 중심 비교용 (게임 창 중심 vs 모니터 중심 + 캘리브레이션 여부).
         self.line2 = ttk.Label(root, text='', padding=(10, 2))
         self.line2.pack(fill='x')
-        # 근위병 리스트 (모니터 위치, 가까운 순. 움직이면 굵은 검은색, 안 움직이면 회색).
+        # 근위병 리스트 (모니터 위치, 가까운 순. 살아 있으면 굵은 검은색, 죽었으면 회색).
         list_frame = ttk.Frame(root, padding=(10, 4))
         list_frame.pack(fill='both', expand=True)
         ttk.Label(list_frame, text='근위병 리스트 (가까운 순):').pack(anchor='w')
@@ -450,7 +451,7 @@ class App:
                            command=self.tree.yview)
         sb.pack(side='right', fill='y')
         self.tree.config(yscrollcommand=sb.set)
-        self.tree.tag_configure('moving', font=self.font_bold, foreground='black')
+        self.tree.tag_configure('alive', font=self.font_bold, foreground='black')
         self.tree.tag_configure('still', foreground='gray')
         # 허수아비 목록 (게임 좌표 + 모니터 위치, 캘리브레이션 기준점용).
         sc_frame = ttk.Frame(root, padding=(10, 4))
@@ -692,7 +693,10 @@ class App:
                 else:
                     txt = '#%d %s id %d: 모니터 (%d, %d)' % (
                         i, g['name'], g['id'], g['mon'][0], g['mon'][1])
-                tag = 'moving' if g.get('moved') else 'still'
+                txt += '  행동 %s/%s' % (g.get('act'), g.get('base'))
+                if g.get('dead'):
+                    txt += ' (사망)'
+                tag = 'still' if g.get('dead') else 'alive'
                 self.tree.insert('', 'end', values=(txt,), tags=(tag,))
         # 새로고침(0.1초마다 전부 지우고 다시 그림)으로 선택이 날아가는 문제 방지:
         # 지우기 전에 선택한 허수아비 id를 기억해뒀다가, 다시 그린 뒤 같은 id를 재선택한다.
