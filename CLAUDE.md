@@ -6,6 +6,53 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A screen-automation macro for a Windows MMO client (IntelliJ module name: `lin_auto`). It drives the game purely through synthetic mouse/keyboard input and screen-pixel template matching — there is no game API, no network code, and no parsing of game memory.
 
+## Project rules (new work)
+
+These apply to everything written from now on, starting with the `iksun/` program. The older
+top-level scripts predate them and are kept as they are.
+
+1. **No image detection.** Do not add `locateCenterOnScreen` / template matching / `image/*.PNG`
+   checks. State comes from memory only; when a value cannot be read, the action stops (it does
+   not fall back to the screen).
+2. **No mouse or keyboard input to control the game.** Game actions (buffs, potions, recall,
+   casting, movement, attacking) are done through memory access, not `pyautogui` / `keyboard`
+   presses or clicks. Hotkeys that control *this* program (e.g. the `Tab` emergency stop) are
+   not game control and are allowed.
+   - Every address written must be listed in `mem.json`, and temporarily changed values are
+     restored after the action (as `memcast.py` does for `spell_target`).
+3. **All item and skill use goes through direct in-process function calls ("방법 2").**
+   Decided by the user on 2026-11-14 over the alternatives below, accepting that it carries the
+   highest detection/ban risk (an account was banned on 2026-10-27; see `skillcast.py`). Do not
+   switch to another mechanism without asking.
+   - Why no pure memory write works: `Lin.exe` runs hotkeys only from its window procedure
+     (`FUN_00434ae0`: WM_KEYDOWN F5–F12 → `FUN_00434920` → `FUN_00460e70`, plus F10 and wheel
+     click). No per-frame "pending action" flag exists. The send backlog at `0x5FABE4` is only
+     flushed on the Winsock FD_WRITE message, and every packet is XOR-chained with the rolling
+     8-byte key at `0x5FABD0`, so injecting packets from outside desyncs the stream.
+   - Rejected alternatives (keep for reference): PostMessage WM_KEYDOWN to the game window
+     ("방법 1", hotkey items only), and "임시 단축키 칸" — write name/bless/flag into a hotkey slot
+     (`0x4A2850 + k*0x30`, `0x4A27F0 + k*4`, `0x4A27D8 + k`) then PostMessage that key.
+   - Entry points found by static analysis (unverified in the live client):
+     - `FUN_00460e70(slot, 0)` — runs hotkey slot 0–7 (F5–F12). `__stdcall`, `ret 8`, uses
+       only its arguments, so it does **not** need the self pointer (`0x5AB548`, which reads 0
+       and is what blocked `skillcast.py`). Branches on `0x4A27D8[slot]`: spell →
+       `FUN_0045e8c0`, item → `FUN_0042c110`.
+     - `FUN_0042c110(slot)` (ECX = inventory window `[0x4A2DBC]`) — finds the inventory entry
+       whose name matches the slot name and whose bless (+0x6C) matches `0x4A27F0[slot]`, then
+       acts by use type (+0x68). Plain-use types send `FUN_0045a380("cds", 0x1C, item_id, "")`.
+       Types 0x05/0x07/0x08/0x0E/0x11/0x1A/0x1B only enter a target-selection mode.
+     - `FUN_0045a380(fmt, ...)` — builds, encrypts and sends one packet (`mySend` =
+       `FUN_0045a050`). Using an inventory item that is not on the hotkey bar means calling this
+       with the use-item packet directly.
+     - `FUN_0045e270(skill_code, 0)` — skill entry used by `skillcast.py` (needs the self
+       pointer in ECX, currently 0).
+   - These functions touch UI and global state, so they must run **on the game's main thread**.
+     `CreateRemoteThread` crashed the client (2026-11-13). Whether the APC route in
+     `skillcast.py` is ever delivered (the main thread must enter an alertable wait) is
+     unverified — establish a reliable main-thread execution path first.
+   - Current code still violating rule 2 until this lands: `memcast.py` (`gu.press`) and
+     `iksun/main.py` `Ctx.press` (`pyautogui`).
+
 ## Running
 
 There is no build, test suite, lint config, or dependency manifest. Each top-level `.py` is an independent entry point run directly:
