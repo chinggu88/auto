@@ -1,0 +1,38 @@
+<!-- @dsCard height=288 -->
+<div id="cover">
+  <style>
+    html,body{margin:0;background:var(--bg)}
+    #cover{position:relative;width:960px;height:288px;overflow:hidden;background:var(--bg)}
+    svg{position:absolute;left:480px;top:0}
+    .accent{fill:var(--accent)} .warn{fill:var(--state-unknown)} .steel{fill:var(--line-strong)} .ink{fill:var(--ink)}
+    .dot{fill:var(--bg)}
+    .blk{rx:var(--radius-sm)}
+    .txt{position:absolute;left:40px;bottom:32px;max-width:440px}
+    .name{font-family:var(--font-sans);font-weight:700;font-size:88px;line-height:.95;color:var(--ink);letter-spacing:-1px}
+    .tag{margin-top:var(--space-3);font-family:var(--font-sans);font-size:14px;line-height:20px;color:var(--ink-muted)}
+  </style>
+  <svg width="480" height="288" viewBox="0 0 480 288" aria-hidden="true">
+    <!--
+      blocks: accent 240×288 슬랩(꼭대기·바닥으로 번짐) · state-unknown 224×96(오른쪽 위로 번짐) · line-strong 112×176 · ink 96×176
+      arrangement: 키 큰 슬랩 하나 + 위성 셋, 간격 space-4(16px)
+      pattern: 점 격자 — README "4px 격자, 고정폭, 움직임 없음": 정밀·기술형이라 점 격자 행, 픽셀 좌표 그리드를 닮음
+      scales: 점 간격 space-6(24px), 점 반지름 3, 모서리 radius-sm(2px)
+    -->
+    <rect class="accent blk" x="0" y="-8" width="240" height="304"/>
+    <rect class="warn blk" x="256" y="-8" width="232" height="104"/>
+    <rect class="steel blk" x="256" y="112" width="112" height="184"/>
+    <rect class="ink blk" x="384" y="112" width="104" height="184"/>
+    <g class="dot">
+      <circle cx="48" cy="48" r="3"/><circle cx="72" cy="48" r="3"/><circle cx="96" cy="48" r="3"/><circle cx="120" cy="48" r="3"/><circle cx="144" cy="48" r="3"/><circle cx="168" cy="48" r="3"/>
+      <circle cx="48" cy="72" r="3"/><circle cx="72" cy="72" r="3"/><circle cx="96" cy="72" r="3"/><circle cx="120" cy="72" r="3"/><circle cx="144" cy="72" r="3"/><circle cx="168" cy="72" r="3"/>
+      <circle cx="48" cy="96" r="3"/><circle cx="72" cy="96" r="3"/><circle cx="96" cy="96" r="3"/><circle cx="120" cy="96" r="3"/><circle cx="144" cy="96" r="3"/><circle cx="168" cy="96" r="3"/>
+      <circle cx="48" cy="120" r="3"/><circle cx="72" cy="120" r="3"/><circle cx="96" cy="120" r="3"/><circle cx="120" cy="120" r="3"/><circle cx="144" cy="120" r="3"/><circle cx="168" cy="120" r="3"/>
+      <circle cx="48" cy="144" r="3"/><circle cx="72" cy="144" r="3"/><circle cx="96" cy="144" r="3"/><circle cx="120" cy="144" r="3"/><circle cx="144" cy="144" r="3"/><circle cx="168" cy="144" r="3"/>
+    </g>
+  </svg>
+  <div class="txt">
+    <div class="name">Lin Auto<br>제어판</div>
+    <div class="tag">화려함보다 정확한 판독 — 무엇을 보고, 얼마나 확신하는지.</div>
+  </div>
+</div>
+<script></script>

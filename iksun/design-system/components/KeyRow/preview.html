@@ -1,0 +1,25 @@
+<!-- @dsCard group="설정" height=200 subtitle="F5–F12 버프 키 표" -->
+<div id="root">
+  <style>
+    body{margin:0;background:var(--surface);font-family:var(--font-sans);color:var(--ink)}
+    table{border-collapse:collapse;margin:var(--space-4);font-size:13px;line-height:20px}
+    th{background:var(--surface-raised);font-weight:700;font-size:12px;padding:var(--space-1) var(--space-2);text-align:center}
+    td{border-top:1px solid var(--line);padding:var(--space-1) var(--space-2);text-align:center}
+    .k{font-family:var(--font-mono);font-weight:700}
+    input[type=text]{width:64px;font-family:var(--font-mono);font-size:13px;text-align:center;color:var(--ink);background:var(--surface-raised);border:1px solid var(--line-strong);border-radius:var(--radius-sm);padding:2px 4px}
+    input.focus{outline:2px solid var(--accent);outline-offset:0}
+    input.bad{border-color:var(--state-danger)}
+    input:disabled{color:var(--ink-muted)}
+    input[type=checkbox]{accent-color:var(--accent);width:14px;height:14px}
+    .n{color:var(--ink-muted);font-size:12px;text-align:left;width:150px}
+    .n.bad{color:var(--state-danger)}
+  </style>
+  <table>
+    <tr><th>키</th><th>주기(초)</th><th>버프</th><th>변신</th><th>스킬</th><th></th></tr>
+    <tr><td class="k">F5</td><td><input type="text" value="600"></td><td><input type="checkbox" checked></td><td><input type="checkbox"></td><td><input type="checkbox"></td><td class="n">버프 주기</td></tr>
+    <tr><td class="k">F6</td><td><input type="text" class="focus" value="1800"></td><td><input type="checkbox"></td><td><input type="checkbox" checked></td><td><input type="checkbox"></td><td class="n">변신 주기</td></tr>
+    <tr><td class="k">F7</td><td><input type="text" class="bad" value="12a"></td><td><input type="checkbox"></td><td><input type="checkbox"></td><td><input type="checkbox" checked></td><td class="n bad">숫자만 입력</td></tr>
+    <tr><td class="k">F8</td><td><input type="text" value="0" disabled></td><td><input type="checkbox"></td><td><input type="checkbox"></td><td><input type="checkbox"></td><td class="n">주기 없음</td></tr>
+  </table>
+</div>
+<script></script>
