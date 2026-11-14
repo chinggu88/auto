@@ -1244,7 +1244,7 @@ def dumpchar(pid):
         say()
         m.logcharinfo()
         say()
-        say('  게임 화면 왼쪽 정보창과 숫자가 같으면 주소가 맞다 (AC 는 원본 클라이언트에서 1바이트라 다를 수 있다)')
+        say('  게임 화면 왼쪽 정보창과 숫자가 같으면 주소가 맞다')
     finally:
         m.detach()
 

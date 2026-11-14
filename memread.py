@@ -1210,6 +1210,11 @@ class Mem(object):
             info['hp_max'] = self.value('hp_max')
         if info['mp_max'] == None:
             info['mp_max'] = self.value('mp_max')
+        #AC 는 1바이트에 256 으로 감겨 들어 있다 (실측: 원값 115 = 화면 AC -141).
+        #AC 는 10 에서 시작해 내려가므로 10 보다 큰 원값은 256 을 빼서 화면 값으로 되돌린다
+        info['ac_raw'] = info['ac']
+        if info['ac'] != None and info['ac'] > 10:
+            info['ac'] = info['ac'] - 256
         info['exp_pct'] = self.exppct(info['level'], info['exp'])
         info['food_pct'] = info['food'] * 100 // 29 if info['food'] != None else None
         info['weight_pct'] = info['weight'] * 100 // 29 if info['weight'] != None else None
@@ -1226,7 +1231,7 @@ class Mem(object):
         self.log('캐릭터 정보 (id %s)' % f(c['id']))
         self.log('  LEV %s   경험치 %s (%s%%)' % (f(c['level']), f(c['exp']), f(c['exp_pct'])))
         self.log('  HP %s/%s   MP %s/%s' % (f(c['hp']), f(c['hp_max']), f(c['mp']), f(c['mp_max'])))
-        self.log('  AC %s   성향 %s' % (f(c['ac']), f(c['align'])))
+        self.log('  AC %s (원값 %s)   성향 %s' % (f(c['ac']), f(c['ac_raw']), f(c['align'])))
         self.log('  힘 %s 지능 %s 지혜 %s 민첩 %s 체력 %s 카리스마 %s'
                  % (f(c['str']), f(c['int']), f(c['wis']), f(c['dex']), f(c['con']), f(c['cha'])))
         self.log('  포만도 %s/29 (%s%%)   무게 %s/29 (%s%%)'
