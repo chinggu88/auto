@@ -1149,6 +1149,92 @@ class Mem(object):
                         s['name'] if s['name'] != None else '(이름 못 읽음)'))
         return out
 
+    #--- 캐릭터 정보 (왼쪽 HUD) ---
+    #
+    #  캐릭터 상태 패킷(dcdcccccchhhhcdcchcccc)을 FUN_0044d300 이 정적 주소에 풀어 넣는 값들.
+    #  주소는 mem.json chains.char_* 에 있다. 정적 분석으로 찾은 값. 실기 확인 전
+
+    #레벨 n 까지 필요한 누적 경험치. Lin.exe FUN_0045fbd0 과 같은 계산
+    #  n<0 이면 0, n<51 이면 exp_table[n] (8바이트 간격 i32), 그 위는 n*0x2264F44-0x66019083 (32비트 부호)
+    def _expneed(self, n):
+        if n < 0:
+            return 0
+        if n < 0x33:
+            spec = (self.cfg.get('chains') or {}).get('exp_table')
+            if spec == None:
+                return None
+            with self.lock:
+                addr = self.resolve(spec)
+                raw = readmem(self.h, addr + n * 8, 4) if addr != None else None
+            if raw == None:
+                return None
+            return struct.unpack('<i', raw)[0]
+        v = (n * 0x2264F44 - 0x66019083) & 0xFFFFFFFF
+        return v - 0x100000000 if v >= 0x80000000 else v
+
+    #경험치 % (HUD 와 같은 계산, 소수 둘째 자리까지). 못 구하면 None
+    def exppct(self, level=None, exp=None):
+        if level == None:
+            level = self.value('char_level')
+        if exp == None:
+            exp = self.value('char_exp')
+        if level == None or exp == None:
+            return None
+        lo = self._expneed(level - 1)
+        hi = self._expneed(level)
+        if lo == None or hi == None or hi <= lo:
+            return None
+        if exp - lo < 0:
+            return 0.0
+        return ((exp - lo) * 10000 // (hi - lo)) / 100.0
+
+    #캐릭터 정보 전부를 dict 로 돌려준다. 못 읽은 칸은 None
+    #  hp/mp 는 보안 홀더(실제 현재값)를 먼저 쓰고, 못 읽으면 chains.hp/mp 로 폴백한다
+    #  food/weight 는 0~29 단계 원값이고 food_pct/weight_pct 는 HUD 와 같은 값*100//29
+    def charinfo(self):
+        if self.h == None or self.cfg == None:
+            return None
+        keys = ['id', 'level', 'exp', 'str', 'int', 'wis', 'dex', 'con', 'cha',
+                'hp_max', 'mp_max', 'ac', 'time', 'food', 'weight', 'align',
+                'fire', 'water', 'wind', 'earth']
+        info = dict((k, self.value('char_' + k)) for k in keys)
+        hp = self.secure_value('hp') if self.cfg.get('secure') else None
+        if hp == None:
+            hp = self.value('hp')
+        mp = self.secure_value('mp') if self.cfg.get('secure') else None
+        if mp == None:
+            mp = self.value('mp')
+        info['hp'] = hp
+        info['mp'] = mp
+        if info['hp_max'] == None:
+            info['hp_max'] = self.value('hp_max')
+        if info['mp_max'] == None:
+            info['mp_max'] = self.value('mp_max')
+        info['exp_pct'] = self.exppct(info['level'], info['exp'])
+        info['food_pct'] = info['food'] * 100 // 29 if info['food'] != None else None
+        info['weight_pct'] = info['weight'] * 100 // 29 if info['weight'] != None else None
+        return info
+
+    #캐릭터 정보를 로그에 찍는다
+    def logcharinfo(self):
+        c = self.charinfo()
+        if c == None:
+            self.log('캐릭터 정보를 못 읽었다 - 클라이언트에 안 붙었다')
+            return None
+        def f(v):
+            return '?' if v == None else str(v)
+        self.log('캐릭터 정보 (id %s)' % f(c['id']))
+        self.log('  LEV %s   경험치 %s (%s%%)' % (f(c['level']), f(c['exp']), f(c['exp_pct'])))
+        self.log('  HP %s/%s   MP %s/%s' % (f(c['hp']), f(c['hp_max']), f(c['mp']), f(c['mp_max'])))
+        self.log('  AC %s   성향 %s' % (f(c['ac']), f(c['align'])))
+        self.log('  힘 %s 지능 %s 지혜 %s 민첩 %s 체력 %s 카리스마 %s'
+                 % (f(c['str']), f(c['int']), f(c['wis']), f(c['dex']), f(c['con']), f(c['cha'])))
+        self.log('  포만도 %s/29 (%s%%)   무게 %s/29 (%s%%)'
+                 % (f(c['food']), f(c['food_pct']), f(c['weight']), f(c['weight_pct'])))
+        self.log('  저항 불 %s 물 %s 바람 %s 땅 %s'
+                 % (f(c['fire']), f(c['water']), f(c['wind']), f(c['earth'])))
+        return c
+
     #인벤토리(소지품) 창 아이템 순회. (아이템 목록, 창 주소, 아이템 개수) 를 돌려준다.
     #창 주소 = [lin.exe+0xA2DBC] (mem.json chains.item_win, offsets [0] 으로 한 번 거른다. 월드 밖이면 0).
     #스킬 창과 같은 목록 구조다: 창+0x2C u32 = 아이템 개수 (상한 0x100),

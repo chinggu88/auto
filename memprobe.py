@@ -14,7 +14,8 @@
 #   python memprobe.py --objs                     객체 목록 덤프
 #   python memprobe.py --table                    bsearch 엔티티 테이블 순회 (플레이어 객체 찾기)
 #   python memprobe.py --spells                   스킬(마법) 창 순회 - 배운 스킬의 슬롯/id/아이콘/메모리 주소/이름
-#   python memprobe.py --items                    인벤토리 창 순회 - 소지품의 id/종류/아이콘/축복/수량/확인/이름
+#   python memprobe.py --char                     캐릭터 정보 - 레벨/경험치%/HP/MP/AC/성향/스탯/포만도/무게/저항
+#   python memprobe.py --items                   인벤토리 창 순회 - 소지품의 id/종류/아이콘/축복/수량/확인/이름
 #   python memprobe.py --objdump                   플레이어 좌표 일치 객체 전부 덤프
 #   python memprobe.py --objdump 0x12031030        그 주소의 객체 덤프
 #   python memprobe.py --findplayer                테이블 객체 안에서 현재 HP/MaxHP 쌍 찾기 (플레이어 객체 특정)
@@ -1234,6 +1235,20 @@ def dumpspells(pid):
         m.detach()
 
 
+def dumpchar(pid):
+    m = mr.Mem(MEM_PATH, say)
+    if not m.attach(pid):
+        say('붙기 실패 : ' + str(m.err))
+        return
+    try:
+        say()
+        m.logcharinfo()
+        say()
+        say('  게임 화면 왼쪽 정보창과 숫자가 같으면 주소가 맞다 (AC 는 원본 클라이언트에서 1바이트라 다를 수 있다)')
+    finally:
+        m.detach()
+
+
 def dumpitems(pid):
     m = mr.Mem(MEM_PATH, say)
     if not m.attach(pid):
@@ -1957,6 +1972,10 @@ def main():
 
     if has('--items'):
         dumpitems(pid)
+        return
+
+    if has('--char'):
+        dumpchar(pid)
         return
 
     if has('--secure'):
