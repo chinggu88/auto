@@ -13,6 +13,7 @@
 #   python memprobe.py --watch hp,mp --sec 0.5    감시 주기 바꾸기
 #   python memprobe.py --objs                     객체 목록 덤프
 #   python memprobe.py --table                    bsearch 엔티티 테이블 순회 (플레이어 객체 찾기)
+#   python memprobe.py --spells                   스킬(마법) 창 순회 - 배운 스킬의 슬롯/id/아이콘/메모리 주소/이름
 #   python memprobe.py --objdump                   플레이어 좌표 일치 객체 전부 덤프
 #   python memprobe.py --objdump 0x12031030        그 주소의 객체 덤프
 #   python memprobe.py --findplayer                테이블 객체 안에서 현재 HP/MaxHP 쌍 찾기 (플레이어 객체 특정)
@@ -1217,6 +1218,21 @@ def dumpenttable(pid):
         m.detach()
 
 
+def dumpspells(pid):
+    m = mr.Mem(MEM_PATH, say)
+    if not m.attach(pid):
+        say('붙기 실패 : ' + str(m.err))
+        return
+    try:
+        say()
+        spells = m.logspells()
+        if len(spells) == 0:
+            say()
+            say('  배운 스킬이 없거나 아직 스킬 패킷을 못 받았다. 게임에서 스킬 창을 한 번 열어본 뒤 다시 돌린다')
+    finally:
+        m.detach()
+
+
 def dosecure(pid):
     #보안 홀더(HP/MP) 디코드 검증. 버퍼 chains 값과 나란히 찍어 맞는지 본다
     #  python memprobe.py --secure
@@ -1917,6 +1933,10 @@ def main():
 
     if has('--table'):
         dumpenttable(pid)
+        return
+
+    if has('--spells'):
+        dumpspells(pid)
         return
 
     if has('--secure'):
