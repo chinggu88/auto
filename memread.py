@@ -1149,6 +1149,89 @@ class Mem(object):
                         s['name'] if s['name'] != None else '(이름 못 읽음)'))
         return out
 
+    #인벤토리(소지품) 창 아이템 순회. (아이템 목록, 창 주소, 아이템 개수) 를 돌려준다.
+    #창 주소 = [lin.exe+0xA2DBC] (mem.json chains.item_win, offsets [0] 으로 한 번 거른다. 월드 밖이면 0).
+    #스킬 창과 같은 목록 구조다: 창+0x2C u32 = 아이템 개수 (상한 0x100),
+    #창+0x4C + i*4 = 아이템 i 엔트리 포인터 (엔트리는 0x80 바이트).
+    #엔트리 필드 (아이템 추가 패킷 dcchcdcsc 를 FUN_00428d50 이 채우는 순서):
+    #  id@+0x04 u32, name_ptr@+0x0C u32 (CP949, '(착용)' 같은 접미사 포함),
+    #  use@+0x68 u8 (사용 종류), b69@+0x69 u8 (미확인), icon@+0x6A u16,
+    #  bless@+0x6C u32 (0~3), count@+0x70 u32, ident@+0x74 u8 (확인 여부),
+    #  desc_ptr@+0x78 u32 (상태 설명 문자열)
+    #정적 분석으로 찾은 값. 실기 확인 전
+    #주의: lock 안에서 value() 를 부르면 데드락이 나므로 resolve + readmem 으로 직접 읽는다
+    def item_table(self):
+        if self.h == None or self.cfg == None:
+            return [], None, None
+        chains = self.cfg.get('chains') or {}
+        spec = chains.get('item_win')
+        if spec == None:
+            return [], None, None
+        with self.lock:
+            win = self.resolve(spec)
+            if win == None:
+                return [], None, None
+            raw = readmem(self.h, win + 0x2C, 4)
+            if raw == None:
+                return [], win, None
+            count = struct.unpack('<I', raw)[0]
+            if count <= 0 or count > 0x100:
+                return [], win, count
+            blob = readmem(self.h, win + 0x4C, 4 * count)
+            if blob == None:
+                return [], win, count
+            out = []
+            for i in range(count):
+                p = struct.unpack_from('<I', blob, i * 4)[0]
+                if p < 0x10000:
+                    continue
+                ent = readmem(self.h, p, 0x80)
+                if ent == None:
+                    continue
+                try:
+                    iid   = struct.unpack_from('<I', ent, 0x04)[0]
+                    nptr  = struct.unpack_from('<I', ent, 0x0C)[0]
+                    use   = ent[0x68]
+                    b69   = ent[0x69]
+                    icon  = struct.unpack_from('<H', ent, 0x6A)[0]
+                    bless = struct.unpack_from('<I', ent, 0x6C)[0]
+                    cnt   = struct.unpack_from('<I', ent, 0x70)[0]
+                    ident = ent[0x74]
+                    dptr  = struct.unpack_from('<I', ent, 0x78)[0]
+                except Exception:
+                    continue
+                nm = None
+                if nptr >= 0x10000:
+                    raw = readmem(self.h, nptr, 64)
+                    if raw != None:
+                        nm = _decode_name(raw)
+                desc = None
+                if dptr >= 0x10000:
+                    raw = readmem(self.h, dptr, 128)
+                    if raw != None:
+                        desc = _decode_name(raw)
+                #slot_addr = 엔트리 포인터가 들어 있는 칸, ptr = 엔트리 자체, name_ptr = 이름 문자열
+                out.append({'slot': i, 'slot_addr': win + 0x4C + i * 4, 'ptr': p,
+                            'id': iid, 'use': use, 'b69': b69, 'icon': icon,
+                            'bless': bless, 'count': cnt, 'ident': ident,
+                            'name': nm, 'name_ptr': nptr, 'desc': desc})
+            return out, win, count
+
+    #소지품 목록을 로그에 찍는다 (lock 을 잡지 않고 item_table 을 부른다)
+    def logitems(self):
+        out, win, count = self.item_table()
+        if win == None:
+            self.log('인벤토리 창을 못 읽었다 - 캐릭터로 월드에 들어간 뒤에 다시 읽는다 (mem.json chains.item_win 확인)')
+            return []
+        self.log('인벤토리 창 : 0x%X   아이템 %s개   읽은 아이템 %d개' % (win, str(count), len(out)))
+        self.log('  (id 는 엔트리+0x04, 종류 +0x68, 아이콘 +0x6A, 축복 +0x6C, 수량 +0x70, 확인 +0x74)')
+        for s in out:
+            self.log('  칸 %-3d id %-10d 종류 %-3d 아이콘 %-5d 축복 %d 수량 %-7d 확인 %d  엔트리 0x%08X  %s'
+                     % (s['slot'], s['id'], s['use'], s['icon'], s['bless'], s['count'],
+                        s['ident'], s['ptr'],
+                        s['name'] if s['name'] != None else '(이름 못 읽음)'))
+        return out
+
     #좌표 일치 객체 전부. (객체 dict 리스트).
     #객체 안의 x/y 는 raw 좌표임이 --table 실측으로 확인됐으므로, 게임 좌표와
     #비교하면 엉뚱한 몹이 걸리는 오매치가 난다 (몹 raw_x 가 플레이어 게임_x 와

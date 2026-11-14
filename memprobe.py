@@ -14,6 +14,7 @@
 #   python memprobe.py --objs                     객체 목록 덤프
 #   python memprobe.py --table                    bsearch 엔티티 테이블 순회 (플레이어 객체 찾기)
 #   python memprobe.py --spells                   스킬(마법) 창 순회 - 배운 스킬의 슬롯/id/아이콘/메모리 주소/이름
+#   python memprobe.py --items                    인벤토리 창 순회 - 소지품의 id/종류/아이콘/축복/수량/확인/이름
 #   python memprobe.py --objdump                   플레이어 좌표 일치 객체 전부 덤프
 #   python memprobe.py --objdump 0x12031030        그 주소의 객체 덤프
 #   python memprobe.py --findplayer                테이블 객체 안에서 현재 HP/MaxHP 쌍 찾기 (플레이어 객체 특정)
@@ -1233,6 +1234,21 @@ def dumpspells(pid):
         m.detach()
 
 
+def dumpitems(pid):
+    m = mr.Mem(MEM_PATH, say)
+    if not m.attach(pid):
+        say('붙기 실패 : ' + str(m.err))
+        return
+    try:
+        say()
+        items = m.logitems()
+        if len(items) == 0:
+            say()
+            say('  소지품이 없거나 아직 아이템 패킷을 못 받았다. 게임에서 인벤토리 창을 한 번 열어본 뒤 다시 돌린다')
+    finally:
+        m.detach()
+
+
 def dosecure(pid):
     #보안 홀더(HP/MP) 디코드 검증. 버퍼 chains 값과 나란히 찍어 맞는지 본다
     #  python memprobe.py --secure
@@ -1937,6 +1953,10 @@ def main():
 
     if has('--spells'):
         dumpspells(pid)
+        return
+
+    if has('--items'):
+        dumpitems(pid)
         return
 
     if has('--secure'):
