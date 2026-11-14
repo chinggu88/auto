@@ -1,0 +1,21 @@
+<!-- @dsCard group="상태" height=96 subtitle="tri-state + 위험, 라벨 필수" -->
+<div id="root">
+  <style>
+    body{margin:0;background:var(--surface);font-family:var(--font-sans)}
+    .row{display:flex;gap:var(--space-2);flex-wrap:wrap;padding:var(--space-4)}
+    .b{display:inline-flex;align-items:center;gap:6px;padding:var(--space-1) var(--space-2);border-radius:var(--radius-sm);font-size:12px;line-height:16px;font-weight:700}
+    .b i{width:8px;height:8px;border-radius:var(--radius-sm);display:block}
+    .b small{font-weight:400;color:var(--ink-muted);font-size:12px}
+    .ok{background:var(--state-ok-bg);color:var(--state-ok)} .ok i{background:var(--state-ok)}
+    .no{background:var(--surface-raised);color:var(--state-idle)} .no i{background:var(--state-idle)}
+    .un{background:var(--state-unknown-bg);color:var(--state-unknown)} .un i{background:var(--state-unknown)}
+    .dg{background:var(--state-danger-bg);color:var(--state-danger)} .dg i{background:var(--state-danger)}
+  </style>
+  <div class="row">
+    <span class="b ok"><i></i>확인 <small>· 메모리</small></span>
+    <span class="b no"><i></i>아님</span>
+    <span class="b un"><i></i>판단불가 <small>· 이미지로 대체</small></span>
+    <span class="b dg"><i></i>위험 <small>· 적대 혈맹</small></span>
+  </div>
+</div>
+<script></script>

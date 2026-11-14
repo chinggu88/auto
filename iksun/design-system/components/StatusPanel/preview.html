@@ -1,0 +1,32 @@
+<!-- @dsCard group="상태" height=200 subtitle="창 맨 위 상태 판" -->
+<div id="root">
+  <style>
+    body{margin:0;background:var(--bg);font-family:var(--font-sans);color:var(--ink)}
+    .pad{padding:var(--space-4);display:grid;gap:var(--space-3)}
+    .p{display:grid;grid-template-columns:1.3fr 1fr 1fr 1.3fr;gap:var(--space-4);align-items:start;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-lg);padding:var(--space-3) var(--space-4)}
+    .t{font-size:16px;line-height:22px;font-weight:700;margin-bottom:var(--space-1)}
+    .lab{font-size:12px;line-height:16px;color:var(--ink-muted)}
+    .r{font-family:var(--font-mono);font-size:22px;line-height:26px;font-weight:700}
+    .r.dg{color:var(--state-danger)}
+    .b{display:inline-flex;align-items:center;gap:6px;padding:2px var(--space-2);border-radius:var(--radius-sm);font-size:12px;font-weight:700}
+    .b i{width:8px;height:8px;border-radius:var(--radius-sm)}
+    .ok{background:var(--state-ok-bg);color:var(--state-ok)} .ok i{background:var(--state-ok)}
+    .un{background:var(--state-unknown-bg);color:var(--state-unknown)} .un i{background:var(--state-unknown)}
+    .dg2{background:var(--state-danger-bg);color:var(--state-danger)} .dg2 i{background:var(--state-danger)}
+  </style>
+  <div class="pad">
+    <div class="p">
+      <div><div class="t">사냥 중</div><span class="b ok"><i></i>확인 · 대상 커서 일치</span></div>
+      <div><div class="lab">HP</div><div class="r">72%</div><div class="lab">임계 50% · 메모리 · 0.4초 전</div></div>
+      <div><div class="lab">MP</div><div class="r">41%</div><div class="lab">임계 30% · 메모리 · 0.4초 전</div></div>
+      <div><div class="lab">인식 출처</div><div class="t">메모리</div><div class="lab">pit.json · mem.json 정상</div></div>
+    </div>
+    <div class="p">
+      <div><div class="t">귀환 중</div><span class="b dg2"><i></i>위험 · HP 임계 이하</span></div>
+      <div><div class="lab">HP</div><div class="r dg">18%</div><div class="lab">임계 50% · 이미지 · 1.2초 전</div></div>
+      <div><div class="lab">MP</div><div class="r">—</div><div class="lab">읽지 못함</div></div>
+      <div><div class="lab">인식 출처</div><span class="b un"><i></i>판단불가</span><div class="lab">메모리 stale (연속 5회 실패) — 이미지로 대체</div></div>
+    </div>
+  </div>
+</div>
+<script></script>

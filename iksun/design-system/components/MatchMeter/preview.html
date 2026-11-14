@@ -1,0 +1,25 @@
+<!-- @dsCard group="인식" height=176 subtitle="신뢰도 vs 임계값" -->
+<div id="root">
+  <style>
+    body{margin:0;background:var(--surface);font-family:var(--font-sans);color:var(--ink)}
+    .wrap{padding:var(--space-4);display:grid;gap:var(--space-2)}
+    .m{display:grid;grid-template-columns:110px 1fr 96px 120px;align-items:center;gap:var(--space-3);font-size:13px;line-height:20px}
+    .bar{position:relative;height:8px;background:var(--surface-raised);border:1px solid var(--line-strong);border-radius:var(--radius-sm)}
+    .fill{position:absolute;left:0;top:0;bottom:0;border-radius:var(--radius-sm)}
+    .tick{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--ink)}
+    .v{font-family:var(--font-mono);font-size:13px;text-align:right}
+    .v.old{color:var(--ink-muted)}
+    .b{display:inline-flex;align-items:center;gap:6px;padding:2px var(--space-2);border-radius:var(--radius-sm);font-size:12px;font-weight:700;justify-self:start}
+    .b i{width:8px;height:8px;border-radius:var(--radius-sm)}
+    .ok{background:var(--state-ok-bg);color:var(--state-ok)} .ok i{background:var(--state-ok)}
+    .no{background:var(--surface-raised);color:var(--state-idle)} .no i{background:var(--state-idle)}
+    .un{background:var(--state-unknown-bg);color:var(--state-unknown)} .un i{background:var(--state-unknown)}
+  </style>
+  <div class="wrap">
+    <div class="m"><span>checkhp</span><div class="bar"><div class="fill" style="width:82%;background:var(--state-ok)"></div><div class="tick" style="left:70%"></div></div><span class="v">0.82 / 0.70</span><span class="b ok"><i></i>확인</span></div>
+    <div class="m"><span>mark1</span><div class="bar"><div class="fill" style="width:31%;background:var(--state-idle)"></div><div class="tick" style="left:60%"></div></div><span class="v">0.31 / 0.60</span><span class="b no"><i></i>아님</span></div>
+    <div class="m"><span>out (사망)</span><div class="bar"><div class="fill" style="width:12%;background:var(--state-idle)"></div><div class="tick" style="left:80%"></div></div><span class="v old">0.12 / 0.80</span><span class="b no"><i></i>아님</span></div>
+    <div class="m"><span>HP (메모리)</span><div class="bar"><div class="tick" style="left:50%"></div></div><span class="v">—&nbsp;&nbsp;/ 0.50</span><span class="b un"><i></i>판단불가</span></div>
+  </div>
+</div>
+<script></script>
