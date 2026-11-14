@@ -1,4 +1,4 @@
-<!-- @dsCard group="상태" height=200 subtitle="창 맨 위 상태 판" -->
+<!-- @dsCard group="상태" height=288 subtitle="창 맨 위 상태 판" -->
 <div id="root">
   <style>
     body{margin:0;background:var(--bg);font-family:var(--font-sans);color:var(--ink)}
@@ -19,13 +19,19 @@
       <div><div class="t">사냥 중</div><span class="b ok"><i></i>확인 · 대상 커서 일치</span></div>
       <div><div class="lab">HP</div><div class="r">72%</div><div class="lab">임계 50% · 메모리 · 0.4초 전</div></div>
       <div><div class="lab">MP</div><div class="r">41%</div><div class="lab">임계 30% · 메모리 · 0.4초 전</div></div>
-      <div><div class="lab">인식 출처</div><div class="t">메모리</div><div class="lab">pit.json · mem.json 정상</div></div>
+      <div><div class="lab">메모리 읽기</div><div class="t">정상</div><div class="lab">pit.json · mem.json 정상</div></div>
     </div>
     <div class="p">
       <div><div class="t">귀환 중</div><span class="b dg2"><i></i>위험 · HP 임계 이하</span></div>
-      <div><div class="lab">HP</div><div class="r dg">18%</div><div class="lab">임계 50% · 이미지 · 1.2초 전</div></div>
+      <div><div class="lab">HP</div><div class="r dg">18%</div><div class="lab">임계 50% · 메모리 · 0.4초 전</div></div>
+      <div><div class="lab">MP</div><div class="r">35%</div><div class="lab">임계 30% · 메모리 · 0.4초 전</div></div>
+      <div><div class="lab">메모리 읽기</div><div class="t">정상</div><div class="lab">pit.json · mem.json 정상</div></div>
+    </div>
+    <div class="p">
+      <div><div class="t">정지</div><span class="b un"><i></i>판단불가 · 동작 멈춤</span></div>
+      <div><div class="lab">HP</div><div class="r">—</div><div class="lab">읽지 못함</div></div>
       <div><div class="lab">MP</div><div class="r">—</div><div class="lab">읽지 못함</div></div>
-      <div><div class="lab">인식 출처</div><span class="b un"><i></i>판단불가</span><div class="lab">메모리 stale (연속 5회 실패) — 이미지로 대체</div></div>
+      <div><div class="lab">메모리 읽기</div><span class="b un"><i></i>판단불가</span><div class="lab">메모리 stale (연속 5회 실패) — 사냥 멈춤</div></div>
     </div>
   </div>
 </div>
