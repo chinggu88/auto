@@ -176,6 +176,13 @@ def main():
             return
         print('글자 묶음 0x%X   버퍼 0x%X   글자 수 %d   +8 값 %d' % got)
         print('지금 글자 : ' + repr(c.text()))
+        #글자 버퍼 원본 바이트. 한글이 어떤 값으로 들어가는지(유니코드인지 CP949 인지) 보려고 찍는다
+        if got[1] != 0 and got[2] > 0:
+            raw = mr.readmem(m.h, got[1], min(got[2], CHAT_MAX) * 2 + 4)
+            if raw != None:
+                print('버퍼 원본 : ' + ' '.join('%02X' % x for x in raw))
+                print('2바이트씩 : ' + ' '.join('%04X' % v for v in
+                                              struct.unpack('<%dH' % (len(raw) // 2), raw)))
         args = [a for a in sys.argv[1:] if not a.startswith('--')]
         if len(args) == 0:
             print('써 넣으려면 : 채팅칸에 숫자를 글자 수만큼 쳐 두고 (".버프" 면 111)  python memchat.py ".버프"')
