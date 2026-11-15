@@ -1265,6 +1265,69 @@ def dumpitems(pid):
         m.detach()
 
 
+def _readcstr(m, ptr, n=48):
+    if ptr == None or ptr < 0x10000:
+        return None
+    raw = mr.readmem(m.h, ptr, n)
+    if raw == None:
+        return None
+    return mr._decode_name(raw)
+
+
+#위젯 머리(raw)에서 힙 포인터로 보이는 4바이트를 모두 찾아, 그게 가리키는 곳을
+#'칸 포인터 배열' 로 해석해 본다. 각 칸의 +0x10(이름)·+0x68(아이콘)을 읽어 이름이 나오면
+#그 오프셋이 list_off 다. 한 번 돌려서 버프 구조를 통째로 드러내는 자동 스캔이다
+def scanbuffwidget(m, win, raw):
+    bcfg = m.cfg.get('buff') or {}
+    icon_off = num(bcfg.get('icon_off'), 0x68)
+    name_off = num(bcfg.get('name_ptr_off'), 0x10)
+    esize    = num(bcfg.get('entry_size'), 0x80)
+    say()
+    say('--- 자동 스캔 (위젯 안 포인터를 따라가 칸 이름을 찾는다) ---')
+    found = False
+    for off in range(0, len(raw) - 3, 4):
+        p = struct.unpack_from('<I', raw, off)[0]
+        if p < 0x10000 or p > 0xFFFFFFF0:
+            continue
+        #off 근처(앞 8바이트)에 '개수' 로 쓸 작은 정수가 있는지 같이 본다
+        cnt = None
+        for coff in (off + 4, off - 4, off + 8, off - 8):
+            if 0 <= coff <= len(raw) - 4:
+                c = struct.unpack_from('<I', raw, coff)[0]
+                if 1 <= c <= 64:
+                    cnt = (coff, c); break
+        n = cnt[1] if cnt else 3        #개수를 모르면 앞 3칸만 시험
+        blob = mr.readmem(m.h, p, 4 * n)
+        if blob == None:
+            continue
+        names = []
+        for i in range(n):
+            ep = struct.unpack_from('<I', blob, i * 4)[0]
+            if ep < 0x10000 or ep > 0xFFFFFFF0:
+                names.append(None); continue
+            ent = mr.readmem(m.h, ep, esize)
+            if ent == None:
+                names.append(None); continue
+            try:
+                nptr = struct.unpack_from('<I', ent, name_off)[0]
+                icon = struct.unpack_from('<i', ent, icon_off)[0]
+            except Exception:
+                names.append(None); continue
+            nm = _readcstr(m, nptr)
+            names.append((nm, icon) if nm else None)
+        hit = [x for x in names if x]
+        if hit:
+            found = True
+            cdesc = ('개수 +0x%X=%d' % (cnt[0], cnt[1])) if cnt else '개수 미상(앞 3칸만)'
+            say('  list_off +0x%02X -> 0x%08X  (%s)' % (off, p, cdesc))
+            for i, x in enumerate(names):
+                if x:
+                    say('      칸 %-2d 아이콘 %-5d  %s' % (i, x[1], x[0]))
+    if not found:
+        say('  포인터를 따라가도 이름이 안 나왔다. 칸이 포인터 배열이 아니라 통째로 늘어선 것일 수 있다.')
+        say('  이때는 mem.json buff 블록에서 ptr_array 를 false 로 바꾸고 stride 를 조정해 다시 돌린다.')
+
+
 def dumpbuffs(pid):
     #버프 바를 읽고, 위젯/칸 원본 바이트까지 찍어 오프셋을 게임에서 확인하게 한다
     #  python memprobe.py --buffs
@@ -1281,17 +1344,18 @@ def dumpbuffs(pid):
         spec = chains.get('buff_win')
         win = m.resolve(spec) if spec else None
         if win:
-            raw = mr.readmem(m.h, win, 0x40)
+            raw = mr.readmem(m.h, win, 0x60)
             if raw:
-                say('버프 바 위젯 원본 (0x%08X, +0x00~0x3F):' % win)
+                say('버프 바 위젯 원본 (0x%08X, +0x00~0x5F):' % win)
                 say(hexdump(raw, win))
                 say('  이 안에서 켠 버프 개수(작은 정수)가 든 자리가 count_off, 칸들이 늘어선 곳의 오프셋이 list_off 다')
+                scanbuffwidget(m, win, raw)
         if len(buffs) == 0:
             say()
             say('  켠 버프가 없거나, 오프셋이 아직 안 맞는다.')
             say('  확인법 : 게임에서 버프(예: 지혜/마력 물약, 아이언스킨)를 켜 두고 다시 돌린다.')
-            say('           이름이 뜨면 맞는 것이고, 안 뜨면 mem.json 의 buff 블록 값을 조정한다')
-            say('           (ptr_array true↔false, icon_off/name_ptr_off, entry_size 순으로 바꿔 본다)')
+            say('           위 "자동 스캔" 에서 버프 이름이 보이면, 그 줄의 off 값을 mem.json buff 블록에 적는다')
+            say('           (list_off = 포인터가 든 오프셋, count_off = 개수가 든 오프셋)')
         else:
             #첫 칸 원본 바이트 (icon_off/name_ptr_off 확인)
             first = buffs[0]
