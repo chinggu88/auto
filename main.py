@@ -104,6 +104,13 @@ SCAN_OFFSET_Y = -43   # 스캔 중심의 y 보정(px). 음수면 위, 양수면 
                       # 원본은 -40 이었고 어택포인트를 2px 내려서 -38
 
 BUFF_GAP    = 1    #버프 키 누른 뒤 대기(초)
+#단축키 페이지 : 게임의 F5~F12 단축키 칸은 F1 / F2 로 페이지를 바꾼다
+#  F1 = 공격 페이지 (공격 탭의 공격 키 / 새로고침 / 힐 / 이뮨 / 베르)
+#  F2 = 버프 페이지 (버프 탭의 버프 / 변신)
+#사냥은 F1 페이지에서 하고, 버프를 누를 때만 F2 로 갔다가 F1 로 돌아온다. 시작할 때도 같다
+PAGE_ATTACK = 'f1'
+PAGE_BUFF   = 'f2'
+PAGE_GAP    = 0.3  #페이지 키를 누른 뒤 단축키 칸이 바뀔 때까지 대기(초)
 CHAT_CMD      = '.버프'   #채팅창에 넣는 매크로 명령어
 CHAT_INTERVAL = 900       #채팅버프 주기(초). 15분
 CHAT_GAP      = 0.3       #엔터 -> 입력 -> 엔터 사이 대기(초)
@@ -225,15 +232,16 @@ DEFAULT_SECONDS = {
     'f12':    1800,   #귀환 - 주기 없음
 }
 DEFAULT_ROLES = {
-    'return':    'f8',
     'refresh':   'f5',
-    'transform': 'f7',
+    'transform': 'f7',    #변신 - 버프 페이지(F2) 의 키. 버프 탭에서 고른다
     'heal':      None,    #힐 - HP 가 정한 % 이하로 내려가면 누른다
     'immune':    None,    #이뮨 - 주위 몹이 정한 수 이상이면 누른다
     'ber':       None,    #베르 - 힐과 같은 방식 (HP % 는 따로 정한다)
 }
-ROLE_IDS = ['return', 'refresh', 'transform', 'heal', 'immune', 'ber']   #config.json 에 저장하는 역할 목록
-#(예전의 'skill' 역할은 공격 탭으로 옮겼다. 옛 config.json 의 roles.skill 은 불러올 때 공격 키 1번으로 바꾼다)
+ROLE_IDS = ['refresh', 'transform', 'heal', 'immune', 'ber']   #config.json 에 저장하는 역할 목록
+#(예전의 'skill' 역할은 공격 탭으로 옮겼다. 옛 config.json 의 roles.skill 은 불러올 때 공격 키 1번으로 바꾼다.
+# 'return'(귀환) 역할은 뺐다. KEY_RETURN 은 항상 None 이고 피 / 주변 캐릭터 감시는 감지만 모드에서만 돈다)
+PAGE_ROLES = ['refresh', 'heal', 'immune', 'ber']   #공격 페이지(F1) 의 역할. 공격 키와 겹치면 안 된다
 
 #공격 키 : 대상을 클릭한 뒤 조건이 맞으면 누르는 키. 공격 탭에서 최대 ATTACK_MAX 개까지 둔다
 #  key   : f5~f12 또는 None (안 씀)
@@ -267,7 +275,7 @@ BUFFKEY = {}      # 트리거명 -> 키
 
 KEY_REFRESH        = None   #사냥 헛돌 때 새로고침
 KEY_TRANSFORM      = None   #변신
-KEY_RETURN         = None   #귀환
+KEY_RETURN         = None   #귀환 (역할에서 뺐다. 항상 None)
 ATTACKS            = []     #공격 키 [(키, 딜레이(초), 거리(타일)), ...]  공격 탭 순서 = 우선순위
 KEY_SKILL          = None   #(호환) 공격 키 1번의 키. pit.py 가 아직 이 이름을 쓴다
 SKILL_COOL         = 0      #(호환) 공격 키 1번의 딜레이(초). 0 이면 끔
@@ -530,6 +538,12 @@ def dobuff(name):
     gu.press(key, presses=1)
     time.sleep(BUFF_GAP)
 
+#단축키 페이지를 바꾼다 (F1 = 공격, F2 = 버프)
+def setpage(key):
+    log('단축키 페이지 : ' + key.upper())
+    gu.press(key, presses=1)
+    time.sleep(PAGE_GAP)
+
 #채팅버프 : 엔터로 채팅창을 열고 '.버프' 를 쳐서 엔터로 보낸다
 #글자는 채팅 입력칸 메모리에 바로 써 넣는다 (memchat.py). 키로 치면 한/영 상태에 따라
 #'.버프' 가 '.qjvm' 로 들어가서 명령이 안 먹었다. 채팅칸 열기와 전송만 엔터 키로 한다
@@ -592,30 +606,45 @@ def requeststop():
 
 #귀환 : 귀환 키만 누르고 정지한다 (프로그램은 안 죽는다)
 def doreturn():
+    if KEY_RETURN == None:
+        log('귀환 키 없음 (역할에서 뺐다) - 정지만 한다')
+        dostop()
+        return
     log('귀환 : ' + str(KEY_RETURN))
     gu.press(KEY_RETURN, presses=1)
     dostop()
 
-#대기 중인 트리거 하나를 꺼내 실행. 실행했으면 True
+#대기 중인 트리거를 꺼내 실행. 실행했으면 True
+#버프 / 변신은 버프 페이지(F2) 의 키라서 F2 로 바꾸고 누른 뒤 F1 로 돌아온다
+#쌓인 요청은 한 번의 페이지 전환으로 몰아서 처리한다 (시작할 때 버프를 전부 걸고 F1 로 가는 것도 이 길)
 #사냥 트리거 False -> 해당 트리거 True -> 동작 -> 사냥 트리거 True 복귀
 def runpending():
     name = takepending()
     if name == None:
         return False
 
-    settrigger(name)              #사냥 트리거는 여기서 자동으로 False
-    if name == 'stop':
-        dostop()
-        return True               #사냥 트리거 복구 안 함. ALIVE=False 로 루프가 끝난다
-    if name == 'return':
-        doreturn()                #안에서 dostop() 을 부른다
-        return True
-    if name == 'transform':
-        dotransform()
-    elif name == 'chatbuff':
-        dochatbuff()
-    else:
-        dobuff(name)
+    onbuff = False                #지금 F2 페이지에 있는지
+    while name != None:
+        settrigger(name)          #사냥 트리거는 여기서 자동으로 False
+        if name == 'stop':
+            dostop()
+            return True           #사냥 트리거 복구 안 함. ALIVE=False 로 루프가 끝난다
+        if name == 'return':
+            doreturn()            #안에서 dostop() 을 부른다
+            return True
+        if name == 'chatbuff':
+            dochatbuff()          #채팅은 페이지와 상관없다
+        else:
+            if not onbuff:
+                setpage(PAGE_BUFF)
+                onbuff = True
+            if name == 'transform':
+                dotransform()
+            else:
+                dobuff(name)
+        name = takepending()
+    if onbuff:
+        setpage(PAGE_ATTACK)
     settrigger('hunt')            #끝나면 사냥 트리거 복구
     return True
 
@@ -1587,6 +1616,10 @@ def loadconfig(path=None):
     used = set()
     for rid in ROLE_IDS:
         v = raw.get(rid)
+        if rid == 'transform':
+            #변신은 버프 페이지(F2) 의 키라 공격 페이지 역할과 겹쳐도 된다
+            roles[rid] = v if v in FKEYS else None
+            continue
         #같은 키가 두 역할에 겹치면 뒤엣것을 버린다
         roles[rid] = v if (v in FKEYS and v not in used) else None
         if roles[rid] != None:
@@ -1708,8 +1741,8 @@ def applyconfig(seconds, roles, opts=None):
     KEY_REFRESH   = roles.get('refresh')
     KEY_TRANSFORM = roles.get('transform')
 
-    #공격 키. 역할 키와 겹치면 뺀다 (GUI 가 막지만 파일을 손으로 고쳤을 수 있다)
-    taken   = set(v for v in roles.values() if v)
+    #공격 키. 같은 페이지(F1) 의 역할 키와 겹치면 뺀다 (GUI 가 막지만 파일을 손으로 고쳤을 수 있다)
+    taken   = set(roles.get(rid) for rid in PAGE_ROLES if roles.get(rid))
     ATTACKS = []
     for a in (opts.get('attacks') or defaultattacks())[:ATTACK_MAX]:
         key = a.get('key')
@@ -1732,10 +1765,10 @@ def applyconfig(seconds, roles, opts=None):
 
     TRANSFORM_INTERVAL = seconds.get(KEY_TRANSFORM, 0) if KEY_TRANSFORM else 0
 
-    #역할이나 공격 키로 지정된 키는 버프 슬롯에서 뺀다 (taken 에 둘 다 들어 있다)
+    #버프는 버프 페이지(F2) 의 키라서 공격 페이지의 역할 / 공격 키와 겹쳐도 된다. 변신 키만 뺀다
     BUFFS = []
     for i, key in enumerate(FKEYS):
-        if key in taken:
+        if key == KEY_TRANSFORM:
             continue
         BUFFS.append(('buff' + str(i + 1), key, seconds.get(key, 0)))
     BUFFKEY = dict((n, key) for n, key, s in BUFFS)
@@ -1799,7 +1832,7 @@ def runmacro():
             # atk = setattckinfo(CENTERPOINT)
             # log('공격 커서 : ' + str(atk))
         elif not ATTACK_ON:
-            log('공격 끔 - 버프 / 변신 / 귀환 감시만 돕니다')
+            log('공격 끔 - 버프 / 변신 / 힐 / 베르 / 이뮨만 돕니다')
 
         if KEY_TRANSFORM != None and TRANSFORM_INTERVAL > 0:
             log('변신(' + KEY_TRANSFORM + ') ' + str(TRANSFORM_INTERVAL) + '초 주기')
@@ -1812,14 +1845,13 @@ def runmacro():
         log('채팅버프(' + CHAT_CMD + ') ' + str(CHAT_INTERVAL) + '초 주기')
         chatbufftimer()
 
+        #귀환 역할은 뺐다 (KEY_RETURN 은 항상 None). 주변 캐릭터 감시는 감지만 모드에서 로그만 찍는다
         if KEY_RETURN != None or DETECT_ONLY:
             if 'player' not in kinds:
                 log('mem.json ent.rules 에 player 규칙이 없어 주변 캐릭터를 가릴 수 없다 - 시작 안 함')
                 return
-            log('귀환(' + str(KEY_RETURN) + ') - 피 / 주변 캐릭터 감시 시작')
+            log('피 / 주변 캐릭터 감시 시작 (로그만)')
             checkrHp()
-        else:
-            log('귀환키 미지정 - 피 / 주변 캐릭터 감시 끔')
 
         if KEY_REFRESH == None:
             log('새로고침키 미지정 - 새로고침 끔')
@@ -1832,6 +1864,10 @@ def runmacro():
 
         HUNT_START = time.time()
         expstart   = readexp()     #끝날 때 얼마나 올랐는지 찍으려고 잡아 둔다
+        #시작 순서 : 버프 / 변신 요청이 쌓여 있으면 사냥 루프 첫 바퀴의 runpending 이 F2 -> 전부 누름 -> F1 로 처리한다
+        #쌓인 것이 없어도 공격 페이지에서 시작하도록 F1 을 한 번 누른다 (감지만 모드에서는 키를 안 누른다)
+        if not DETECT_ONLY:
+            setpage(PAGE_ATTACK)
         log('사냥 시작')
         huntloop([CENTERPOINT[0], CENTERPOINT[1] + SCAN_OFFSET_Y], atk)
     except Exception as e:
@@ -1871,12 +1907,10 @@ def runmacro():
 #=====================================================================
 # GUI
 #=====================================================================
-ROLES = [('return', '귀환'), ('refresh', '새로고침'), ('transform', '변신'),
-         ('heal', '힐'), ('immune', '이뮨'), ('ber', '베르')]
+ROLES = [('refresh', '새로고침'), ('heal', '힐'), ('immune', '이뮨'), ('ber', '베르')]   #공격 탭의 역할 (F1 페이지)
 NOTE_COL = 2                #버프 표에서 주기 다음 칸 = 설명
 KEY_NONE = '없음'            #키 드롭다운의 '안 씀'
-ROLE_HINT = {'return':  '피 부족 경고 / 다른 캐릭터가 보이면',
-             'refresh': '주변에 몹이 없으면 바로 (텔)'}
+ROLE_HINT = {'refresh': '주변에 몹이 없으면 바로 (텔)'}
 KEY_CHOICES = [KEY_NONE] + [key.upper() for key in FKEYS]
 
 class App:
@@ -1887,7 +1921,8 @@ class App:
         self.entry   = {}    #키 -> Entry
         self.note    = {}    #키 -> Label (주기 설명)
         self.rolekey = {}    #역할 -> StringVar (KEY_NONE 또는 'F5'..'F12')  공격 탭
-        self.rolesec = {}    #역할 -> StringVar (변신 주기 / 재사용 간격)  그 키의 seconds 에 들어간다
+        self.rolesec = {}    #역할 -> StringVar (재사용 간격)  그 키의 seconds 에 들어간다
+        self.transkey = tk.StringVar(value=KEY_NONE)   #변신 키 (버프 탭, F2 페이지). 주기는 그 키의 주기 칸
         self.rolewid = {}    #역할 -> 잠글 위젯들
         self.thread  = None  #매크로 스레드. 끝나면 UI 를 다시 연다
         self.atkkey   = []   #공격 줄 -> StringVar (KEY_NONE 또는 'F5'..'F12')
@@ -1923,7 +1958,7 @@ class App:
         self.ifail  = 0       #연속으로 못 읽은 횟수
 
         #--- 키 설정 표 (버프 탭) ---
-        box = ttk.LabelFrame(bufftab, text='버프 키 설정 (f5 ~ f12)')
+        box = ttk.LabelFrame(bufftab, text='버프 키 설정 (f5 ~ f12, 단축키 페이지 F2)')
         box.pack(fill='x', padx=10, pady=(10, 4))
 
         ttk.Label(box, text='키',      width=6,  anchor='center').grid(row=0, column=0, padx=4, pady=4)
@@ -1943,10 +1978,21 @@ class App:
             nl.grid(row=r, column=NOTE_COL, padx=4, pady=2, sticky='w')
             self.note[key] = nl
 
+        trow = ttk.Frame(bufftab)
+        trow.pack(fill='x', padx=14, pady=(2, 0))
+        ttk.Label(trow, text='변신 키').pack(side='left')
+        self.transbox = ttk.Combobox(trow, textvariable=self.transkey, width=6, state='readonly',
+                                     values=KEY_CHOICES)
+        self.transbox.pack(side='left', padx=(6, 0))
+        self.transbox.bind('<<ComboboxSelected>>', lambda e: self.refreshrows())
+        ttk.Label(trow, foreground='#555',
+                  text='  변신은 위 표의 그 키 주기마다. 변신 메뉴(lv80 / night)를 화면에서 찾아 누릅니다'
+                  ).pack(side='left')
         ttk.Label(bufftab, foreground='#555',
-                  text='주기(초)마다 그 키를 누릅니다. 0 이면 안 씁니다.\n'
-                       '공격 탭에서 공격 키나 역할 키로 고른 키는 여기서 버프로 쓰지 않습니다 (주기 칸이 잠깁니다).'
-                  ).pack(anchor='w', padx=12, pady=(0, 8))
+                  text='버프 탭의 키는 단축키 페이지 F2 의 칸입니다. 주기(초)마다 F2 -> 키 -> F1 순으로 누릅니다. 0 이면 안 씁니다.\n'
+                       '시작할 때도 F2 로 바꿔 주기가 있는 버프를 전부 건 뒤 F1 로 돌아와 사냥합니다.\n'
+                       '공격 탭(F1 페이지)과는 다른 칸이라 같은 F 키를 양쪽에 써도 됩니다.'
+                  ).pack(anchor='w', padx=12, pady=(4, 8))
 
         #--- 공격 키 (공격 탭) ---
         self._buildattack(atktab)
@@ -2048,7 +2094,7 @@ class App:
 
     #공격 키 표. ATTACK_MAX 줄을 다 만들어 두고 atkn 개만 보인다
     def _buildattack(self, parent):
-        box = ttk.LabelFrame(parent, text='공격 키 (최대 %d개)' % ATTACK_MAX)
+        box = ttk.LabelFrame(parent, text='공격 키 (최대 %d개, 단축키 페이지 F1)' % ATTACK_MAX)
         box.pack(fill='x', padx=10, pady=(10, 4))
 
         ttk.Label(box, text='번호',  width=6,  anchor='center').grid(row=0, column=0, padx=4, pady=4)
@@ -2092,7 +2138,7 @@ class App:
         self.showatk()
 
         #--- 역할 키 : 귀환 / 새로고침 / 변신 / 힐 / 이뮨 / 베르 ---
-        rbox = ttk.LabelFrame(parent, text='역할 키')
+        rbox = ttk.LabelFrame(parent, text='역할 키 (단축키 페이지 F1)')
         rbox.pack(fill='x', padx=10, pady=(4, 4))
         self.healpct = tk.StringVar(value=str(DEFAULT_OPTS['heal_pct']))
         self.berpct  = tk.StringVar(value=str(DEFAULT_OPTS['ber_pct']))
@@ -2127,16 +2173,15 @@ class App:
                     wids.append(cb)
                 sv = tk.StringVar(value='0')
                 self.rolesec[rid] = sv
-                ttk.Label(extra, text='주기' if rid == 'transform' else '재사용 간격').pack(side='left')
+                ttk.Label(extra, text='재사용 간격').pack(side='left')
                 se = ttk.Entry(extra, textvariable=sv, width=7, justify='center')
                 se.pack(side='left', padx=(4, 0))
-                ttk.Label(extra, text=('초' if rid == 'transform'
-                                       else '초  (0 = %d초)' % GAP_DEFAULT[rid]),
+                ttk.Label(extra, text='초  (0 = %d초)' % GAP_DEFAULT[rid],
                           foreground='#555').pack(side='left', padx=(2, 0))
                 wids.append(se)
             self.rolewid[rid] = wids
         ttk.Label(parent, foreground='#555',
-                  text='역할은 각각 키 하나에만 지정됩니다. 여기서 고른 키는 버프 탭에서 버프로 쓰지 않습니다.\n'
+                  text='역할은 각각 키 하나에만, 공격 키와도 겹치지 않게 지정됩니다 (같은 F1 페이지).\n'
                        '힐 / 이뮨은 내 캐릭터를 대상으로 시전하고, 주위 몹은 탐지 거리 안의 살아 있는 몹 수입니다.'
                   ).pack(anchor='w', padx=12, pady=(0, 8))
 
@@ -2279,6 +2324,8 @@ class App:
             self.rolekey[rid].set(key.upper() if key in FKEYS else KEY_NONE)
             if rid in self.rolesec:
                 self.rolesec[rid].set(str(seconds.get(key, 0)) if key in FKEYS else '0')
+        tkey = roles.get('transform')
+        self.transkey.set(tkey.upper() if tkey in FKEYS else KEY_NONE)
         self.attack.set(bool(opts.get('attack', DEFAULT_OPTS['attack'])))
         self.range.set(str(opts.get('range',  DEFAULT_OPTS['range'])))
         self.nohit.set(str(opts.get('nohit',  DEFAULT_OPTS['nohit'])))
@@ -2328,12 +2375,14 @@ class App:
             v = self.rolekey[rid].get()
             roles[rid] = v.lower() if v in KEY_CHOICES and v != KEY_NONE else None
             if roles[rid] != None and rid in self.rolesec:
-                #변신 주기 / 재사용 간격은 그 키의 주기 칸(seconds) 에 들어간다 (applyconfig 가 거기서 읽는다)
+                #재사용 간격은 그 키의 주기 칸(seconds) 에 들어간다 (applyconfig 가 거기서 읽는다)
                 raw = self.rolesec[rid].get().strip() or '0'
                 if not raw.isdigit():
                     log(label + ' 주기는 0 이상 정수만 : ' + raw)
                     return None, None, None
                 seconds[roles[rid]] = int(raw)
+        v = self.transkey.get()
+        roles['transform'] = v.lower() if v in KEY_CHOICES and v != KEY_NONE else None
 
         attacks = []
         for i in range(self.atkn):
@@ -2383,17 +2432,12 @@ class App:
                 return rid
         return None
 
-    #귀환/새로고침으로 잡힌 키는 주기 입력을 막는다. 변신은 주기를 쓴다. 공격 키는 공격 탭에서 정한다
+    #버프 표의 설명 칸. 변신 키로 고른 줄은 '변신 주기'. 공격 탭(F1 페이지)과는 별개라 잠그지 않는다
     def refreshrows(self):
         for key in FKEYS:
-            rid = self.roleof(key)
-            arow = self.atkrowof(key)
-            if arow != None:
-                self.entry[key].configure(state='disabled')
-                self.note[key].configure(text='공격 키 %d (공격 탭)' % arow)
-            elif rid != None:
-                self.entry[key].configure(state='disabled')
-                self.note[key].configure(text=dict(ROLES)[rid] + ' (공격 탭)')
+            if self.transkey.get().lower() == key:
+                self.entry[key].configure(state='normal')
+                self.note[key].configure(text='변신 주기')
             else:
                 self.entry[key].configure(state='normal')
                 self.note[key].configure(text='버프 주기')
@@ -2406,6 +2450,7 @@ class App:
         for rid, wids in self.rolewid.items():
             for w in wids:
                 w.configure(state='disabled')
+        self.transbox.configure(state='disabled')
         for kb, de, sb in self.atkwid:
             kb.configure(state='disabled')
             de.configure(state='disabled')
@@ -2421,6 +2466,7 @@ class App:
         for rid, wids in self.rolewid.items():
             for w in wids:
                 w.configure(state='readonly' if isinstance(w, ttk.Combobox) else 'normal')
+        self.transbox.configure(state='readonly')
         for kb, de, sb in self.atkwid:
             kb.configure(state='readonly')
             de.configure(state='normal')
@@ -2452,6 +2498,8 @@ class App:
         log('  이뮨 : ' + ((roles['immune'].upper() + '  주위 몹 ' + str(opts['immune_n']) + '마리 이상') if roles.get('immune') else '미지정'))
         for rid, label in ROLES:
             log('  ' + label + ' : ' + (roles[rid].upper() if roles[rid] else '미지정'))
+        log('  변신 (F2 페이지) : ' + ((roles['transform'].upper() + '  ' + str(seconds.get(roles['transform'], 0)) + '초 주기')
+                                    if roles.get('transform') else '미지정'))
         for i, a in enumerate(opts.get('attacks') or []):
             log('  공격 키 ' + str(i + 1) + ' : '
                 + ((a['key'].upper() + '  딜레이 ' + str(a['delay']) + '초  거리 ' + str(a['dist']) + '타일 이하')

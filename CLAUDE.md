@@ -124,18 +124,27 @@ To stop a running script: `pyautogui.FAILSAFE` is disabled in `oman.py`/`tell.py
   ber is a plain key press.
   The key's 주기 column is the re-press gap (0 → `GAP_DEFAULT`: 2 s / 2 s / 30 s). They run with
   attack off too, never in detect-only, and `MEM_FAIL_LIMIT` unreadable HP reads stop the macro.
-- **Attack keys (공격 탭, since 2026-11-15)** — the GUI is a three-tab notebook (메인 / 버프 /
-  공격) with the save/start buttons and log below it. The 버프 tab is only key + 주기 for
-  F5–F12; the 공격 tab holds the attack-key table and the role keys (귀환 / 새로고침 / 변신 /
-  힐 / 이뮨 / 베르, each a key dropdown plus its condition). A role's 변신 주기 / 재사용 간격
-  entry is written into that key's `seconds` slot on read, so `config.json` and `applyconfig`
-  are unchanged. The old `skill` role is gone; up to
-  `ATTACK_MAX` (4) attack keys live in `opts['attacks']` (`[{key, delay, dist}]`, default one:
-  F6 / 4 s / 3 tiles) and an old `roles.skill` config is migrated to attack key 1 on load. Each
-  hunt-loop tick presses at most one attack key whose target distance ≤ `dist` and whose `delay`
-  has elapsed, in row order, after `runpending()` (buffs / transform / return come first).
-  `delay` 0 disables the row. Keys chosen here are excluded from `BUFFS`; `KEY_SKILL` /
-  `SKILL_COOL` remain as a compatibility mirror of row 1 for `pit.py`.
+- **Hotkey pages F1 / F2 and the tabs (since 2026-11-15)** — the game's F5–F12 bar has two
+  pages: F1 = attack page, F2 = buff page. The GUI is a three-tab notebook (메인 / 버프 / 공격)
+  with the save/start buttons and log below it.
+  - 버프 tab (F2 page): key + 주기 for F5–F12 plus a 변신 키 dropdown (its interval is that
+    key's 주기 cell; `dotransform` still clicks the lv80 / night menu). `BUFFS` is every key
+    except the transform key. `runpending()` batches all pending buff / transform requests
+    into one `setpage(PAGE_BUFF)` → presses → `setpage(PAGE_ATTACK)`; chat buff runs inside the
+    batch without caring about the page. At start the queued initial buffs go through the same
+    path, and `runmacro` presses F1 once before `huntloop` so hunting always begins on the
+    attack page.
+  - 공격 tab (F1 page): the attack-key table (up to `ATTACK_MAX` 4 rows, default one:
+    F6 / 4 s / 3 tiles, `opts['attacks']` = `[{key, delay, dist}]`) and the role keys
+    새로고침 / 힐 / 이뮨 / 베르 (`PAGE_ROLES`) with their conditions; a role's 재사용 간격 entry
+    is written into that key's `seconds` slot on read. Each hunt-loop tick presses at most one
+    attack key whose target distance ≤ `dist` and whose `delay` has elapsed, in row order, after
+    `runpending()`; `delay` 0 disables the row. Attack keys and page roles must not share a
+    key; the same F key may be used on both pages. An old `roles.skill` config is migrated to
+    attack key 1 on load.
+  - The 귀환 role is removed: `KEY_RETURN` is always `None`, `doreturn` only stops, and
+    `_checkrHp` runs only in detect-only mode (log only). `KEY_SKILL` / `SKILL_COOL` remain as
+    a compatibility mirror of attack key 1 for `pit.py`.
 - **Character panel** — `App.pollinfo()` shows name / LV / HP / MP / exp / AC / position / nearby
   counts every `INFO_POLL` ms through its own read-only `Mem` (`self.imem`), separate from the
   macro's `MEM`, so it works before Start.
