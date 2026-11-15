@@ -107,6 +107,43 @@ class Chat(object):
         return True
 
 
+#경로를 한 단계씩 따라가며 어디서 끊기는지 찍는다 (읽기만). 채팅칸 상태별 진단용
+#chat_str 과 같은 오프셋으로, 같이 발견됐던 다른 시작 주소(0xA3288)도 함께 본다
+CHAT_TRACE_BASES = ['0x9BF98', '0xA3288']
+
+def trace(m):
+    spec = ((m.cfg or {}).get('chains') or {}).get('chat_str') or {}
+    offs = [mr.num(x, 0) for x in (spec.get('offsets') or [])]
+    bases = []
+    for b in [spec.get('base')] + CHAT_TRACE_BASES:
+        v = mr.num(b)
+        if v != None and v not in bases:
+            bases.append(v)
+    for rva in bases:
+        line = '  [lin.exe+0x%X]' % rva
+        raw  = mr.readmem(m.h, m.base + rva, 4)
+        addr = struct.unpack('<I', raw)[0] if raw != None else None
+        line += ' = ' + ('0x%X' % addr if addr != None else '못 읽음')
+        for o in offs[:-1]:
+            if not addr or addr < 0x10000:
+                line += '   -> 여기서 끊김 (0 이거나 주소가 아님)'
+                addr = None
+                break
+            raw  = mr.readmem(m.h, addr + o, 4)
+            nxt  = struct.unpack('<I', raw)[0] if raw != None else None
+            line += '   [+0x%X] = ' % o + ('0x%X' % nxt if nxt != None else '못 읽음')
+            addr = nxt
+        if addr and addr >= 0x10000 and len(offs) > 0:
+            raw = mr.readmem(m.h, addr + offs[-1], 12)
+            if raw != None:
+                line += '   묶음 = 버퍼 0x%X, 글자 %d, 크기 %d' % struct.unpack('<III', raw)
+            else:
+                line += '   묶음 못 읽음'
+        elif addr != None:
+            line += '   -> 여기서 끊김 (0 이거나 주소가 아님)'
+        print(line)
+
+
 def main():
     if not mr.IS_WIN:
         print('Windows 에서만 된다')
@@ -118,6 +155,8 @@ def main():
         return
     c = Chat(m)
     try:
+        print('경로 따라가기 :')
+        trace(m)
         got = c.info()
         if got == None:
             print(c.err)
