@@ -295,6 +295,7 @@ IMMUNE_GAP  = 30.0
 GAP_DEFAULT = {'heal': 2.0, 'ber': 2.0, 'immune': 30.0}   #주기 칸이 0 일 때 쓰는 간격
 INFO_POLL   = 500     #내 캐릭터 정보 표시 갱신 간격(ms)
 MEM            = None   #memread.Mem. runmacro 가 붙이고 뗀다
+CASTER         = None   #memcast.Caster. 힐 / 이뮨을 내 캐릭터에게 걸 때 쓴다 (postracker.py 의 턴언데드와 같은 방식)
 CALIB          = None   #아핀 계수 (a,b,c,d,e,f). 화면 = (a*dx+b*dy+c, d*dx+e*dy+f)
 
 #=====================================================================
@@ -1300,6 +1301,20 @@ def readhp(mem=None):
         return None
     return hp, mx
 
+#힐 / 이뮨처럼 대상을 골라야 나가는 마법을 내 캐릭터에게 건다.
+#키만 누르면 대상 선택 상태에서 멈추므로, postracker.py 가 턴언데드를 쓰는 것과 같이
+#memcast 로 '마법 대상' 칸에 내 id 를 잠깐 써넣고 키를 누른 뒤 원래 값으로 되돌린다
+#me = scanents() 가 준 내 엔티티. 시전됐으면 True, 아니면 사유를 로그에 남기고 False
+def selfcast(key, me, label):
+    if CASTER == None:
+        log(label + ' 실패 : 시전 모듈이 없다')
+        return False
+    res = CASTER.castkey(me['id'], me['ptr'], key)
+    if res['state'] != 'sent':
+        log(label + ' ' + key.upper() + ' : ' + str(res['msg']) + ' (' + str(res['state']) + ')')
+        return False
+    return True
+
 #사냥 루프 (매크로 스레드)
 #  가장 가까운 몹을 클릭하고, 그 몹이 죽거나 사라지면 다음으로 가까운 몹으로 넘어간다
 #  클릭할 차례(RECLICK_SEC)마다 더 가까운 몹이 생겼는지 다시 보고, 있으면 그쪽으로 바꾼다
@@ -1361,7 +1376,7 @@ def huntloop(p=None, atkvalue=None):
                     if KEY_HEAL != None and pct <= HEAL_PCT and now - pressed['heal'] >= HEAL_GAP:
                         log('힐 ' + KEY_HEAL.upper() + '  (HP ' + str(hpv[0]) + '/' + str(hpv[1])
                             + ' = ' + str(int(pct)) + '% <= ' + str(HEAL_PCT) + '%)')
-                        gu.press(KEY_HEAL, presses=1)
+                        selfcast(KEY_HEAL, found['me'], '힐')      #내 캐릭터를 대상으로 시전
                         pressed['heal'] = now
                     if KEY_BER != None and pct <= BER_PCT and now - pressed['ber'] >= BER_GAP:
                         log('베르 ' + KEY_BER.upper() + '  (HP ' + str(int(pct)) + '% <= ' + str(BER_PCT) + '%)')
@@ -1371,7 +1386,7 @@ def huntloop(p=None, atkvalue=None):
                     and now - pressed['immune'] >= IMMUNE_GAP):
                 log('이뮨 ' + KEY_IMMUNE.upper() + '  (주위 몹 ' + str(len(found['mobs']))
                     + '마리 >= ' + str(IMMUNE_N) + ')')
-                gu.press(KEY_IMMUNE, presses=1)
+                selfcast(KEY_IMMUNE, found['me'], '이뮨')        #내 캐릭터를 대상으로 시전
                 pressed['immune'] = now
 
         #공격 끔 : 버프 / 변신 / 귀환 감시와 힐 / 베르 / 이뮨만 돈다
@@ -1605,7 +1620,7 @@ def applyconfig(seconds, roles, opts=None):
 #매크로 본체. GUI 스레드가 아니라 전용 스레드에서 돈다
 #끝나면(정지/오류) GUI 가 스레드 종료를 보고 시작 버튼을 다시 켠다
 def runmacro():
-    global ALIVE, HOTKEY, HUNT_START, MEM, CALIB, WATCH_FAIL, WATCH_SEEN
+    global ALIVE, HOTKEY, HUNT_START, MEM, CALIB, WATCH_FAIL, WATCH_SEEN, CASTER
     try:
         ALIVE  = True
         HOTKEY = k.add_hotkey('tab', requeststop)
@@ -1626,6 +1641,9 @@ def runmacro():
         if not MEM.attach():
             log('메모리 붙기 실패 : ' + str(MEM.err))
             return
+        if KEY_HEAL != None or KEY_IMMUNE != None:
+            import memcast                  #대상 id 쓰기 + 키 누르기 + 되돌리기
+            CASTER = memcast.Caster(MEM)
         kinds = MEM.entkinds()
         first = scanents()
         if first == None:
@@ -1704,6 +1722,9 @@ def runmacro():
             except Exception:
                 pass
             HOTKEY = None
+        if CASTER != None:
+            CASTER.close()
+            CASTER = None
         if MEM != None:
             MEM.detach()
             MEM = None

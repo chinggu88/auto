@@ -114,6 +114,9 @@ To stop a running script: `pyautogui.FAILSAFE` is disabled in `oman.py`/`tell.py
 - **Heal / Ber / Immune** — three more F-key roles (`heal`, `ber`, `immune`). Each hunt-loop tick
   reads HP (`readhp()`: secure holder first, then `chains.hp`) and the live-mob count from
   `scanents()`: HP% ≤ `heal_pct` / `ber_pct` presses that key, mobs ≥ `immune_n` presses immune.
+  Heal and immune need a target, so they go through `memcast.Caster.castkey(self_id, self_ptr, key)`
+  (same mechanism as `postracker.py`'s turn-undead: write the target id, press the key, restore);
+  ber is a plain key press.
   The key's 주기 column is the re-press gap (0 → `GAP_DEFAULT`: 2 s / 2 s / 30 s). They run with
   attack off too, never in detect-only, and `MEM_FAIL_LIMIT` unreadable HP reads stop the macro.
 - **Character panel** — `App.pollinfo()` shows name / LV / HP / MP / exp / AC / position / nearby

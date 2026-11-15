@@ -254,7 +254,17 @@ class Caster:
             if key == None:
                 return {'state': 'error', 'key': None, 'msg': msg}
             note = ' | 이름으로 못 찾아 선택된 칸을 누름: ' + msg
+        return self._fire(target_id, ent_ptr, key, note)
 
+    #마법 이름 대신 누를 키를 직접 준다 (main.py 의 힐 / 이뮨 : 역할 표에서 키를 이미 정해 둔다).
+    #대상 id 를 써넣고 -> 키를 누르고 -> 원래 값으로 되돌리는 것은 cast 와 똑같다
+    def castkey(self, target_id, ent_ptr, key):
+        if self.mem == None or self.mem.h == None:
+            return {'state': 'error', 'key': key, 'msg': '게임에 안 붙음'}
+        return self._fire(target_id, ent_ptr, key, '')
+
+    #cast / castkey 공통 : 대상 id 를 잠깐 써넣고 key 를 누른 뒤 되돌린다
+    def _fire(self, target_id, ent_ptr, key, note):
         #키 입력이 다른 창으로 가는 것을 막는다
         if mr.frontpid() != self.mem.pid:
             return {'state': 'nofocus', 'key': key, 'msg': '게임 창이 맨 앞이 아님' + note}
