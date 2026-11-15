@@ -6,7 +6,10 @@
 #
 #채팅 입력칸 구조 (2026-11-15 실기, memprobe.py --chatfind 로 찾음) :
 #   mem.json chains.chat_str 이 가리키는 곳에 '글자 묶음' 이 있다
-#     +0  u32  글자 버퍼 포인터 (UTF-16LE)
+#     +0  u32  글자 버퍼 포인터. 글자 하나가 2바이트 칸 하나다 (유니코드가 아니다) :
+#              영문/숫자/기호는 그 코드 그대로, 한글은 CP949 두 바이트를 (앞<<8 | 뒤) 로 묶은 값.
+#              실기: '.버' 를 쳤을 때 칸 값이 002E, B9F6 이었다 ('버' 의 CP949 = B9 F6).
+#              처음에 유니코드로 써 넣었더니 '.' 만 보이고 한글 자리는 공백으로 나왔다
 #     +4  u32  글자 수            (".qjvm" 을 쳤을 때 5)
 #     +8  u32  12 (뜻 모름. 글자가 없어 버퍼가 0 일 때도 12 라서 버퍼 크기는 아니다)
 #   경로는 [[lin.exe + 0xA3288] + 0x28] + 0 을 쓴다 (게임을 껐다 켜도 그대로, 세 번 확인).
@@ -31,6 +34,37 @@ import sys
 import memread as mr
 
 CHAT_MAX = 64      #한 번에 쓰는 글자 수 상한 (버퍼 크기 칸이 이상하게 클 때의 안전장치)
+
+
+#글자 -> 버퍼에 넣을 2바이트 칸 값들. CP949 로 못 바꾸는 글자가 있으면 None
+def encode(text):
+    out = []
+    for ch in text:
+        try:
+            b = ch.encode('cp949')
+        except UnicodeEncodeError:
+            return None
+        if len(b) == 1:
+            out.append(b[0])
+        elif len(b) == 2:
+            out.append((b[0] << 8) | b[1])
+        else:
+            return None
+    return out
+
+
+#버퍼의 2바이트 칸 값들 -> 글자. 못 푸는 칸은 '?' 로 둔다
+def decode(cells):
+    out = ''
+    for v in cells:
+        if v < 0x100:
+            out += chr(v)
+        else:
+            try:
+                out += bytes([v >> 8, v & 0xFF]).decode('cp949')
+            except UnicodeDecodeError:
+                out += '?'
+    return out
 
 
 class Chat(object):
@@ -78,7 +112,7 @@ class Chat(object):
         if raw == None:
             self.err = '글자 버퍼를 못 읽었다'
             return None
-        return raw.decode('utf-16le', 'replace')
+        return decode(struct.unpack('<%dH' % cnt, raw))
 
     #입력칸의 글자를 text 로 바꾼다. 성공하면 True
     #지금 들어 있는 글자 수보다 길면 쓰지 않는다 (버퍼가 얼마나 큰지 몰라서 밖에서 못 늘린다).
@@ -89,7 +123,11 @@ class Chat(object):
         if got == None:
             return False
         addr, buf, cnt, cap = got
-        n = len(text)
+        cells = encode(text)
+        if cells == None:
+            self.err = 'CP949 로 못 바꾸는 글자가 있다 : ' + repr(text)
+            return False
+        n = len(cells)
         if n == 0 or n > CHAT_MAX:
             self.err = '글자 수가 이상하다 (%d)' % n
             return False
@@ -103,7 +141,7 @@ class Chat(object):
                 self.err = '쓰기 권한으로 프로세스를 못 열었다 (관리자 권한으로 실행)'
                 return False
         #글자만 덮어쓴다. 끝의 0 은 이미 있던 자리(글자 수 cnt 뒤)를 넘지 않을 때만 쓴다
-        data = text.encode('utf-16le')
+        data = struct.pack('<%dH' % n, *cells)
         if n < cnt:
             data += b'\x00\x00'
         if not memcast.writemem(self.hw, buf, data):
