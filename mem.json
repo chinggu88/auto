@@ -209,7 +209,7 @@
     "rules": [
       {"kind": "effect", "name_has": ["마법진"]},
       {"kind": "player", "field": "id", "min": 1000000, "max": 1999999},
-      {"kind": "ignore", "name_has": ["데스나이트"]}
+      {"kind": "ignore", "name_has": ["데스나이트", "아데나", "할파스의 집념"]}
     ]
   },
 
