@@ -1,0 +1,144 @@
+#memchat.py
+#
+#채팅 입력칸의 글자를 메모리에 직접 써 넣는다. main.py 의 채팅버프가 쓴다.
+#키로 한 글자씩 치는 방식은 한/영 상태에 따라 글자가 달라져서('.버프' 가 '.qjvm' 로 들어감)
+#입력칸이 들고 있는 글자 버퍼를 바로 채운다. 채팅칸 열기 / 전송은 여전히 엔터 키다.
+#
+#채팅 입력칸 구조 (2026-11-15 실기, memprobe.py --chatfind 로 찾음) :
+#   mem.json chains.chat_str 이 가리키는 곳에 '글자 묶음' 이 있다
+#     +0  u32  글자 버퍼 포인터 (UTF-16LE)
+#     +4  u32  글자 수            (".qjvm" 을 쳤을 때 5)
+#     +8  u32  버퍼 크기(글자 수) (그때 12. 추정 - 이보다 길게는 쓰지 않는다)
+#   경로 [[lin.exe + 0x9BF98] + 0x28] + 0 은 게임을 껐다 켠 뒤에도 그대로였다 (두 번 확인).
+#   써 넣은 글자가 실제로 전송되는지는 아래 '혼자 돌리기' 로 확인한다.
+#
+#쓰는 주소는 전부 mem.json 에 적힌 chains.chat_str 에서 나온다 (CLAUDE.md 규칙 2).
+#되돌리기는 하지 않는다 - 전송하면 게임이 입력칸을 스스로 비운다.
+#
+#혼자 돌리기 (Windows. 게임에서 엔터로 채팅칸을 열어 둔 채로) :
+#   python memchat.py               지금 입력칸의 글자와 길이/크기를 읽어 보여준다 (읽기만)
+#   python memchat.py ".버프"       그 글자를 입력칸에 써 넣는다. 화면에 보이면 엔터로 전송해 본다
+#
+#같은 폴더에 memread.py, memcast.py (쓰기 함수를 빌려 쓴다) 가 있어야 한다
+
+import struct
+import sys
+
+import memread as mr
+
+CHAT_MAX = 64      #한 번에 쓰는 글자 수 상한 (버퍼 크기 칸이 이상하게 클 때의 안전장치)
+
+
+class Chat(object):
+    #mem = 붙어 있는 memread.Mem
+    def __init__(self, mem):
+        self.mem = mem
+        self.hw  = None       #쓰기 핸들. 처음 쓸 때 연다
+        self.err = None
+
+    def close(self):
+        if self.hw:
+            mr.k32.CloseHandle(mr.wt.HANDLE(self.hw))
+            self.hw = None
+
+    #글자 묶음을 읽는다. (묶음 주소, 버퍼 주소, 글자 수, 버퍼 크기) 또는 None
+    def info(self):
+        m = self.mem
+        spec = ((m.cfg or {}).get('chains') or {}).get('chat_str')
+        if spec == None or spec.get('base') == None:
+            self.err = 'mem.json chains.chat_str 가 없다'
+            return None
+        with m.lock:
+            addr = m.resolve(spec)
+            raw  = mr.readmem(m.h, addr, 12) if addr else None
+        if raw == None:
+            self.err = '채팅 입력칸을 못 읽었다 (경로가 틀렸거나 월드 밖)'
+            return None
+        buf, cnt, cap = struct.unpack('<III', raw)
+        if buf < 0x10000 or cap < 1 or cap > 4096 or cnt > cap:
+            self.err = ('채팅 입력칸 값이 이상하다 (버퍼 0x%X, 글자 %d, 크기 %d) - 경로가 틀린 듯'
+                        % (buf, cnt, cap))
+            return None
+        return addr, buf, cnt, cap
+
+    #지금 입력칸에 든 글자. 못 읽으면 None
+    def text(self):
+        got = self.info()
+        if got == None:
+            return None
+        addr, buf, cnt, cap = got
+        if cnt == 0:
+            return ''
+        raw = mr.readmem(self.mem.h, buf, cnt * 2)
+        if raw == None:
+            self.err = '글자 버퍼를 못 읽었다'
+            return None
+        return raw.decode('utf-16le', 'replace')
+
+    #입력칸의 글자를 text 로 바꾼다. 성공하면 True
+    #버퍼 크기를 넘으면 쓰지 않는다 (게임이 버퍼를 새로 잡아야 하는 길이라 밖에서 못 늘린다)
+    def put(self, text):
+        import memcast                     #openwrite / writemem 을 빌려 쓴다
+        got = self.info()
+        if got == None:
+            return False
+        addr, buf, cnt, cap = got
+        n = len(text)
+        if n + 1 > cap or n > CHAT_MAX:
+            self.err = '글자가 버퍼보다 길다 (%d 글자, 버퍼 %d)' % (n, cap)
+            return False
+        if self.hw == None:
+            self.hw = memcast.openwrite(self.mem.pid)
+            if self.hw == None:
+                self.err = '쓰기 권한으로 프로세스를 못 열었다 (관리자 권한으로 실행)'
+                return False
+        data = text.encode('utf-16le') + b'\x00\x00'
+        if not memcast.writemem(self.hw, buf, data):
+            self.err = '글자 버퍼 쓰기 실패'
+            return False
+        if not memcast.writemem(self.hw, addr + 4, struct.pack('<I', n)):
+            self.err = '글자 수 쓰기 실패'
+            return False
+        #다시 읽어 확인한다. 그 사이 게임이 버퍼를 바꿨으면 실패로 본다
+        if self.text() != text:
+            self.err = '써 넣은 글자가 다시 읽히지 않는다'
+            return False
+        self.err = None
+        return True
+
+
+def main():
+    if not mr.IS_WIN:
+        print('Windows 에서만 된다')
+        return
+    path, okay, tried = mr.findfile('mem.json')
+    m = mr.Mem(path, print)
+    if not m.attach():
+        print('붙기 실패 : ' + str(m.err))
+        return
+    c = Chat(m)
+    try:
+        got = c.info()
+        if got == None:
+            print(c.err)
+            return
+        print('글자 묶음 0x%X   버퍼 0x%X   글자 수 %d   버퍼 크기 %d' % got)
+        print('지금 글자 : ' + repr(c.text()))
+        args = [a for a in sys.argv[1:] if not a.startswith('--')]
+        if len(args) == 0:
+            print('써 넣으려면 : python memchat.py ".버프"   (채팅칸을 열어 둔 채로)')
+            return
+        if c.put(args[0]):
+            print('써 넣음 : ' + repr(args[0]) + '   게임 채팅칸에 보이는지 확인하고 엔터로 전송해 본다')
+        else:
+            print('실패 : ' + str(c.err))
+    finally:
+        c.close()
+        m.detach()
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    finally:
+        mr.holdconsole()
