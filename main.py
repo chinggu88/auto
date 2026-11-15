@@ -283,6 +283,7 @@ RECLICK_SEC    = 1.0    #클릭 간격(초). 클릭할 때마다 가장 가까�
 STUCK_REACH    = 2      #이 거리(타일) 안이면 붙어서 싸우는 중으로 보고 막힘 판정을 안 한다
 STUCK_SEC      = 4.0    #이만큼 진전이 없으면 막힌 것으로 본다
 SKIP_SEC       = 20.0   #막힌 몹을 대상에서 빼 두는 시간
+IDLE_TELE_SEC  = 20.0   #같은 대상을 잡은 채 이만큼 아무 변화(대상 바뀜/끝/텔)가 없으면 강제로 텔한다
 TELE_GAP       = 1.5    #텔(새로고침 키)을 누른 뒤 다음 텔까지 최소 간격(초). 이동 뒤 주변이 다시 읽힐 시간
 MEM_FAIL_LIMIT = 10     #엔티티 테이블을 연속으로 이만큼 못 읽으면 멈춘다 (화면으로 넘어가지 않는다)
 CALIB_FILES    = ['scarecrow_calib.json', 'calib.json']   #앞엣것 우선
@@ -1361,6 +1362,7 @@ def huntloop(p=None, atkvalue=None):
     teled   = 0.0      #마지막으로 텔(새로고침 키)을 누른 시각
     pressed = {'heal': 0.0, 'ber': 0.0, 'immune': 0.0}   #힐 / 베르 / 이뮨을 마지막으로 누른 시각
     skip    = {}       #id -> 다시 대상으로 삼아도 되는 시각 (다가가지 못한 몹)
+    moved   = time.perf_counter()   #사냥에 마지막으로 변화가 있던 시각 (대상 바뀜 / 텔)
     stuck   = {'id': None, 'best': 0, 'pos': None, 't': 0.0}   #지금 대상에게 다가가고 있는지
     hpfail  = 0        #HP 를 연속으로 못 읽은 횟수
 
@@ -1466,6 +1468,7 @@ def huntloop(p=None, atkvalue=None):
                 log('몹 없음 - 텔 : ' + KEY_REFRESH)
                 gu.press(KEY_REFRESH, presses=1)
                 teled = time.perf_counter()
+                moved = teled
             tick = now       #대상이 없는 시간은 공격이 아니므로 쿨타임에서 뺀다
             time.sleep(HUNT_POLL)
             continue
@@ -1475,10 +1478,24 @@ def huntloop(p=None, atkvalue=None):
             target  = o['id']
             tname   = str(o.get('name')) + ' (id ' + str(o['id']) + ')'
             clicked = 0.0
+            moved   = now
             log(('[감지만] ' if DETECT_ONLY else '') + '대상 : ' + tname + '  거리 ' + str(dist)
                 + '  남은 몹 ' + str(len(mobs)))
 
         if DETECT_ONLY:
+            time.sleep(HUNT_POLL)
+            continue
+
+        #같은 대상을 잡은 채 한참 아무 변화가 없으면 (안 죽는 몹, 닿지 않는 몹) 강제로 텔한다
+        #버프 로그는 변화로 치지 않는다 - 대상이 바뀌거나 텔한 것만 변화다
+        if KEY_REFRESH != None and now - moved >= IDLE_TELE_SEC:
+            log(str(int(IDLE_TELE_SEC)) + '초 동안 변화 없음 (' + tname + ') - 강제 텔 : ' + KEY_REFRESH)
+            gu.press(KEY_REFRESH, presses=1)
+            teled   = time.perf_counter()
+            moved   = teled
+            target  = None
+            tname   = ''
+            clicked = 0.0
             time.sleep(HUNT_POLL)
             continue
 
