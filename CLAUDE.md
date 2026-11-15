@@ -88,16 +88,17 @@ To stop a running script: `pyautogui.FAILSAFE` is disabled in `oman.py`/`tell.py
   nearest when the target is `dead` or gone from the table. Screen position comes from the
   affine calibration file beside the script (`scarecrow_calib.json` from `postracker.py`'s F9
   scarecrow calibration, else `calib.json` from `turnundead_mem.py`); without one it refuses to
-  start. **The cursor check is kept**: `_probe()` must see the attack cursor before
-  `_settleclick()`; a miss puts that id on a 3 s cooldown.
+  start. **No cursor-shape check** (removed by the user on 2026-11-15): the computed position is
+  clicked directly. The probe's miss cooldown made the loop see "no mobs" and teleport while mobs
+  were present. Off-screen mobs and nameless entities are not candidates.
 - **Recall (`_checkrHp`)** — any entity of kind `player` other than self → `request('return')`.
   "Could not read" is never treated as "nobody around": `MEM_FAIL_LIMIT` consecutive failures stop
   the macro. The HP check is still the `checkhp.PNG` image.
 - **Entity kinds** come from `mem.json` `ent.rules` via `Mem.kind()`. `player` is "id in
   1,000,000–1,999,999" (measured 2026-11-15 on seven characters; `+0x4C == 255` was dropped
   because ground effects such as `마법진3` share it), preceded by a name-based `effect` rule.
-  With no `monster` rule, every entity judged `other` is a candidate and the cursor check
-  filters NPCs. `python memprobe.py --entkind --mob … --npc … --pc …`
+  With no `monster` rule, every named entity judged `other` is a candidate — NPCs included,
+  nothing filters them now. `python memprobe.py --entkind --mob … --npc … --pc …`
   finds a discriminating offset.
 - **No mobs → teleport at once.** When no clickable mob is in range the loop presses the refresh
   key immediately (`TELE_GAP` 1.5 s between presses); the old "N empty sweeps" counter is unused.

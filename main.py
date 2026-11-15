@@ -269,7 +269,6 @@ DETECT_ONLY        = DEFAULT_OPTS['detect'] #감지만 (클릭/귀환 안 함)
 #  scarecrow_calib.json (postracker.py 의 허수아비 보정) > calib.json (turnundead_mem.py 의 보정)
 HUNT_POLL      = 0.1    #사냥 루프 한 바퀴 간격(초)
 RECLICK_SEC    = 1.0    #클릭 간격(초). 클릭할 때마다 가장 가까운 몹을 다시 고른다
-MISS_COOL      = 3.0    #그 자리에 공격 커서가 안 뜬 대상을 다시 보기까지 쉬는 시간(초)
 TELE_GAP       = 1.5    #텔(새로고침 키)을 누른 뒤 다음 텔까지 최소 간격(초). 이동 뒤 주변이 다시 읽힐 시간
 MEM_FAIL_LIMIT = 10     #엔티티 테이블을 연속으로 이만큼 못 읽으면 멈춘다 (화면으로 넘어가지 않는다)
 CALIB_FILES    = ['scarecrow_calib.json', 'calib.json']   #앞엣것 우선
@@ -1225,7 +1224,7 @@ def toscreen(dx, dy):
 #  'players' : [(거리, 엔티티, 게임좌표)] 나 말고 다른 캐릭터. player 규칙이 없으면 None
 #거리는 타일 수 (가로세로 중 큰 쪽)
 #사냥 대상 : mem.json ent.rules 에 monster 규칙이 있으면 그 종류만,
-#            없으면 '캐릭터가 아닌 것 전부' 로 넓게 잡고 공격 커서 확인이 걸러낸다
+#            없으면 '캐릭터가 아닌 것 전부' 를 대상으로 삼는다 (이름 없는 것은 뺀다)
 def scanents():
     if MEM == None:
         return None
@@ -1250,6 +1249,8 @@ def scanents():
             continue
         if o['dead'] or dist > HUNT_DIST:
             continue
+        if not o.get('name'):
+            continue      #이름이 없는 것은 몹이 아니다 (실기: 내 자리에 겹쳐 있던 id 68363, 거리 0)
         if 'monster' in kinds and kind != 'monster':
             continue
         if 'monster' not in kinds and kind != 'other':
@@ -1263,15 +1264,14 @@ def scanents():
 #사냥 루프 (매크로 스레드)
 #  가장 가까운 몹을 클릭하고, 그 몹이 죽거나 사라지면 다음으로 가까운 몹으로 넘어간다
 #  클릭할 차례(RECLICK_SEC)마다 더 가까운 몹이 생겼는지 다시 보고, 있으면 그쪽으로 바꾼다
-#  클릭 전에 그 자리에 공격 커서가 뜨는지 반드시 확인한다 (좌표가 틀리면 아예 안 누른다)
-#p, atkvalue 는 예전 huntloop 과 같은 뜻 (스캔 중심, 공격 커서 핸들)
-def huntloop(p, atkvalue):
-    parkpos = (p[0], p[1] + SCAN_START * SCAN_FAR + PARK_GAP)   #커서를 쉬게 두는 자리 (예전과 같다)
+#  공격 커서(칼 모양) 확인은 하지 않는다 : 계산한 화면 좌표를 그대로 클릭한다 (2026-11-15 사용자 결정).
+#  확인에 실패한 몹을 잠깐 제쳐 두던 것 때문에, 몹이 있는데도 '몹 없음' 으로 보고 텔하는 일이 있었다
+#p, atkvalue 는 예전 huntloop 과 자리를 맞추려고 남겨 둔 인자다 (쓰지 않는다)
+def huntloop(p=None, atkvalue=None):
     screen  = gu.size()
     target  = None     #지금 잡고 있는 몹의 id
     tname   = ''
     clicked = 0.0      #마지막으로 클릭한 시각
-    cool    = {}       #id -> 다시 봐도 되는 시각 (공격 커서가 안 뜬 대상)
     fail    = 0        #테이블을 연속으로 못 읽은 횟수
     teled   = 0.0      #마지막으로 텔(새로고침 키)을 누른 시각
 
@@ -1309,7 +1309,13 @@ def huntloop(p, atkvalue):
         fail = 0
 
         now  = time.perf_counter()
-        mobs = [r for r in found['mobs'] if cool.get(r[1]['id'], 0) <= now]
+        #화면 좌표를 미리 구해 화면 안에 있는 몹만 남긴다 (화면 밖은 클릭할 수 없다)
+        #감지만 모드에서는 보정이 없을 수 있으므로 거르지 않는다
+        mobs = []
+        for dist, o, pos in found['mobs']:
+            xy = toscreen(pos[0] - found['pos'][0], pos[1] - found['pos'][1])
+            if DETECT_ONLY or (xy != None and 0 <= xy[0] < screen[0] and 0 <= xy[1] < screen[1]):
+                mobs.append((dist, o, pos, xy))
 
         #잡던 몹이 아직 살아 있는지. 목록에 없으면 죽었거나 사라졌거나 멀어진 것
         cur = None
@@ -1341,7 +1347,7 @@ def huntloop(p, atkvalue):
             time.sleep(HUNT_POLL)
             continue
 
-        dist, o, pos = cur
+        dist, o, pos, xy = cur
         if o['id'] != target:
             target  = o['id']
             tname   = str(o.get('name')) + ' (id ' + str(o['id']) + ')'
@@ -1357,23 +1363,18 @@ def huntloop(p, atkvalue):
         tick      = now
 
         if now - clicked >= RECLICK_SEC:
-            xy = toscreen(pos[0] - found['pos'][0], pos[1] - found['pos'][1])
-            hit = False
-            if xy != None and 0 <= xy[0] < screen[0] and 0 <= xy[1] < screen[1]:
-                _movefast(parkpos[0], parkpos[1])      #커서 모양 초기화
-                time.sleep(PROBE_SETTLE * random.uniform(*PROBE_JITTER) if NATURAL_ON else PROBE_SETTLE)
-                if _probe(xy[0], xy[1], atkvalue):
-                    _settleclick(xy[0], xy[1], atkvalue)
-                    hit = True
-            if hit:
-                clicked = time.perf_counter()
+            #칼 모양 확인 없이 바로 클릭한다
+            # _movefast(parkpos[0], parkpos[1])      #커서 모양 초기화
+            # if _probe(xy[0], xy[1], atkvalue):
+            #     _settleclick(xy[0], xy[1], atkvalue)
+            if NATURAL_ON:
+                _movehuman(xy[0] + random.randint(-CLICK_ADJ, CLICK_ADJ),
+                           xy[1] + random.randint(-CLICK_ADJ, CLICK_ADJ))
+                time.sleep(random.uniform(*CLICK_DELAY))
             else:
-                #화면 밖이거나 그 자리에 공격 커서가 안 떴다 (NPC, 가려짐, 좌표 어긋남)
-                #잠깐 제쳐 두고 다음으로 가까운 몹을 본다
-                cool[o['id']] = now + MISS_COOL
-                target = None
-                tname  = ''
-                continue
+                _movefast(xy[0], xy[1])
+            gu.click()
+            clicked = time.perf_counter()
 
         if skillon and skillsec >= SKILL_COOL:
             log('스킬 ' + KEY_SKILL.upper())
@@ -1538,7 +1539,7 @@ def runmacro():
         log('내 캐릭터 : ' + str(first['me'].get('name')) + '  좌표 ' + str(first['pos'])
             + '  종류 규칙 : ' + (', '.join(sorted(kinds)) if kinds else '없음'))
         if 'monster' not in kinds:
-            log('monster 규칙 없음 - 캐릭터가 아닌 것을 전부 후보로 보고 공격 커서로 걸러낸다')
+            log('monster 규칙 없음 - 캐릭터가 아닌 것(이름 있는 것)을 전부 대상으로 본다. NPC 도 클릭될 수 있다')
         if DETECT_ONLY:
             log('감지만 - 클릭/귀환/새로고침을 하지 않고 로그만 찍습니다')
 
@@ -1550,8 +1551,9 @@ def runmacro():
                 log('postracker.py 에서 허수아비 보정(F9)을 3점 이상 찍은 뒤 다시 시작 - 시작 안 함')
                 return
             log('화면 보정 : ' + why)
-            atk = setattckinfo(CENTERPOINT)
-            log('공격 커서 : ' + str(atk))
+            #공격 커서(칼 모양)는 더 이상 확인하지 않으므로 캡처도 하지 않는다
+            # atk = setattckinfo(CENTERPOINT)
+            # log('공격 커서 : ' + str(atk))
         elif not ATTACK_ON:
             log('공격 끔 - 버프 / 변신 / 귀환 감시만 돕니다')
 
