@@ -17,6 +17,7 @@
 #   python memprobe.py --char                     캐릭터 정보 - 레벨/경험치%/HP/MP/AC/성향/스탯/포만도/무게/저항
 #   python memprobe.py --items                   인벤토리 창 순회 - 소지품의 id/종류/아이콘/축복/수량/확인/이름
 #   python memprobe.py --buffs                   켜져 있는 버프(상태효과) 순회 - 아이콘/이름 + 위젯·칸 원본 바이트
+#   python memprobe.py --peek 0x1B0D1C 0xA0      그 RVA 를 16진수+CP949 로 떠 본다 (버프 영역 확인)
 #   python memprobe.py --gsnap                   모듈 전역 영역 스냅샷 (버프 끈 상태에서)
 #   python memprobe.py --gdiff                   스냅샷 뒤 바뀐 4바이트 찾기 (버프 켜고) - 버프 바 위치 찾기용
 #   python memprobe.py --objdump                   플레이어 좌표 일치 객체 전부 덤프
@@ -1267,6 +1268,47 @@ def dumpitems(pid):
         m.detach()
 
 
+def dopeek(pid):
+    #RVA 한 곳을 16진수 + CP949 로 떠서 본다 (버프 영역 구조 확인용). 읽기 전용.
+    #  python memprobe.py --peek 0x1B0D1C 0xA0     (RVA, 길이. 길이 생략하면 0x80)
+    #  python memprobe.py --peek 0x1B0D1C          앞 두 인자로 받는다
+    args = [a for a in sys.argv[sys.argv.index('--peek') + 1:] if not a.startswith('--')]
+    if len(args) == 0:
+        say('RVA 를 줘라 : python memprobe.py --peek 0x1B0D1C 0xA0')
+        return
+    try:
+        rva = int(args[0], 0)
+        ln  = int(args[1], 0) if len(args) > 1 else 0x80
+    except ValueError:
+        say('RVA/길이는 16진수나 10진수로 : --peek 0x1B0D1C 0xA0')
+        return
+    ln = max(16, min(ln, 0x1000))
+    m = mr.Mem(MEM_PATH, say)
+    if not m.attach(pid):
+        say('붙기 실패 : ' + str(m.err))
+        return
+    try:
+        addr = m.base + rva
+        raw = mr.readmem(m.h, addr, ln)
+        if raw == None:
+            say('그 주소를 못 읽는다 (0x%08X)' % addr)
+            return
+        say('0x%08X (RVA 0x%X), %d 바이트:' % (addr, rva, ln))
+        say(hexdump(raw, addr))
+        #CP949 로 이어 읽기 (이름 문자열이 있으면 여기서 보인다)
+        try:
+            txt = raw.decode('cp949', 'replace')
+        except Exception:
+            txt = ''
+        say('CP949 : ' + repr(txt))
+        #0 이 아닌 바이트가 몰린 구간(플래그 배열 후보)도 같이 알려 준다
+        nz = [i for i, b in enumerate(raw) if b not in (0,)]
+        if nz:
+            say('0 아닌 바이트 오프셋(앞 40개): ' + ' '.join('+0x%X' % i for i in nz[:40]))
+    finally:
+        m.detach()
+
+
 #--- 전역 데이터 영역 스냅샷/비교 (버프처럼 '켜면 어딘가 바뀌는' 값을 찾는다) ---
 #
 #  버프 바가 어느 전역에 있는지 정적 분석으로 못 찾았을 때, 게임에서 직접 찾는다.
@@ -2185,6 +2227,10 @@ def main():
 
     if has('--buffs'):
         dumpbuffs(pid)
+        return
+
+    if has('--peek'):
+        dopeek(pid)
         return
 
     if has('--gsnap'):
