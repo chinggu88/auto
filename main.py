@@ -112,6 +112,9 @@ BUFF_KEY_GAP = 0.2 #버프 키 하나를 누른 뒤 다음 버프 키까지 대�
 PAGE_ATTACK = 'f1'
 PAGE_BUFF   = 'f2'
 PAGE_GAP    = 0.3  #페이지 키를 누른 뒤 단축키 칸이 바뀔 때까지 대기(초)
+TRANSFORM_WAIT     = 1.0   #변신 키를 누르기 전 대기(초). 바로 앞 버프의 시전이 끝나야 변신 키가 먹는다
+TRANSFORM_MENU_SEC = 3.0   #변신 메뉴(lv80.PNG)가 뜰 때까지 기다리는 최대 시간(초)
+TRANSFORM_MENU_POLL = 0.3  #그동안 메뉴를 다시 찾는 간격(초)
 CHAT_CMD      = '.버프'   #채팅창에 넣는 매크로 명령어
 CHAT_INTERVAL = 900       #채팅버프 주기(초). 15분
 CHAT_GAP      = 0.3       #엔터 -> 입력 -> 엔터 사이 대기(초)
@@ -266,7 +269,11 @@ DEFAULT_OPTS = {
     'ber_pct':  50,     #HP 가 이 % 이하면 베르 키
     'immune_n': 4,      #주위 몹이 이 수 이상이면 이뮨 키
     'attacks':  None,   #공격 키 목록 [{'key','delay','dist'}, ...]. None 이면 defaultattacks()
+    'gaps':     None,   #힐 / 베르 / 이뮨 재사용 간격(초) {'heal','ber','immune'}. 0 = GAP_DEFAULT. None 이면 전부 0
+                        #(버프 탭의 주기 칸과 별개다. F1 페이지의 역할 키와 F2 페이지의 버프가 같은 F 키일 수 있다)
 }
+def defaultgaps():
+    return {'heal': 0, 'ber': 0, 'immune': 0}
 PCT_CHOICES = [10, 20, 30, 40, 50, 60, 70, 80, 90]    #힐 / 베르 HP % 드롭다운
 MOB_CHOICES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]         #이뮨 몹 수 드롭다운
 RANGES = [('near', '근거리'), ('far', '원거리')]   #표시 순서
@@ -305,7 +312,7 @@ RECLICK_SEC    = 0.5    #클릭 간격(초). 클릭할 때마다 가장 가까�
 STUCK_REACH    = 2      #이 거리(타일) 안이면 붙어서 싸우는 중으로 보고 막힘 판정을 안 한다
 STUCK_SEC      = 4.0    #이만큼 진전이 없으면 막힌 것으로 본다
 SKIP_SEC       = 20.0   #막힌 몹을 대상에서 빼 두는 시간
-IDLE_TELE_SEC  = 5.0    #같은 대상을 잡은 채 이만큼 아무 변화(대상 바뀜/끝/텔)가 없으면 강제로 텔한다
+IDLE_TELE_SEC  = 10.0   #같은 대상을 잡은 채 이만큼 아무 변화(대상 바뀜/끝/텔)가 없으면 강제로 텔한다
 TELE_DELAY     = 0.5    #몹이 없다고 판단한 뒤 텔 키를 누르기까지 두는 시간(초)
 TELE_GAP       = 1.5    #텔(새로고침 키)을 누른 뒤 다음 텔까지 최소 간격(초). 이동 뒤 주변이 다시 읽힐 시간
 MEM_FAIL_LIMIT = 10     #엔티티 테이블을 연속으로 이만큼 못 읽으면 멈춘다 (화면으로 넘어가지 않는다)
@@ -579,10 +586,15 @@ def dochatbuff():
 #변신
 def dotransform():
     log('변신 : ' + str(KEY_TRANSFORM))
+    time.sleep(TRANSFORM_WAIT)            #앞 버프의 시전 중에 누르면 변신 키가 씹힌다
     gu.press(KEY_TRANSFORM, presses=1)
-    time.sleep(1)
     file_path = IMAGE_DIR
-    lv80 = gu.locateCenterOnScreen(file_path + 'lv80.PNG', confidence=0.8)
+    #메뉴가 뜨는 데 걸리는 시간이 들쭉날쭉해서 한 번만 보지 않고 잠깐 동안 다시 찾는다
+    lv80 = None
+    deadline = time.time() + TRANSFORM_MENU_SEC
+    while lv80 == None and time.time() < deadline:
+        time.sleep(TRANSFORM_MENU_POLL)
+        lv80 = gu.locateCenterOnScreen(file_path + 'lv80.PNG', confidence=0.8)
     if lv80 != None:
         gu.moveTo(lv80)
         gu.click()
@@ -1704,6 +1716,20 @@ def loadconfig(path=None):
             opts['dist'] = v
     except (TypeError, ValueError):
         pass
+    gaps   = defaultgaps()
+    rawgap = data.get('gaps')
+    for rid in gaps:
+        if isinstance(rawgap, dict):
+            v = rawgap.get(rid, 0)
+        else:
+            #옛 설정 : 재사용 간격이 그 키의 주기 칸에 들어 있었다
+            v = seconds.get(roles.get(rid), 0) if roles.get(rid) else 0
+        try:
+            v = int(v)
+            gaps[rid] = v if v >= 0 else 0
+        except (TypeError, ValueError):
+            pass
+    opts['gaps'] = gaps
     for key, lo, hi in (('heal_pct', 1, 99), ('ber_pct', 1, 99), ('immune_n', 1, 99)):
         try:
             v = int(data.get(key, opts[key]))
@@ -1735,6 +1761,7 @@ def saveconfig(seconds, roles, opts, path=None):
             'heal_pct': int(opts.get('heal_pct', DEFAULT_OPTS['heal_pct'])),
             'ber_pct':  int(opts.get('ber_pct',  DEFAULT_OPTS['ber_pct'])),
             'immune_n': int(opts.get('immune_n', DEFAULT_OPTS['immune_n'])),
+            'gaps':     dict((rid, int((opts.get('gaps') or {}).get(rid, 0) or 0)) for rid in defaultgaps()),
             'attacks':  [{'key':   (a.get('key') if a.get('key') in FKEYS else None),
                           'delay': float(a.get('delay', 0)),
                           'dist':  int(a.get('dist', defaultattacks()[0]['dist']))}
@@ -1789,9 +1816,11 @@ def applyconfig(seconds, roles, opts=None):
     BER_PCT       = int(opts.get('ber_pct',  DEFAULT_OPTS['ber_pct']))
     IMMUNE_N      = int(opts.get('immune_n', DEFAULT_OPTS['immune_n']))
     #재사용 간격 = 그 키의 주기 칸. 0 이면 기본값
-    HEAL_GAP      = float(seconds.get(KEY_HEAL, 0) or GAP_DEFAULT['heal'])     if KEY_HEAL   else GAP_DEFAULT['heal']
-    BER_GAP       = float(seconds.get(KEY_BER, 0) or GAP_DEFAULT['ber'])       if KEY_BER    else GAP_DEFAULT['ber']
-    IMMUNE_GAP    = float(seconds.get(KEY_IMMUNE, 0) or GAP_DEFAULT['immune']) if KEY_IMMUNE else GAP_DEFAULT['immune']
+    #재사용 간격은 opts['gaps'] (버프 탭의 주기 칸과 별개). 0 이면 기본값
+    gaps          = opts.get('gaps') or defaultgaps()
+    HEAL_GAP      = float(gaps.get('heal', 0)   or GAP_DEFAULT['heal'])
+    BER_GAP       = float(gaps.get('ber', 0)    or GAP_DEFAULT['ber'])
+    IMMUNE_GAP    = float(gaps.get('immune', 0) or GAP_DEFAULT['immune'])
 
     TRANSFORM_INTERVAL = seconds.get(KEY_TRANSFORM, 0) if KEY_TRANSFORM else 0
 
@@ -1957,7 +1986,7 @@ class App:
         self.entry   = {}    #키 -> Entry
         self.note    = {}    #키 -> Label (주기 설명)
         self.rolekey = {}    #역할 -> StringVar (KEY_NONE 또는 'F5'..'F12')  공격 탭
-        self.rolesec = {}    #역할 -> StringVar (재사용 간격)  그 키의 seconds 에 들어간다
+        self.rolesec = {}    #역할 -> StringVar (재사용 간격, opts['gaps']).  버프 탭의 주기 칸과 별개
         self.transkey = tk.StringVar(value=KEY_NONE)   #변신 키 (버프 탭, F2 페이지). 주기는 그 키의 주기 칸
         self.rolewid = {}    #역할 -> 잠글 위젯들
         self.thread  = None  #매크로 스레드. 끝나면 UI 를 다시 연다
@@ -2359,7 +2388,7 @@ class App:
             key = roles.get(rid)
             self.rolekey[rid].set(key.upper() if key in FKEYS else KEY_NONE)
             if rid in self.rolesec:
-                self.rolesec[rid].set(str(seconds.get(key, 0)) if key in FKEYS else '0')
+                self.rolesec[rid].set(str((opts.get('gaps') or {}).get(rid, 0)))
         tkey = roles.get('transform')
         self.transkey.set(tkey.upper() if tkey in FKEYS else KEY_NONE)
         self.attack.set(bool(opts.get('attack', DEFAULT_OPTS['attack'])))
@@ -2407,16 +2436,17 @@ class App:
             return None, None, None
 
         roles = {}
+        gaps  = defaultgaps()
         for rid, label in ROLES:
             v = self.rolekey[rid].get()
             roles[rid] = v.lower() if v in KEY_CHOICES and v != KEY_NONE else None
-            if roles[rid] != None and rid in self.rolesec:
-                #재사용 간격은 그 키의 주기 칸(seconds) 에 들어간다 (applyconfig 가 거기서 읽는다)
+            if rid in self.rolesec:
+                #재사용 간격은 따로 저장한다 (예전처럼 그 키의 주기 칸에 넣으면 같은 F 키의 버프 주기를 지워 버린다)
                 raw = self.rolesec[rid].get().strip() or '0'
                 if not raw.isdigit():
-                    log(label + ' 주기는 0 이상 정수만 : ' + raw)
+                    log(label + ' 재사용 간격은 0 이상 정수만 : ' + raw)
                     return None, None, None
-                seconds[roles[rid]] = int(raw)
+                gaps[rid] = int(raw)
         v = self.transkey.get()
         roles['transform'] = v.lower() if v in KEY_CHOICES and v != KEY_NONE else None
 
@@ -2441,6 +2471,7 @@ class App:
                 'heal_pct': int(self.healpct.get()),
                 'ber_pct':  int(self.berpct.get()),
                 'immune_n': int(self.immunen.get()),
+                'gaps':     gaps,
                 'attacks':  attacks}
         return seconds, roles, opts
 
