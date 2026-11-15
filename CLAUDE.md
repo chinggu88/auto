@@ -99,6 +99,17 @@ To stop a running script: `pyautogui.FAILSAFE` is disabled in `oman.py`/`tell.py
   With no `monster` rule, every entity judged `other` is a candidate and the cursor check
   filters NPCs. `python memprobe.py --entkind --mob … --npc … --pc …`
   finds a discriminating offset.
+- **No mobs → teleport at once.** When no clickable mob is in range the loop presses the refresh
+  key immediately (`TELE_GAP` 1.5 s between presses); the old "N empty sweeps" counter is unused.
+  Click interval is `RECLICK_SEC` 1 s, and each click re-picks the nearest mob.
+- **Chat buff (`dochatbuff`) writes the text into the chat input buffer** via `memchat.py`
+  (verified in-game 2026-11-15). `mem.json` `chains.chat_str` = `[[Lin.exe+0xA3288]+0x28]+0` is a
+  string struct: `+0` buffer pointer, `+4` char count. Each char is one 2-byte cell — ASCII as is,
+  Hangul as `(CP949 lead << 8) | trail`, **not** UTF-16. An empty input has a null buffer and its
+  capacity is unknown, so the flow is Enter → type `1` × len (IME-independent) → overwrite those
+  cells in place → Enter; `memchat.put` refuses to write more cells than are already there.
+  `0x9BF98` is the "focused edit" pointer and is 0 when the input is empty — do not use it.
+  `python memchat.py ".버프" --auto` runs the same sequence standalone.
 - **`감지만` (detect-only)** logs the chosen target and nearby players without clicking or recalling.
 - The old code is kept, unused by `main.py`: `huntloop_sweep`, `_checkmarks`, `soundwatch`.
   `pit.py`, `memcalib.py`, `collect.py`, `sweep.py` and `sound_record.py` import main's helpers
