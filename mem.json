@@ -194,6 +194,14 @@
   "names": {
     "12543": "냉혹한 샤벨타이거"
   },
+  "_ent": "엔티티 테이블(chains.ent_table) 항목의 종류 판별 규칙. main.py 의 사냥(몬스터만 공격)과 귀환(다른 캐릭터 감지)이 쓴다. rules 를 위에서부터 보고 처음 맞는 규칙의 kind 가 그 엔티티의 종류다. 규칙 꼴은 {kind, off, type, values} 로 '엔티티 +off 의 값이 values 안에 있으면 kind' 이고, {kind, any:true} 는 '앞 규칙에 안 걸린 나머지 전부' 다. kind 는 player / monster / npc 를 쓴다",
+  "_ent1": "player 규칙(+0x4C == 255)은 sweep_mem.py 가 쓰던 값으로 한 캐릭터에서만 본 것이다. monster 규칙은 아직 없다 - 없으면 main.py 가 사냥을 시작하지 않는다. python memprobe.py --entkind 로 몹/NPC/캐릭터의 값을 보고 채운다",
+  "ent": {
+    "rules": [
+      {"kind": "player", "off": "0x4C", "type": "u32", "values": [255]}
+    ]
+  },
+
   "_objlist": "주변 객체 배열. base 를 null 로 두면 혈맹 판별과 몹 타겟 집기가 꺼지고 마크 이미지로 폴백한다",
   "_objlist1": "kind=array 면 base 부터 stride 간격으로 count 개가 늘어서 있다고 본다. kind=linked 면 stride 오프셋에 있는 next 포인터를 따라간다",
   "_objlist2": "fields 의 off 는 원소 하나의 시작에서부터의 오프셋이다. id 가 0 인 칸은 빈 칸으로 보고 버리므로 id 오프셋이 틀리면 목록이 전부 비어 보인다",

@@ -13,6 +13,10 @@
 #   python memprobe.py --watch hp,mp --sec 0.5    감시 주기 바꾸기
 #   python memprobe.py --objs                     객체 목록 덤프
 #   python memprobe.py --table                    bsearch 엔티티 테이블 순회 (플레이어 객체 찾기)
+#   python memprobe.py --entkind                  엔티티 종류 보기 - 이름/거리/+0x4C/+0x44/행동 + 지금 규칙의 판정
+#   python memprobe.py --entkind --raw            위에 더해 엔티티마다 원본 바이트를 같이 찍는다
+#   python memprobe.py --entkind --mob "오크,늑대" --npc "판도라" --pc "다른캐릭"
+#                        이름으로 묶음을 알려주면 묶음을 가르는 오프셋 후보를 찾아준다 (mem.json ent.rules 채우기용)
 #   python memprobe.py --spells                   스킬(마법) 창 순회 - 배운 스킬의 슬롯/id/아이콘/메모리 주소/이름
 #   python memprobe.py --char                     캐릭터 정보 - 레벨/경험치%/HP/MP/AC/성향/스탯/포만도/무게/저항
 #   python memprobe.py --items                   인벤토리 창 순회 - 소지품의 id/종류/아이콘/축복/수량/확인/이름
@@ -1224,6 +1228,139 @@ def dumpenttable(pid):
         m.detach()
 
 
+#엔티티 종류(몬스터 / NPC / 캐릭터)를 가르는 값을 찾는 덤프.
+#  표 : 가까운 순으로 이름, 거리, +0x4C(type), +0x44(혈맹), 행동/자세, 지금 ent.rules 의 판정
+#  --raw : 엔티티마다 원본 바이트
+#  --mob / --npc / --pc "이름,이름" : 그 이름의 엔티티를 묶음으로 보고,
+#     '묶음 안에서는 전부 같고 묶음끼리는 다른' 오프셋을 찾는다. 나 자신은 pc 묶음에 자동으로 들어간다
+ENTKIND_SIZE = 0x200     #묶음 비교 때 엔티티마다 읽는 바이트 수
+
+def _entnames(text):
+    return [''.join(x.split()) for x in (text or '').split(',') if x.strip()]
+
+
+def dumpentkind(pid):
+    m = mr.Mem(MEM_PATH, say)
+    if not m.attach(pid):
+        say('붙기 실패 : ' + str(m.err))
+        return
+    try:
+        objs, head, count = m.entity_table()
+        say()
+        say('테이블 베이스 : ' + (hex(head) if head != None else '(못 읽음)')
+            + '   개수 : ' + str(count))
+        if len(objs) == 0:
+            say('  비었다. mem.json chains.ent_table / ent_count 를 확인한다')
+            return
+        me = m.selfent(objs)
+        if me == None:
+            say('  나 자신을 못 찾았다 (chains.char_id 와 내 좌표 둘 다 안 맞음). 거리는 비워 둔다')
+            mpos = None
+        else:
+            mpos = m.entpos(me)
+            say('나 : ' + str(me.get('name')) + '  id ' + str(me['id']) + '  좌표 ' + str(mpos))
+        kinds = m.entkinds()
+        say('지금 규칙이 있는 종류 : ' + (', '.join(sorted(kinds)) if kinds else '(없음)'))
+        say()
+
+        rows = []
+        for o in objs:
+            pos = m.entpos(o)
+            if mpos != None:
+                dist = max(abs(pos[0] - mpos[0]), abs(pos[1] - mpos[1]))
+            else:
+                dist = -1
+            rows.append((dist, o, pos))
+        rows.sort(key=lambda r: r[0])
+
+        say('  %-4s %-11s %-13s %-8s %-10s %-4s %-4s %-8s %s'
+            % ('거리', 'id', '좌표', '+0x4C', '+0x44', 'act', 'base', '판정', '이름'))
+        for dist, o, pos in rows:
+            mark = '  <-- 나' if me != None and o['ptr'] == me['ptr'] else ''
+            say('  %-4s %-11d %-13s %-8d %-10d %-4d %-4d %-8s %s%s'
+                % (str(dist) if dist >= 0 else '?', o['id'],
+                   '%d,%d' % pos, o['type'], o['clan'], o['act'], o['base'],
+                   str(m.kind(o)), str(o.get('name')), mark))
+
+        if has('--raw'):
+            say()
+            for dist, o, pos in rows:
+                raw = m.object_bytes(o['ptr'], 0x100)
+                say('--- ' + str(o.get('name')) + '  id ' + str(o['id'])
+                    + '  ptr ' + hex(o['ptr']))
+                if raw == None:
+                    say('  (못 읽음)')
+                else:
+                    say(hexdump(raw, o['ptr']))
+
+        #묶음 비교
+        groups = {'mob': _entnames(arg('--mob')), 'npc': _entnames(arg('--npc')),
+                  'pc': _entnames(arg('--pc'))}
+        if not (groups['mob'] or groups['npc'] or groups['pc']):
+            say()
+            say('  몹 / NPC / 다른 캐릭터가 같이 보이는 곳에서, 이름으로 묶음을 알려주면')
+            say('  묶음을 가르는 오프셋을 찾아준다 :')
+            say('    python memprobe.py --entkind --mob "몹이름,몹이름" --npc "NPC이름" --pc "캐릭이름"')
+            return
+        packs = {}
+        for label in ('mob', 'npc', 'pc'):
+            packs[label] = []
+        for dist, o, pos in rows:
+            nm = ''.join(str(o.get('name') or '').split())
+            label = None
+            if me != None and o['ptr'] == me['ptr']:
+                label = 'pc'
+            else:
+                for g in ('mob', 'npc', 'pc'):
+                    if nm != '' and nm in groups[g]:
+                        label = g
+            if label == None:
+                continue
+            raw = m.object_bytes(o['ptr'], ENTKIND_SIZE)
+            if raw != None:
+                packs[label].append((nm, raw))
+        say()
+        used = [g for g in ('mob', 'npc', 'pc') if len(packs[g]) > 0]
+        for g in ('mob', 'npc', 'pc'):
+            say('  묶음 %-3s : %d개  %s' % (g, len(packs[g]),
+                                          ', '.join(sorted(set(n for n, r in packs[g])))))
+        if len(used) < 2:
+            say('  묶음이 2개 이상 있어야 비교할 수 있다 (이름이 화면의 이름과 같은지 확인)')
+            return
+        say()
+        say('  묶음 안에서는 같고 묶음끼리는 다른 자리 (1바이트 / 4바이트) :')
+        hits = 0
+        for width, fmt in ((1, '<B'), (4, '<I')):
+            for off in range(0, ENTKIND_SIZE - width + 1, width):
+                vals = {}
+                okay = True
+                for g in used:
+                    seen = set(struct.unpack_from(fmt, raw, off)[0] for n, raw in packs[g])
+                    if len(seen) != 1:
+                        okay = False
+                        break
+                    vals[g] = seen.pop()
+                if not okay or len(set(vals.values())) < 2:
+                    continue
+                #포인터처럼 보이는 큰 값은 개체마다 우연히 같았을 뿐일 수 있어 표시만 해 둔다
+                note = ''
+                if width == 4 and any(v >= 0x10000 for v in vals.values()):
+                    note = '   (큰 값 - 포인터/좌표일 수 있음)'
+                say('    +0x%03X  u%-2d  %s%s'
+                    % (off, width * 8,
+                       '  '.join('%s=%d' % (g, vals[g]) for g in used), note))
+                hits += 1
+        if hits == 0:
+            say('    없다. 묶음에 다른 종류가 섞였거나, 구분 값이 0x%X 바이트 밖에 있다' % ENTKIND_SIZE)
+        else:
+            say()
+            say('  묶음마다 개체가 여럿일수록 믿을 만하다 (1개씩이면 우연히 다른 자리도 다 나온다)')
+            say('  고른 자리를 mem.json ent.rules 에 적는다. 예 :')
+            say('    {"kind": "monster", "off": "0x??", "type": "u8", "values": [값]}')
+    finally:
+        m.detach()
+
+
 def dumpspells(pid):
     m = mr.Mem(MEM_PATH, say)
     if not m.attach(pid):
@@ -2215,6 +2352,10 @@ def main():
 
     if has('--table'):
         dumpenttable(pid)
+        return
+
+    if has('--entkind'):
+        dumpentkind(pid)
         return
 
     if has('--spells'):

@@ -52,6 +52,11 @@ top-level scripts predate them and are kept as they are.
      unverified — establish a reliable main-thread execution path first.
    - Current code still violating rule 2 until this lands: `memcast.py` (`gu.press`) and
      `iksun/main.py` `Ctx.press` (`pyautogui`).
+4. **Exception — top-level `main.py` attacks by mouse left-click.** Decided by the user on
+   2026-11-15 after the function-call attack was dropped for `main.py`. Sensing is memory-only
+   (entity table), but the attack is a real click at the mob's computed screen position, and
+   buffs / transform / recall / refresh are still key presses. This exception covers `main.py`
+   only; `iksun/` stays under rules 1–3.
 
 ## Running
 
@@ -72,6 +77,33 @@ Dependencies (install manually): `pyautogui`, `pywin32`, `keyboard`, `schedule`.
 **Windows-only.** `win32gui` and the hardcoded `'\\'` path separators in every `file_path` construction mean these scripts cannot run on the macOS dev machine — they can only be edited here. Do not attempt to execute them to verify changes.
 
 To stop a running script: `pyautogui.FAILSAFE` is disabled in `oman.py`/`tell.py`/`turn.py`, so the corner-of-screen escape hatch does **not** work there. The attack loops are `while True` with no keyboard interrupt handler.
+
+## `main.py` hunting and recall (memory-sensed, since 2026-11-15)
+
+`main.py` no longer sweeps the cursor or matches clan-mark images. Both features read
+`memread.Mem.entity_table()` (the same source `postracker.py` uses):
+
+- **Hunting (`huntloop`)** — `scanents()` lists live non-player entities within `dist` tiles
+  (Chebyshev), nearest first. The loop keeps one target id, clicks it, and moves to the next
+  nearest when the target is `dead` or gone from the table. Screen position comes from the
+  affine calibration file beside the script (`scarecrow_calib.json` from `postracker.py`'s F9
+  scarecrow calibration, else `calib.json` from `turnundead_mem.py`); without one it refuses to
+  start. **The cursor check is kept**: `_probe()` must see the attack cursor before
+  `_settleclick()`; a miss puts that id on a 3 s cooldown.
+- **Recall (`_checkrHp`)** — any entity of kind `player` other than self → `request('return')`.
+  "Could not read" is never treated as "nobody around": `MEM_FAIL_LIMIT` consecutive failures stop
+  the macro. The HP check is still the `checkhp.PNG` image.
+- **Entity kinds** come from `mem.json` `ent.rules` via `Mem.kind()`. Only the `player` rule
+  (`+0x4C == 255`, seen on one character) exists. With no `monster` rule, every non-player is a
+  candidate and the cursor check filters NPCs. `python memprobe.py --entkind --mob … --npc … --pc …`
+  finds a discriminating offset.
+- **`감지만` (detect-only)** logs the chosen target and nearby players without clicking or recalling.
+- The old code is kept, unused by `main.py`: `huntloop_sweep`, `_checkmarks`, `soundwatch`.
+  `pit.py`, `memcalib.py`, `collect.py`, `sweep.py` and `sound_record.py` import main's helpers
+  and globals by name — do not rename them.
+
+The "Architecture" section below describes the older forks (`oman.py`, `tell.py`, `turn.py`) and
+`main.py` before this change (`attack1`, `isattack`, `checkrMp` no longer exist in `main.py`).
 
 ## The memory-based variant (`pit.py`)
 
@@ -150,7 +182,6 @@ Present in the committed source; be deliberate about whether a task wants them f
 - [oman.py:125](oman.py#L125) — `die()` re-schedules `transform` instead of itself, so death detection runs once.
 - [oman.py:150](oman.py#L150) and [tell.py:137](tell.py#L137) — `os.path.realpath('__file__')` passes the string literal, resolving `file_path` relative to the cwd rather than the script directory (the other functions in the same files use `__file__` correctly).
 - [turn.py:143](turn.py#L143) — `mark4[0] <= 600 & mark4[0] >= 650` is both bitwise-`&` and unsatisfiable, so that branch never fires.
-- [main.py:246](main.py#L246) — `checkrMp` assigns `ishunting` without a `global` declaration, so the state change is discarded.
 
 ## Conventions
 

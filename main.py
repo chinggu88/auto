@@ -23,6 +23,7 @@ except Exception:
     MASK_OK = False
 import sys
 import tkinter as tk
+import memread as mr     #엔티티 테이블 읽기 (읽기 전용). 사냥 대상과 주변 캐릭터를 여기서 얻는다
 from tkinter import ttk
 
 #실행 폴더 : exe 로 묶으면 exe 가 놓인 폴더, 아니면 스크립트 폴더
@@ -236,6 +237,8 @@ DEFAULT_OPTS = {
     'range':  'near',   #칼 탐지 거리 : 'near'(근거리) / 'far'(원거리)
     'nohit':  2,        #이 횟수만큼 헛돌면 새로고침
     'sound':  False,    #소리로 칼질을 감지해 서치를 멈출지 (추가 패키지가 필요해서 기본 꺼짐)
+    'dist':   8,        #사냥 탐지 거리(타일). 이 안의 몹만 대상으로 삼는다
+    'detect': False,    #감지만 : 몹/캐릭터를 로그에만 찍고 클릭도 귀환도 안 한다 (확인용)
 }
 RANGES = [('near', '근거리'), ('far', '원거리')]   #표시 순서
 
@@ -257,6 +260,21 @@ MANUAL_CLICK_GAP   = 0.2    #수동 사냥 : 휠 클릭 한 번 누르고 다음
 SCAN_ROUND         = SCAN_NEAR              #현재 탐지 거리의 바퀴 수
 NOHIT_LIMIT        = DEFAULT_OPTS['nohit']  #헛돌 때 새로고침까지의 횟수
 SOUND_ON           = DEFAULT_OPTS['sound']  #소리 감지 사용 여부
+HUNT_DIST          = DEFAULT_OPTS['dist']   #사냥 탐지 거리(타일)
+DETECT_ONLY        = DEFAULT_OPTS['detect'] #감지만 (클릭/귀환 안 함)
+
+#--- 메모리 사냥 ---
+#몹 위치와 주변 캐릭터는 엔티티 테이블(memread)에서 읽는다. 화면을 훑지 않는다
+#몹의 화면 좌표는 보정 파일(게임 좌표 차이 -> 화면 픽셀 아핀 변환)로 구한다
+#  scarecrow_calib.json (postracker.py 의 허수아비 보정) > calib.json (turnundead_mem.py 의 보정)
+HUNT_POLL      = 0.1    #사냥 루프 한 바퀴 간격(초)
+RECLICK_SEC    = 2.0    #같은 대상이 살아 있을 때 다시 클릭하는 간격(초)
+MISS_COOL      = 3.0    #그 자리에 공격 커서가 안 뜬 대상을 다시 보기까지 쉬는 시간(초)
+NOMOB_SEC      = 2.0    #대상이 없는 채로 이만큼 지나면 '헛돔' 1회로 센다
+MEM_FAIL_LIMIT = 10     #엔티티 테이블을 연속으로 이만큼 못 읽으면 멈춘다 (화면으로 넘어가지 않는다)
+CALIB_FILES    = ['scarecrow_calib.json', 'calib.json']   #앞엣것 우선
+MEM            = None   #memread.Mem. runmacro 가 붙이고 뗀다
+CALIB          = None   #아핀 계수 (a,b,c,d,e,f). 화면 = (a*dx+b*dy+c, d*dx+e*dy+f)
 
 #=====================================================================
 # 트리거 : 한 순간에 하나만 True
@@ -870,13 +888,47 @@ def _checkrHp():
     file_path = IMAGE_DIR
 
     #1. 피 부족 경고 UI 가 '뜨면' 귀환
-    if gu.locateCenterOnScreen(file_path + HP_IMG, confidence=HP_CONF) != None:
+    #(감지만 모드에서는 귀환을 안 하므로 건너뛴다)
+    if (not DETECT_ONLY) and gu.locateCenterOnScreen(file_path + HP_IMG, confidence=HP_CONF) != None:
         log('피 소모 완료 귀환!')
         request('return')
         return                #매크로 루프가 처리하고 종료하므로 타이머 재등록 안 함
 
-    #2. 적대 혈맹 마크. image 폴더에 있는 mark*.bmp 를 전부 돌린다
-    #   하나라도 걸리면 나머지는 볼 필요가 없으므로 바로 귀환
+    #2. 주변에 다른 캐릭터가 있으면 귀환 (엔티티 테이블. 마크 이미지는 더 이상 안 본다)
+    global WATCH_FAIL, WATCH_SEEN
+    found = scanents()
+    if found == None or found['players'] == None:
+        #못 읽은 것을 '아무도 없음' 으로 치면 감시가 조용히 죽는다. 연속으로 못 읽으면 멈춘다
+        WATCH_FAIL += 1
+        if WATCH_FAIL >= MEM_FAIL_LIMIT:
+            log('주변 캐릭터를 ' + str(WATCH_FAIL) + '번 연속 못 읽었다 - 정지')
+            request('stop')
+            return
+    else:
+        WATCH_FAIL = 0
+        others = found['players']
+        if len(others) > 0:
+            names = ', '.join(str(o.get('name')) + '(거리 ' + str(d) + ')' for d, o, pos in others)
+            if not DETECT_ONLY:
+                log('다른 캐릭터 발견 : ' + names + ' 귀환!')
+                request('return')
+                return
+            ids = set(o['id'] for d, o, pos in others)
+            if ids != WATCH_SEEN:        #감지만 : 바뀔 때만 찍는다
+                log('[감지만] 다른 캐릭터 : ' + names)
+            WATCH_SEEN = ids
+        elif DETECT_ONLY and len(WATCH_SEEN) > 0:
+            log('[감지만] 다른 캐릭터 없음')
+            WATCH_SEEN = set()
+
+    _arm(HP_INTERVAL, checkrHp)
+
+WATCH_FAIL = 0        #주변 캐릭터 판정을 연속으로 못 한 횟수
+WATCH_SEEN = set()    #감지만 모드에서 마지막으로 찍은 캐릭터 id 들
+
+#예전 방식 : 적대 혈맹 마크 이미지 찾기. main.py 는 더 이상 부르지 않는다
+#(pit.py 가 같은 코드를 따로 갖고 있다. 기록용으로 남겨 둔다)
+def _checkmarks():
     marks = markfiles()
     #마스크를 쓸 때만 화면을 한 장 찍어 돌려쓴다. 예전 방식은 자기가 알아서 찍는다
     need_hay = (MARK_BG_TOL > 0 and MASK_OK
@@ -1008,7 +1060,9 @@ def soundwatch():
 #=====================================================================
 # 사냥 루프 (매크로 스레드) - 용던
 #=====================================================================
-def huntloop(p, atkvalue):
+#예전 방식 : 커서로 캐릭터 주변을 훑다가 공격 커서가 뜨면 클릭. main.py 는 더 이상 부르지 않는다
+#(다른 던전용 기록으로 남겨 둔다. 지금 사냥은 아래 huntloop 이다)
+def huntloop_sweep(p, atkvalue):
     points  = _scanpoints(p)
     #파크는 가장 바깥 바퀴보다 더 아래. 안 그러면 5배 바퀴의 6시 점과 겹친다
     #근거리로 좁혀도 파크 자리는 안 움직이게 SCAN_FAR 기준으로 고정한다
@@ -1109,6 +1163,203 @@ def huntloop(p, atkvalue):
                                 #(소리가 있으면 곧 칼질로 멈추고, 끝난 뒤 다음 점부터 이어 돈다)
 
 #=====================================================================
+# 메모리 사냥 : 엔티티 테이블에서 몹 위치를 읽어 가까운 순으로 클릭
+#=====================================================================
+
+#보정 파일을 읽어 아핀 계수를 돌려준다. (계수, 파일 이름) 또는 (None, 사유)
+#점 = (게임 좌표 차이 dx, dy, 화면 x, y). 3점 이상이어야 한다
+def loadcalib():
+    import turnundead_mem as tm      #아핀 풀이(순수 계산)를 빌려 쓴다
+    why = '보정 파일 없음 (' + ' / '.join(CALIB_FILES) + ')'
+    for name in CALIB_FILES:
+        path = os.path.join(APP_DIR, name)
+        if not os.path.isfile(path):
+            continue
+        try:
+            f = open(path, 'r', encoding='utf-8')
+            data = json.load(f)
+            f.close()
+            pts = [(float(q[0]), float(q[1]), float(q[2]), float(q[3]))
+                   for q in data.get('points', [])]
+        except Exception as e:
+            why = name + ' 읽기 실패 : ' + str(e)
+            continue
+        coef = tm.fit_affine_nocheck(pts)
+        if coef == None:
+            why = name + ' 의 점이 모자라거나 한 줄로 늘어서 있다 (' + str(len(pts)) + '점)'
+            continue
+        return coef, name + ' (' + str(len(pts)) + '점)'
+    return None, why
+
+#게임 좌표 차이 -> 화면 좌표. 보정이 없으면 None
+def toscreen(dx, dy):
+    if CALIB == None:
+        return None
+    a, b, c, d, e, f = CALIB[:6]
+    return (int(round(a * dx + b * dy + c)), int(round(d * dx + e * dy + f)))
+
+#엔티티 테이블을 한 번 읽어 정리한다. 못 읽었거나 나를 못 찾으면 None (= 판정 불가)
+#  'me'      : 내 엔티티,  'pos' : 내 게임 좌표
+#  'mobs'    : [(거리, 엔티티, 게임좌표)] 살아 있는 사냥 대상. 가까운 순. HUNT_DIST 안만
+#  'players' : [(거리, 엔티티, 게임좌표)] 나 말고 다른 캐릭터. player 규칙이 없으면 None
+#거리는 타일 수 (가로세로 중 큰 쪽)
+#사냥 대상 : mem.json ent.rules 에 monster 규칙이 있으면 그 종류만,
+#            없으면 '캐릭터가 아닌 것 전부' 로 넓게 잡고 공격 커서 확인이 걸러낸다
+def scanents():
+    if MEM == None:
+        return None
+    ents, head, count = MEM.entity_table()
+    if len(ents) == 0:
+        return None
+    me = MEM.selfent(ents)
+    if me == None:
+        return None
+    mpos   = MEM.entpos(me)
+    kinds  = MEM.entkinds()
+    mobs   = []
+    people = [] if 'player' in kinds else None
+    for o in ents:
+        if o['ptr'] == me['ptr']:
+            continue
+        pos  = MEM.entpos(o)
+        dist = max(abs(pos[0] - mpos[0]), abs(pos[1] - mpos[1]))
+        kind = MEM.kind(o)
+        if kind == 'player':
+            people.append((dist, o, pos))
+            continue
+        if o['dead'] or dist > HUNT_DIST:
+            continue
+        if 'monster' in kinds and kind != 'monster':
+            continue
+        mobs.append((dist, o, pos))
+    mobs.sort(key=lambda r: r[0])
+    if people != None:
+        people.sort(key=lambda r: r[0])
+    return {'me': me, 'pos': mpos, 'mobs': mobs, 'players': people}
+
+#사냥 루프 (매크로 스레드)
+#  가장 가까운 몹을 클릭하고, 그 몹이 죽거나 사라지면 다음으로 가까운 몹으로 넘어간다
+#  클릭 전에 그 자리에 공격 커서가 뜨는지 반드시 확인한다 (좌표가 틀리면 아예 안 누른다)
+#p, atkvalue 는 예전 huntloop 과 같은 뜻 (스캔 중심, 공격 커서 핸들)
+def huntloop(p, atkvalue):
+    parkpos = (p[0], p[1] + SCAN_START * SCAN_FAR + PARK_GAP)   #커서를 쉬게 두는 자리 (예전과 같다)
+    screen  = gu.size()
+    target  = None     #지금 잡고 있는 몹의 id
+    tname   = ''
+    clicked = 0.0      #마지막으로 클릭한 시각
+    cool    = {}       #id -> 다시 봐도 되는 시각 (공격 커서가 안 뜬 대상)
+    fail    = 0        #테이블을 연속으로 못 읽은 횟수
+    cnt     = 0        #헛돈 횟수
+    empty   = None     #대상이 없어진 시각
+
+    skillon  = ATTACK_ON and (not DETECT_ONLY) and KEY_SKILL != None and SKILL_COOL > 0
+    skillsec = float(SKILL_COOL)
+    tick     = time.perf_counter()
+
+    log('사냥 : 탐지 거리 ' + str(HUNT_DIST) + '타일, 가까운 순')
+    if skillon:
+        log('공격스킬 : ' + KEY_SKILL.upper() + '  쿨타임 ' + str(SKILL_COOL) + '초 (대상이 있을 때만 흐름)')
+
+    settrigger('hunt')
+    while ALIVE:
+        if runpending():       #버프/변신/귀환이 먼저
+            tick = time.perf_counter()
+            continue
+
+        #공격 끔 : 버프 / 변신 / 귀환 감시만 돈다
+        #(예전의 수동 사냥 보조 - 대상 위에 커서를 올리면 휠 클릭 - 는 뺐다)
+        # if win32gui.GetCursorInfo()[1] == atkvalue:
+        #     gu.middleClick()
+        if not ATTACK_ON and not DETECT_ONLY:
+            time.sleep(HUNT_POLL)
+            continue
+
+        found = scanents()
+        if found == None:
+            fail += 1
+            if fail >= MEM_FAIL_LIMIT:
+                log('엔티티 테이블을 ' + str(fail) + '번 연속 못 읽었다 - 정지')
+                dostop()
+                break
+            time.sleep(HUNT_POLL)
+            continue
+        fail = 0
+
+        now  = time.perf_counter()
+        mobs = [r for r in found['mobs'] if cool.get(r[1]['id'], 0) <= now]
+
+        #잡던 몹이 아직 살아 있는지. 목록에 없으면 죽었거나 사라졌거나 멀어진 것
+        cur = None
+        for r in mobs:
+            if r[1]['id'] == target:
+                cur = r
+                break
+        if cur == None:
+            if target != None:
+                log('대상 끝 : ' + tname)
+            target  = None
+            clicked = 0.0
+            if len(mobs) > 0:
+                cur = mobs[0]
+
+        if cur == None:
+            #대상이 없다. 한동안 없으면 헛돔으로 세고 새로고침
+            if empty == None:
+                empty = now
+            elif now - empty >= NOMOB_SEC:
+                empty = now
+                cnt  += 1
+                if KEY_REFRESH != None and (not DETECT_ONLY) and cnt >= NOHIT_LIMIT:
+                    log('새로고침 : ' + KEY_REFRESH + '  (헛돔 ' + str(cnt) + '/' + str(NOHIT_LIMIT) + ')')
+                    gu.press(KEY_REFRESH, presses=1)
+                    cnt = 0
+            tick = now       #대상이 없는 시간은 공격이 아니므로 쿨타임에서 뺀다
+            time.sleep(HUNT_POLL)
+            continue
+        empty = None
+
+        dist, o, pos = cur
+        if o['id'] != target:
+            target  = o['id']
+            tname   = str(o.get('name')) + ' (id ' + str(o['id']) + ')'
+            clicked = 0.0
+            log(('[감지만] ' if DETECT_ONLY else '') + '대상 : ' + tname + '  거리 ' + str(dist)
+                + '  남은 몹 ' + str(len(mobs)))
+
+        if DETECT_ONLY:
+            time.sleep(HUNT_POLL)
+            continue
+
+        skillsec += now - tick
+        tick      = now
+
+        if now - clicked >= RECLICK_SEC:
+            xy = toscreen(pos[0] - found['pos'][0], pos[1] - found['pos'][1])
+            hit = False
+            if xy != None and 0 <= xy[0] < screen[0] and 0 <= xy[1] < screen[1]:
+                _movefast(parkpos[0], parkpos[1])      #커서 모양 초기화
+                time.sleep(PROBE_SETTLE * random.uniform(*PROBE_JITTER) if NATURAL_ON else PROBE_SETTLE)
+                if _probe(xy[0], xy[1], atkvalue):
+                    _settleclick(xy[0], xy[1], atkvalue)
+                    hit = True
+            if hit:
+                clicked = time.perf_counter()
+                cnt     = 0
+            else:
+                #화면 밖이거나 그 자리에 공격 커서가 안 떴다 (NPC, 가려짐, 좌표 어긋남)
+                #잠깐 제쳐 두고 다음으로 가까운 몹을 본다
+                cool[o['id']] = now + MISS_COOL
+                target = None
+                tname  = ''
+                continue
+
+        if skillon and skillsec >= SKILL_COOL:
+            log('스킬 ' + KEY_SKILL.upper())
+            gu.press(KEY_SKILL, presses=1)
+            skillsec = 0.0
+        time.sleep(HUNT_POLL)
+
+#=====================================================================
 # 설정 저장 / 불러오기 (exe 옆 config.json)
 #=====================================================================
 
@@ -1153,6 +1404,14 @@ def loadconfig(path=None):
         opts['attack'] = data['attack']
     if isinstance(data.get('sound'), bool):
         opts['sound'] = data['sound']
+    if isinstance(data.get('detect'), bool):
+        opts['detect'] = data['detect']
+    try:
+        v = int(data.get('dist', opts['dist']))
+        if v >= 1:
+            opts['dist'] = v
+    except (TypeError, ValueError):
+        pass
     if data.get('range') in [r for r, label in RANGES]:
         opts['range'] = data['range']
     try:
@@ -1171,7 +1430,9 @@ def saveconfig(seconds, roles, opts, path=None):
             'attack':  bool(opts.get('attack', DEFAULT_OPTS['attack'])),
             'range':   str(opts.get('range',  DEFAULT_OPTS['range'])),
             'nohit':   int(opts.get('nohit',  DEFAULT_OPTS['nohit'])),
-            'sound':   bool(opts.get('sound',  DEFAULT_OPTS['sound']))}
+            'sound':   bool(opts.get('sound',  DEFAULT_OPTS['sound'])),
+            'dist':    int(opts.get('dist',    DEFAULT_OPTS['dist'])),
+            'detect':  bool(opts.get('detect', DEFAULT_OPTS['detect']))}
     try:
         f = open(path, 'w', encoding='utf-8')
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -1189,7 +1450,7 @@ def applyconfig(seconds, roles, opts=None):
     #opts    : {'attack': bool, 'range': 'near'/'far', 'nohit': int, 'sound': bool}
     global BUFFS, BUFFKEY, TRIGGER, ORDER, PENDING
     global KEY_RETURN, KEY_REFRESH, KEY_TRANSFORM, TRANSFORM_INTERVAL, KEY_SKILL, SKILL_COOL
-    global ATTACK_ON, SCAN_ROUND, NOHIT_LIMIT, SOUND_ON
+    global ATTACK_ON, SCAN_ROUND, NOHIT_LIMIT, SOUND_ON, HUNT_DIST, DETECT_ONLY
 
     if opts == None:
         opts = dict(DEFAULT_OPTS)
@@ -1197,6 +1458,8 @@ def applyconfig(seconds, roles, opts=None):
     SCAN_ROUND    = SCAN_FAR if opts.get('range') == 'far' else SCAN_NEAR
     NOHIT_LIMIT   = max(1, int(opts.get('nohit', DEFAULT_OPTS['nohit'])))
     SOUND_ON      = bool(opts.get('sound', DEFAULT_OPTS['sound']))
+    HUNT_DIST     = max(1, int(opts.get('dist', DEFAULT_OPTS['dist'])))
+    DETECT_ONLY   = bool(opts.get('detect', DEFAULT_OPTS['detect']))
     KEY_RETURN    = roles.get('return')
     KEY_REFRESH   = roles.get('refresh')
     KEY_TRANSFORM = roles.get('transform')
@@ -1224,7 +1487,7 @@ def applyconfig(seconds, roles, opts=None):
 #매크로 본체. GUI 스레드가 아니라 전용 스레드에서 돈다
 #끝나면(정지/오류) GUI 가 스레드 종료를 보고 시작 버튼을 다시 켠다
 def runmacro():
-    global ALIVE, HOTKEY, HUNT_START
+    global ALIVE, HOTKEY, HUNT_START, MEM, CALIB, WATCH_FAIL, WATCH_SEEN
     try:
         ALIVE  = True
         HOTKEY = k.add_hotkey('tab', requeststop)
@@ -1237,11 +1500,38 @@ def runmacro():
             if runpending() or (not ALIVE):
                 return
 
-        #수동 사냥도 '대상 위인지' 를 커서 모양으로 보므로 공격을 꺼도 캘리브레이션은 한다
-        atk = setattckinfo(CENTERPOINT)
-        log('공격 커서 : ' + str(atk))
-        if not ATTACK_ON:
-            log('공격 끔 - 수동 사냥 : 대상 위에 커서를 올리면 휠 클릭을 대신 누릅니다')
+        #메모리에 붙는다. 못 붙거나 필요한 값이 없으면 시작하지 않는다 (화면 방식으로 넘어가지 않는다)
+        WATCH_FAIL = 0
+        WATCH_SEEN = set()
+        path, okay, tried = mr.findfile('mem.json')
+        MEM = mr.Mem(path, log)
+        if not MEM.attach():
+            log('메모리 붙기 실패 : ' + str(MEM.err))
+            return
+        kinds = MEM.entkinds()
+        first = scanents()
+        if first == None:
+            log('엔티티 테이블에서 내 캐릭터를 못 찾았다 (python memprobe.py --entkind 로 확인) - 시작 안 함')
+            return
+        log('내 캐릭터 : ' + str(first['me'].get('name')) + '  좌표 ' + str(first['pos'])
+            + '  종류 규칙 : ' + (', '.join(sorted(kinds)) if kinds else '없음'))
+        if 'monster' not in kinds:
+            log('monster 규칙 없음 - 캐릭터가 아닌 것을 전부 후보로 보고 공격 커서로 걸러낸다')
+        if DETECT_ONLY:
+            log('감지만 - 클릭/귀환/새로고침을 하지 않고 로그만 찍습니다')
+
+        atk = None
+        if ATTACK_ON and not DETECT_ONLY:
+            CALIB, why = loadcalib()
+            if CALIB == None:
+                log('화면 보정이 없어 몹을 클릭할 수 없다 : ' + why)
+                log('postracker.py 에서 허수아비 보정(F9)을 3점 이상 찍은 뒤 다시 시작 - 시작 안 함')
+                return
+            log('화면 보정 : ' + why)
+            atk = setattckinfo(CENTERPOINT)
+            log('공격 커서 : ' + str(atk))
+        elif not ATTACK_ON:
+            log('공격 끔 - 버프 / 변신 / 귀환 감시만 돕니다')
 
         if KEY_TRANSFORM != None and TRANSFORM_INTERVAL > 0:
             log('변신(' + KEY_TRANSFORM + ') ' + str(TRANSFORM_INTERVAL) + '초 주기')
@@ -1254,22 +1544,23 @@ def runmacro():
         log('채팅버프(' + CHAT_CMD + ') ' + str(CHAT_INTERVAL) + '초 주기')
         chatbufftimer()
 
-        if KEY_RETURN != None:
-            log('귀환(' + KEY_RETURN + ') - 피 감시 시작')
+        if KEY_RETURN != None or DETECT_ONLY:
+            if 'player' not in kinds:
+                log('mem.json ent.rules 에 player 규칙이 없어 주변 캐릭터를 가릴 수 없다 - 시작 안 함')
+                return
+            log('귀환(' + str(KEY_RETURN) + ') - 피 / 주변 캐릭터 감시 시작')
             checkrHp()
         else:
-            log('귀환키 미지정 - 피 감시 끔')
+            log('귀환키 미지정 - 피 / 주변 캐릭터 감시 끔')
 
         if KEY_REFRESH == None:
             log('새로고침키 미지정 - 새로고침 끔')
 
-        #소리 감시는 입력을 안 건드리므로 별도 스레드로 띄운다. ALIVE 보고 스스로 끝난다
-        if SOUND_ON:
-            t = threading.Thread(target=soundwatch)
-            t.daemon = True
-            t.start()
-        else:
-            log('소리 감지 끔 - 서치를 계속 돕니다')
+        #소리 감시는 쓰지 않는다. 몹이 살아 있는지는 엔티티 테이블로 안다
+        # if SOUND_ON:
+        #     t = threading.Thread(target=soundwatch)
+        #     t.daemon = True
+        #     t.start()
 
         HUNT_START = time.time()
         log('사냥 시작')
@@ -1294,6 +1585,10 @@ def runmacro():
             except Exception:
                 pass
             HOTKEY = None
+        if MEM != None:
+            MEM.detach()
+            MEM = None
+        CALIB = None
         settrigger(None)
         log('매크로 종료')
 
@@ -1356,18 +1651,31 @@ class App:
         optbox = ttk.LabelFrame(root, text='동작')
         optbox.pack(fill='x', padx=10, pady=(8, 0))
         self.attack = tk.BooleanVar(value=DEFAULT_OPTS['attack'])
-        self.atkchk = ttk.Checkbutton(optbox, text='공격 사용 (마우스 서치 + 칼질)',
+        self.atkchk = ttk.Checkbutton(optbox, text='공격 사용 (가까운 몹부터 클릭)',
                                       variable=self.attack)
         self.atkchk.pack(anchor='w', padx=6, pady=4)
         ttk.Label(optbox, foreground='#555',
-                  text='끄면 서치를 안 하고 수동 사냥 보조로 돕니다 : 대상 위에 커서를 올리면 휠 클릭을 대신 누릅니다.\n'
-                       '버프 / 변신 / 피·마크 감시는 그대로 돕니다.'
+                  text='몹 위치를 메모리에서 읽어 가장 가까운 몹을 클릭하고, 죽으면 다음으로 가까운 몹으로 넘어갑니다.\n'
+                       '끄면 클릭하지 않고 버프 / 변신 / 피·주변 캐릭터 감시만 돕니다.'
                   ).pack(anchor='w', padx=6, pady=(0, 4))
+
+        #--- 탐지 거리(타일) / 감지만 ---
+        dsrow = ttk.Frame(optbox)
+        dsrow.pack(fill='x', padx=6, pady=(2, 0))
+        ttk.Label(dsrow, text='탐지 거리', width=12).pack(side='left')
+        self.dist  = tk.StringVar(value=str(DEFAULT_OPTS['dist']))
+        self.dsent = ttk.Entry(dsrow, textvariable=self.dist, width=6, justify='center')
+        self.dsent.pack(side='left')
+        ttk.Label(dsrow, foreground='#555', text='  타일 안의 몹만 대상으로 삼습니다').pack(side='left')
+        self.detect = tk.BooleanVar(value=DEFAULT_OPTS['detect'])
+        self.dtchk  = ttk.Checkbutton(optbox, text='감지만 (클릭 / 귀환 없이 로그만 - 확인용)',
+                                      variable=self.detect)
+        self.dtchk.pack(anchor='w', padx=6, pady=(4, 0))
 
         #--- 칼 탐지 거리 ---
         rngrow = ttk.Frame(optbox)
         rngrow.pack(fill='x', padx=6, pady=(6, 0))
-        ttk.Label(rngrow, text='칼 탐지 거리', width=12).pack(side='left')
+        ttk.Label(rngrow, text='(예전) 서치 거리', width=12).pack(side='left')
         self.range  = tk.StringVar(value=DEFAULT_OPTS['range'])
         self.rngbtn = []
         for rid, label in RANGES:
@@ -1387,12 +1695,12 @@ class App:
         self.nhent = ttk.Entry(nhrow, textvariable=self.nohit, width=6, justify='center')
         self.nhent.pack(side='left')
         ttk.Label(nhrow, foreground='#555',
-                  text='  회 연속 헛돌면 새로고침 키를 누릅니다 (한 번이라도 잡으면 초기화)'
+                  text='  회 연속 몹이 없으면 새로고침 키를 누릅니다 (한 번이라도 잡으면 초기화)'
                   ).pack(side='left')
 
         #--- 소리 감지 ---
         self.sound  = tk.BooleanVar(value=DEFAULT_OPTS['sound'])
-        self.sndchk = ttk.Checkbutton(optbox, text='소리로 칼질 감지 (칼질중이면 서치 멈춤)',
+        self.sndchk = ttk.Checkbutton(optbox, text='(예전) 소리로 칼질 감지 - 지금 사냥에서는 쓰지 않음',
                                       variable=self.sound)
         self.sndchk.pack(anchor='w', padx=6, pady=(6, 0))
         ttk.Label(optbox, foreground='#555',
@@ -1443,6 +1751,8 @@ class App:
         self.range.set(str(opts.get('range',  DEFAULT_OPTS['range'])))
         self.nohit.set(str(opts.get('nohit',  DEFAULT_OPTS['nohit'])))
         self.sound.set(bool(opts.get('sound',  DEFAULT_OPTS['sound'])))
+        self.dist.set(str(opts.get('dist',     DEFAULT_OPTS['dist'])))
+        self.detect.set(bool(opts.get('detect', DEFAULT_OPTS['detect'])))
         self.refreshrows()
 
     #위젯에서 값을 읽는다. 주기가 숫자가 아니면 (None, None, None) 을 돌려준다
@@ -1462,6 +1772,11 @@ class App:
             log('새로고침 트리거는 1 이상 정수만 : ' + raw)
             return None, None, None
 
+        rawdist = self.dist.get().strip()
+        if not rawdist.isdigit() or int(rawdist) < 1:
+            log('탐지 거리는 1 이상 정수만 : ' + rawdist)
+            return None, None, None
+
         roles = {}
         for rid, label in ROLES:
             roles[rid] = None
@@ -1472,7 +1787,9 @@ class App:
         opts = {'attack': self.attack.get(),
                 'range':  self.range.get(),
                 'nohit':  int(raw),
-                'sound':  self.sound.get()}
+                'sound':  self.sound.get(),
+                'dist':   int(rawdist),
+                'detect': self.detect.get()}
         return seconds, roles, opts
 
     def onsave(self):
@@ -1531,7 +1848,7 @@ class App:
             self.entry[key].configure(state='disabled')
             for rid, label in ROLES:
                 self.check[(key, rid)].configure(state='disabled')
-        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.nhent) + tuple(self.rngbtn):
+        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.nhent, self.dsent, self.dtchk) + tuple(self.rngbtn):
             b.configure(state='disabled')
         self.btn.configure(state='disabled', text='동작 중  (tab = 정지)')
 
@@ -1540,7 +1857,7 @@ class App:
         for key in FKEYS:
             for rid, label in ROLES:
                 self.check[(key, rid)].configure(state='normal')
-        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.nhent) + tuple(self.rngbtn):
+        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.nhent, self.dsent, self.dtchk) + tuple(self.rngbtn):
             b.configure(state='normal')
         self.btn.configure(state='normal', text='시작하기')
         self.refreshrows()      #주기 입력칸은 역할에 따라 다시 결정
@@ -1561,10 +1878,8 @@ class App:
 
         log('=== 설정 ===')
         log('  공격 : ' + ('사용' if opts['attack'] else '끔'))
-        log('  칼 탐지 거리 : ' + dict(RANGES)[opts['range']]
-            + ' (반지름 ' + str(SCAN_START) + '~' + str(SCAN_START * SCAN_ROUND) + 'px)')
-        log('  새로고침 트리거 : ' + str(opts['nohit']) + '회 헛돌면')
-        log('  소리 감지 : ' + ('사용' if opts.get('sound') else '끔'))
+        log('  탐지 거리 : ' + str(opts['dist']) + '타일' + ('  (감지만)' if opts.get('detect') else ''))
+        log('  새로고침 트리거 : ' + str(opts['nohit']) + '회 연속 몹 없음')
         for rid, label in ROLES:
             log('  ' + label + ' : ' + (roles[rid].upper() if roles[rid] else '미지정'))
         act = [(n, key, s) for n, key, s in BUFFS if s > 0]

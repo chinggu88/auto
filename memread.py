@@ -1047,10 +1047,11 @@ class Mem(object):
                 return [], head, count
             ptrs = [struct.unpack_from('<I', blob, i * 4)[0] for i in range(count)]
             out = []
+            size = self._entsize()
             for p in ptrs:
                 if p < 0x10000:
                     continue
-                ob = readmem(self.h, p, 0x58)
+                ob = readmem(self.h, p, size)
                 if ob == None:
                     continue
                 try:
@@ -1060,6 +1061,7 @@ class Mem(object):
                     hp  = struct.unpack_from('<H', ob, 0x50)[0]
                     mx  = struct.unpack_from('<H', ob, 0x52)[0]
                     typ = struct.unpack_from('<I', ob, 0x4C)[0]
+                    clan = struct.unpack_from('<I', ob, 0x44)[0]
                     nptr = struct.unpack_from('<I', ob, 0x54)[0]
                     act  = ob[0x0C]
                     base = ob[0x14]
@@ -1074,9 +1076,79 @@ class Mem(object):
                         nm = _decode_name(raw)
                 out.append({'ptr': p, 'id': oid, 'x': x, 'y': y,
                             'hp': hp, 'hp_max': mx, 'type': typ,
-                            'name': nm, 'name_ptr': nptr,
-                            'act': act, 'base': base, 'dead': base == 8})
+                            'name': nm, 'name_ptr': nptr, 'clan': clan,
+                            'act': act, 'base': base, 'dead': base == 8,
+                            'raw': ob})
             return out, head, count
+
+    #엔티티 하나에서 읽을 바이트 수. 기본 0x58 이고, mem.json ent.rules 가 더 뒤쪽
+    #오프셋을 보면 거기까지 늘린다 (상한 0x400)
+    def _entsize(self):
+        size = 0x58
+        ent = (self.cfg or {}).get('ent') or {}
+        for r in ent.get('rules') or []:
+            off = num(r.get('off'))
+            fmt = FMT.get(str(r.get('type', 'u32')))
+            if off == None or fmt == None:
+                continue
+            size = max(size, off + fmt[1])
+        return min(size, 0x400)
+
+    #엔티티의 게임 좌표 (gx, gy). 테이블의 x 는 raw 값이라 self_x 와 같은 bias/div 로 푼다
+    #(기본 bias 32768, div 2 = turnundead_mem.raw_to_game 과 같은 식)
+    def entpos(self, o):
+        spec = ((self.cfg or {}).get('chains') or {}).get('self_x') or {}
+        bias = num(spec.get('bias'), 32768)
+        div  = num(spec.get('div'), 2) or 1
+        return (((o['x'] & 0xFFFF) + bias) // div, o['y'] & 0xFFFF)
+
+    #엔티티 목록에서 나 자신을 찾는다. 못 찾으면 None
+    #  1) 캐릭터 정보의 id (chains.char_id) 와 id 가 같은 엔티티
+    #  2) 없으면 내 raw 좌표와 좌표가 같은 엔티티가 딱 하나일 때 그것
+    #     (같은 칸에 여럿이면 누가 나인지 알 수 없으므로 None)
+    def selfent(self, ents):
+        cid = self.value('char_id')
+        if cid:
+            for o in ents:
+                if o['id'] == cid:
+                    return o
+        raw = self.selfraw()
+        if raw == None:
+            return None
+        same = [o for o in ents if (o['x'] & 0xFFFF, o['y'] & 0xFFFF) == raw]
+        if len(same) == 1:
+            return same[0]
+        return None
+
+    #mem.json ent.rules 에 규칙이 적힌 종류 이름들. 예: {'player', 'monster'}
+    #'monster' 가 없으면 몬스터를 가릴 수 없다는 뜻이므로 사냥을 시작하면 안 된다
+    def entkinds(self):
+        ent = (self.cfg or {}).get('ent') or {}
+        return set(str(r.get('kind')) for r in ent.get('rules') or [] if r.get('kind'))
+
+    #엔티티의 종류. mem.json ent.rules 를 위에서부터 보고 처음 맞는 규칙의 kind 를 돌려준다.
+    #  규칙 = {"kind": "player", "off": "0x4C", "type": "u32", "values": [255]}
+    #         {"kind": "monster", "any": true}   <- 앞 규칙에 안 걸린 나머지 전부
+    #아무 규칙에도 안 걸리면 'other', 규칙이 없거나 값을 못 읽으면 None (판정 불가)
+    def kind(self, o):
+        ent = (self.cfg or {}).get('ent') or {}
+        rules = ent.get('rules') or []
+        if len(rules) == 0:
+            return None
+        raw = o.get('raw')
+        if raw == None:
+            return None
+        for r in rules:
+            if r.get('any'):
+                return str(r.get('kind'))
+            off = num(r.get('off'))
+            fmt = FMT.get(str(r.get('type', 'u32')))
+            if off == None or fmt == None or off + fmt[1] > len(raw):
+                return None
+            v = struct.unpack_from(fmt[0], raw, off)[0]
+            if v in (r.get('values') or []):
+                return str(r.get('kind'))
+        return 'other'
 
     #스킬(마법) 창 슬롯 순회. (스킬 목록, 창 주소, 슬롯 개수) 를 돌려준다.
     #창 주소 = [lin.exe+0x1FD884] (mem.json chains.spell_win, offsets [0] 으로 한 번 거른다. 월드 밖이면 0).
