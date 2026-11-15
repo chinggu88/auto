@@ -1321,6 +1321,31 @@ def selfcast(key, me, label):
         return False
     return True
 
+#지금 레벨 / 누적 경험치 / 경험치 %. (레벨, 경험치, %) 또는 None (못 읽음)
+def readexp():
+    if MEM == None:
+        return None
+    lv  = MEM.value('char_level')
+    exp = MEM.value('char_exp')
+    if lv == None or exp == None:
+        return None
+    return lv, exp, MEM.exppct(lv, exp)
+
+#사냥을 시작할 때와 끝날 때의 경험치를 비교해 한 줄로 만든다
+def fmtexp(a, b):
+    if a == None or b == None:
+        return '경험치 : 못 읽음'
+    def one(v):
+        return 'LV ' + str(v[0]) + ' ' + ('?' if v[2] == None else '%.2f' % v[2]) + '%'
+    gain = b[1] - a[1]
+    line = '경험치 : ' + ('+' if gain >= 0 else '') + '{:,}'.format(gain) + '  (' + one(a) + ' -> ' + one(b)
+    if a[0] == b[0] and a[2] != None and b[2] != None:
+        diff = b[2] - a[2]
+        line += ', ' + ('+' if diff >= 0 else '') + '%.2f' % diff + '%'
+    elif b[0] > a[0]:
+        line += ', 레벨 ' + str(b[0] - a[0]) + ' 상승'
+    return line + ')'
+
 #사냥 루프 (매크로 스레드)
 #  가장 가까운 몹을 클릭하고, 그 몹이 죽거나 사라지면 다음으로 가까운 몹으로 넘어간다
 #  클릭할 차례(RECLICK_SEC)마다 더 가까운 몹이 생겼는지 다시 보고, 있으면 그쪽으로 바꾼다
@@ -1647,6 +1672,7 @@ def applyconfig(seconds, roles, opts=None):
 #끝나면(정지/오류) GUI 가 스레드 종료를 보고 시작 버튼을 다시 켠다
 def runmacro():
     global ALIVE, HOTKEY, HUNT_START, MEM, CALIB, WATCH_FAIL, WATCH_SEEN, CASTER
+    expstart = None      #사냥을 시작할 때의 (레벨, 경험치, %)
     try:
         ALIVE  = True
         HOTKEY = k.add_hotkey('tab', requeststop)
@@ -1726,6 +1752,7 @@ def runmacro():
         #     t.start()
 
         HUNT_START = time.time()
+        expstart   = readexp()     #끝날 때 얼마나 올랐는지 찍으려고 잡아 둔다
         log('사냥 시작')
         huntloop([CENTERPOINT[0], CENTERPOINT[1] + SCAN_OFFSET_Y], atk)
     except Exception as e:
@@ -1739,6 +1766,10 @@ def runmacro():
         if HUNT_START != None:
             log('사냥 시간 : ' + fmtsec(time.time() - HUNT_START)
                 + ' (' + time.strftime('%H:%M:%S', time.localtime(HUNT_START)) + ' 시작)')
+            try:
+                log(fmtexp(expstart, readexp()))      #사냥하는 동안 오른 경험치
+            except Exception as e:
+                log('경험치 : 못 읽음 (' + str(e) + ')')
             HUNT_START = None
         else:
             log('사냥 시작 전 종료')
