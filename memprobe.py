@@ -1279,9 +1279,9 @@ def _readcstr(m, ptr, n=48):
 #그 오프셋이 list_off 다. 한 번 돌려서 버프 구조를 통째로 드러내는 자동 스캔이다
 def scanbuffwidget(m, win, raw):
     bcfg = m.cfg.get('buff') or {}
-    icon_off = num(bcfg.get('icon_off'), 0x68)
-    name_off = num(bcfg.get('name_ptr_off'), 0x10)
-    esize    = num(bcfg.get('entry_size'), 0x80)
+    icon_off = mr.num(bcfg.get('icon_off'), 0x68)
+    name_off = mr.num(bcfg.get('name_ptr_off'), 0x10)
+    esize    = mr.num(bcfg.get('entry_size'), 0x80)
     say()
     say('--- 자동 스캔 (위젯 안 포인터를 따라가 칸 이름을 찾는다) ---')
     found = False
@@ -1359,7 +1359,7 @@ def dumpbuffs(pid):
         else:
             #첫 칸 원본 바이트 (icon_off/name_ptr_off 확인)
             first = buffs[0]
-            raw = mr.readmem(m.h, first['ptr'], num((m.cfg.get('buff') or {}).get('entry_size'), 0x80))
+            raw = mr.readmem(m.h, first['ptr'], mr.num((m.cfg.get('buff') or {}).get('entry_size'), 0x80))
             if raw:
                 say('첫 버프 칸 객체 원본 (0x%08X):' % first['ptr'])
                 say(hexdump(raw, first['ptr']))
