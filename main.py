@@ -229,8 +229,11 @@ DEFAULT_ROLES = {
     'refresh':   'f5',
     'transform': 'f7',
     'skill':     'f6',    #공격스킬 - 공격 중에만 쿨타임이 돌고, 대상을 치고 나서 누른다
+    'heal':      None,    #힐 - HP 가 정한 % 이하로 내려가면 누른다
+    'immune':    None,    #이뮨 - 주위 몹이 정한 수 이상이면 누른다
+    'ber':       None,    #베르 - 힐과 같은 방식 (HP % 는 따로 정한다)
 }
-ROLE_IDS = ['return', 'refresh', 'transform', 'skill']   #config.json 에 저장하는 역할 목록
+ROLE_IDS = ['return', 'refresh', 'transform', 'skill', 'heal', 'immune', 'ber']   #config.json 에 저장하는 역할 목록
 #옵션 기본값. 항목이 계속 늘어서 dict 하나로 묶는다 (config.json 에도 이 키 그대로 들어간다)
 DEFAULT_OPTS = {
     'attack': True,     #공격(마우스 서치 + 칼질) 사용 여부
@@ -239,7 +242,12 @@ DEFAULT_OPTS = {
     'sound':  False,    #소리로 칼질을 감지해 서치를 멈출지 (추가 패키지가 필요해서 기본 꺼짐)
     'dist':   8,        #사냥 탐지 거리(타일). 이 안의 몹만 대상으로 삼는다
     'detect': False,    #감지만 : 몹/캐릭터를 로그에만 찍고 클릭도 귀환도 안 한다 (확인용)
+    'heal_pct': 50,     #HP 가 이 % 이하면 힐 키
+    'ber_pct':  50,     #HP 가 이 % 이하면 베르 키
+    'immune_n': 4,      #주위 몹이 이 수 이상이면 이뮨 키
 }
+PCT_CHOICES = [10, 20, 30, 40, 50, 60, 70, 80, 90]    #힐 / 베르 HP % 드롭다운
+MOB_CHOICES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]         #이뮨 몹 수 드롭다운
 RANGES = [('near', '근거리'), ('far', '원거리')]   #표시 순서
 
 BUFFS   = []      # [(트리거명, 키, 주기(초))]  주기 0 = 비활성
@@ -272,6 +280,20 @@ RECLICK_SEC    = 1.0    #클릭 간격(초). 클릭할 때마다 가장 가까�
 TELE_GAP       = 1.5    #텔(새로고침 키)을 누른 뒤 다음 텔까지 최소 간격(초). 이동 뒤 주변이 다시 읽힐 시간
 MEM_FAIL_LIMIT = 10     #엔티티 테이블을 연속으로 이만큼 못 읽으면 멈춘다 (화면으로 넘어가지 않는다)
 CALIB_FILES    = ['scarecrow_calib.json', 'calib.json']   #앞엣것 우선
+#--- 힐 / 베르 / 이뮨 ---
+#사냥 루프가 매 바퀴 HP 와 주위 몹 수를 보고 해당 키를 누른다 (키는 역할 표에서 지정)
+#재사용 간격은 그 키의 주기(초) 칸 값이고, 0 이면 아래 기본값을 쓴다
+KEY_HEAL    = None
+KEY_BER     = None
+KEY_IMMUNE  = None
+HEAL_PCT    = DEFAULT_OPTS['heal_pct']
+BER_PCT     = DEFAULT_OPTS['ber_pct']
+IMMUNE_N    = DEFAULT_OPTS['immune_n']
+HEAL_GAP    = 2.0     #힐을 다시 누르기까지 최소 간격(초)
+BER_GAP     = 2.0
+IMMUNE_GAP  = 30.0
+GAP_DEFAULT = {'heal': 2.0, 'ber': 2.0, 'immune': 30.0}   #주기 칸이 0 일 때 쓰는 간격
+INFO_POLL   = 500     #내 캐릭터 정보 표시 갱신 간격(ms)
 MEM            = None   #memread.Mem. runmacro 가 붙이고 뗀다
 CALIB          = None   #아핀 계수 (a,b,c,d,e,f). 화면 = (a*dx+b*dy+c, d*dx+e*dy+f)
 
@@ -1261,6 +1283,23 @@ def scanents():
         people.sort(key=lambda r: r[0])
     return {'me': me, 'pos': mpos, 'mobs': mobs, 'players': people}
 
+#지금 HP 와 최대 HP. (hp, 최대) 또는 None (못 읽음 / 값이 이상함)
+#현재 HP 는 보안 홀더(mem.json secure)를 먼저 보고, 없으면 chains.hp 를 본다 (memread.charinfo 와 같다)
+def readhp(mem=None):
+    if mem == None:
+        mem = MEM
+    if mem == None:
+        return None
+    hp = mem.secure_value('hp') if (mem.cfg or {}).get('secure') else None
+    if hp == None:
+        hp = mem.value('hp')
+    mx = mem.value('char_hp_max')
+    if mx == None:
+        mx = mem.value('hp_max')
+    if hp == None or mx == None or mx <= 0 or hp < 0 or hp > mx * 2:
+        return None
+    return hp, mx
+
 #사냥 루프 (매크로 스레드)
 #  가장 가까운 몹을 클릭하고, 그 몹이 죽거나 사라지면 다음으로 가까운 몹으로 넘어간다
 #  클릭할 차례(RECLICK_SEC)마다 더 가까운 몹이 생겼는지 다시 보고, 있으면 그쪽으로 바꾼다
@@ -1274,6 +1313,8 @@ def huntloop(p=None, atkvalue=None):
     clicked = 0.0      #마지막으로 클릭한 시각
     fail    = 0        #테이블을 연속으로 못 읽은 횟수
     teled   = 0.0      #마지막으로 텔(새로고침 키)을 누른 시각
+    pressed = {'heal': 0.0, 'ber': 0.0, 'immune': 0.0}   #힐 / 베르 / 이뮨을 마지막으로 누른 시각
+    hpfail  = 0        #HP 를 연속으로 못 읽은 횟수
 
     skillon  = ATTACK_ON and (not DETECT_ONLY) and KEY_SKILL != None and SKILL_COOL > 0
     skillsec = float(SKILL_COOL)
@@ -1289,14 +1330,6 @@ def huntloop(p=None, atkvalue=None):
             tick = time.perf_counter()
             continue
 
-        #공격 끔 : 버프 / 변신 / 귀환 감시만 돈다
-        #(예전의 수동 사냥 보조 - 대상 위에 커서를 올리면 휠 클릭 - 는 뺐다)
-        # if win32gui.GetCursorInfo()[1] == atkvalue:
-        #     gu.middleClick()
-        if not ATTACK_ON and not DETECT_ONLY:
-            time.sleep(HUNT_POLL)
-            continue
-
         found = scanents()
         if found == None:
             fail += 1
@@ -1309,6 +1342,46 @@ def huntloop(p=None, atkvalue=None):
         fail = 0
 
         now  = time.perf_counter()
+
+        #힐 / 베르 : HP 가 정한 % 이하면 그 키를 누른다. 이뮨 : 주위 몹이 정한 수 이상이면 누른다
+        #공격을 꺼 둬도 돈다. 감지만 모드에서는 키를 누르지 않는다
+        if not DETECT_ONLY:
+            if KEY_HEAL != None or KEY_BER != None:
+                hpv = readhp()
+                if hpv == None:
+                    #HP 를 못 읽는데 계속 돌면 힐이 조용히 안 나간다. 연속으로 못 읽으면 멈춘다
+                    hpfail += 1
+                    if hpfail >= MEM_FAIL_LIMIT:
+                        log('HP 를 ' + str(hpfail) + '번 연속 못 읽었다 (힐/베르 불가) - 정지')
+                        dostop()
+                        break
+                else:
+                    hpfail = 0
+                    pct = hpv[0] * 100.0 / hpv[1]
+                    if KEY_HEAL != None and pct <= HEAL_PCT and now - pressed['heal'] >= HEAL_GAP:
+                        log('힐 ' + KEY_HEAL.upper() + '  (HP ' + str(hpv[0]) + '/' + str(hpv[1])
+                            + ' = ' + str(int(pct)) + '% <= ' + str(HEAL_PCT) + '%)')
+                        gu.press(KEY_HEAL, presses=1)
+                        pressed['heal'] = now
+                    if KEY_BER != None and pct <= BER_PCT and now - pressed['ber'] >= BER_GAP:
+                        log('베르 ' + KEY_BER.upper() + '  (HP ' + str(int(pct)) + '% <= ' + str(BER_PCT) + '%)')
+                        gu.press(KEY_BER, presses=1)
+                        pressed['ber'] = now
+            if (KEY_IMMUNE != None and len(found['mobs']) >= IMMUNE_N
+                    and now - pressed['immune'] >= IMMUNE_GAP):
+                log('이뮨 ' + KEY_IMMUNE.upper() + '  (주위 몹 ' + str(len(found['mobs']))
+                    + '마리 >= ' + str(IMMUNE_N) + ')')
+                gu.press(KEY_IMMUNE, presses=1)
+                pressed['immune'] = now
+
+        #공격 끔 : 버프 / 변신 / 귀환 감시와 힐 / 베르 / 이뮨만 돈다
+        #(예전의 수동 사냥 보조 - 대상 위에 커서를 올리면 휠 클릭 - 는 뺐다)
+        # if win32gui.GetCursorInfo()[1] == atkvalue:
+        #     gu.middleClick()
+        if not ATTACK_ON and not DETECT_ONLY:
+            time.sleep(HUNT_POLL)
+            continue
+
         #화면 좌표를 미리 구해 화면 안에 있는 몹만 남긴다 (화면 밖은 클릭할 수 없다)
         #감지만 모드에서는 보정이 없을 수 있으므로 거르지 않는다
         mobs = []
@@ -1435,6 +1508,13 @@ def loadconfig(path=None):
             opts['dist'] = v
     except (TypeError, ValueError):
         pass
+    for key, lo, hi in (('heal_pct', 1, 99), ('ber_pct', 1, 99), ('immune_n', 1, 99)):
+        try:
+            v = int(data.get(key, opts[key]))
+            if lo <= v <= hi:
+                opts[key] = v
+        except (TypeError, ValueError):
+            pass
     if data.get('range') in [r for r, label in RANGES]:
         opts['range'] = data['range']
     try:
@@ -1455,7 +1535,10 @@ def saveconfig(seconds, roles, opts, path=None):
             'nohit':   int(opts.get('nohit',  DEFAULT_OPTS['nohit'])),
             'sound':   bool(opts.get('sound',  DEFAULT_OPTS['sound'])),
             'dist':    int(opts.get('dist',    DEFAULT_OPTS['dist'])),
-            'detect':  bool(opts.get('detect', DEFAULT_OPTS['detect']))}
+            'detect':  bool(opts.get('detect', DEFAULT_OPTS['detect'])),
+            'heal_pct': int(opts.get('heal_pct', DEFAULT_OPTS['heal_pct'])),
+            'ber_pct':  int(opts.get('ber_pct',  DEFAULT_OPTS['ber_pct'])),
+            'immune_n': int(opts.get('immune_n', DEFAULT_OPTS['immune_n']))}
     try:
         f = open(path, 'w', encoding='utf-8')
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -1474,6 +1557,7 @@ def applyconfig(seconds, roles, opts=None):
     global BUFFS, BUFFKEY, TRIGGER, ORDER, PENDING
     global KEY_RETURN, KEY_REFRESH, KEY_TRANSFORM, TRANSFORM_INTERVAL, KEY_SKILL, SKILL_COOL
     global ATTACK_ON, SCAN_ROUND, NOHIT_LIMIT, SOUND_ON, HUNT_DIST, DETECT_ONLY
+    global KEY_HEAL, KEY_BER, KEY_IMMUNE, HEAL_PCT, BER_PCT, IMMUNE_N, HEAL_GAP, BER_GAP, IMMUNE_GAP
 
     if opts == None:
         opts = dict(DEFAULT_OPTS)
@@ -1487,6 +1571,17 @@ def applyconfig(seconds, roles, opts=None):
     KEY_REFRESH   = roles.get('refresh')
     KEY_TRANSFORM = roles.get('transform')
     KEY_SKILL     = roles.get('skill')
+
+    KEY_HEAL      = roles.get('heal')
+    KEY_BER       = roles.get('ber')
+    KEY_IMMUNE    = roles.get('immune')
+    HEAL_PCT      = int(opts.get('heal_pct', DEFAULT_OPTS['heal_pct']))
+    BER_PCT       = int(opts.get('ber_pct',  DEFAULT_OPTS['ber_pct']))
+    IMMUNE_N      = int(opts.get('immune_n', DEFAULT_OPTS['immune_n']))
+    #재사용 간격 = 그 키의 주기 칸. 0 이면 기본값
+    HEAL_GAP      = float(seconds.get(KEY_HEAL, 0) or GAP_DEFAULT['heal'])     if KEY_HEAL   else GAP_DEFAULT['heal']
+    BER_GAP       = float(seconds.get(KEY_BER, 0) or GAP_DEFAULT['ber'])       if KEY_BER    else GAP_DEFAULT['ber']
+    IMMUNE_GAP    = float(seconds.get(KEY_IMMUNE, 0) or GAP_DEFAULT['immune']) if KEY_IMMUNE else GAP_DEFAULT['immune']
 
     TRANSFORM_INTERVAL = seconds.get(KEY_TRANSFORM, 0) if KEY_TRANSFORM else 0
     SKILL_COOL         = seconds.get(KEY_SKILL, 0) if KEY_SKILL else 0
@@ -1619,7 +1714,8 @@ def runmacro():
 #=====================================================================
 # GUI
 #=====================================================================
-ROLES = [('return', '귀환'), ('refresh', '새로고침'), ('transform', '변신'), ('skill', '공격스킬')]
+ROLES = [('return', '귀환'), ('refresh', '새로고침'), ('transform', '변신'), ('skill', '공격스킬'),
+         ('heal', '힐'), ('immune', '이뮨'), ('ber', '베르')]
 NOTE_COL = 2 + len(ROLES)   #역할 체크박스 다음 칸 = 주기 설명
 
 class App:
@@ -1636,6 +1732,17 @@ class App:
         root.title('사냥 매크로')
         root.protocol('WM_DELETE_WINDOW', lambda: os._exit(0))
 
+        #--- 내 캐릭터 정보 (실시간) ---
+        #매크로가 안 돌 때도 보이도록 GUI 가 읽기 전용으로 따로 붙어서 읽는다
+        infobox = ttk.LabelFrame(root, text='내 캐릭터')
+        infobox.pack(fill='x', padx=10, pady=(10, 0))
+        self.infovar = tk.StringVar(value='게임에 붙는 중...')
+        ttk.Label(infobox, textvariable=self.infovar, justify='left',
+                  font=('Consolas', 10)).pack(anchor='w', padx=8, pady=6)
+        self.imem   = None    #정보 표시용 memread.Mem (매크로의 MEM 과 별개)
+        self.iretry = 0       #다시 붙기까지 남은 갱신 횟수
+        self.ifail  = 0       #연속으로 못 읽은 횟수
+
         #--- 키 설정 표 ---
         box = ttk.LabelFrame(root, text='버프 키 설정 (f5 ~ f12)')
         box.pack(fill='x', padx=10, pady=(10, 4))
@@ -1643,7 +1750,7 @@ class App:
         ttk.Label(box, text='키',      width=6,  anchor='center').grid(row=0, column=0, padx=4, pady=4)
         ttk.Label(box, text='주기(초)', width=10, anchor='center').grid(row=0, column=1, padx=4, pady=4)
         for c, (rid, label) in enumerate(ROLES):
-            ttk.Label(box, text=label, width=9, anchor='center').grid(row=0, column=2 + c, padx=4, pady=4)
+            ttk.Label(box, text=label, width=7, anchor='center').grid(row=0, column=2 + c, padx=2, pady=4)
         ttk.Label(box, text='', width=14).grid(row=0, column=NOTE_COL, padx=4)
 
         for r, key in enumerate(FKEYS, start=1):
@@ -1660,16 +1767,16 @@ class App:
                 self.role[(key, rid)] = bv
                 cb = ttk.Checkbutton(box, variable=bv,
                                      command=lambda kk=key, rr=rid: self.onrole(kk, rr))
-                cb.grid(row=r, column=2 + c, padx=4, pady=2)
+                cb.grid(row=r, column=2 + c, padx=2, pady=2)
                 self.check[(key, rid)] = cb
 
-            nl = ttk.Label(box, text='버프 주기', width=14, foreground='#555')
+            nl = ttk.Label(box, text='버프 주기', width=20, foreground='#555')
             nl.grid(row=r, column=NOTE_COL, padx=4, pady=2, sticky='w')
             self.note[key] = nl
 
         ttk.Label(root, foreground='#555',
-                  text='귀환 / 새로고침 / 변신 은 각각 키 하나에만 지정됩니다. '
-                       '체크한 키 중 변신만 주기를 씁니다.').pack(anchor='w', padx=12)
+                  text='역할은 각각 키 하나에만 지정됩니다. 변신은 주기, 공격스킬은 쿨타임, '
+                       '힐 / 이뮨 / 베르는 재사용 간격으로 주기 칸을 씁니다.').pack(anchor='w', padx=12)
 
         #--- 동작 설정 ---
         optbox = ttk.LabelFrame(root, text='동작')
@@ -1691,6 +1798,29 @@ class App:
         self.dsent = ttk.Entry(dsrow, textvariable=self.dist, width=6, justify='center')
         self.dsent.pack(side='left')
         ttk.Label(dsrow, foreground='#555', text='  타일 안의 몹만 대상으로 삼습니다').pack(side='left')
+        #--- 힐 / 베르 / 이뮨 조건 ---
+        svrow = ttk.Frame(optbox)
+        svrow.pack(fill='x', padx=6, pady=(6, 0))
+        self.healpct = tk.StringVar(value=str(DEFAULT_OPTS['heal_pct']))
+        self.berpct  = tk.StringVar(value=str(DEFAULT_OPTS['ber_pct']))
+        self.immunen = tk.StringVar(value=str(DEFAULT_OPTS['immune_n']))
+        ttk.Label(svrow, text='힐  HP').pack(side='left')
+        self.healbox = ttk.Combobox(svrow, textvariable=self.healpct, width=4, state='readonly',
+                                    values=[str(v) for v in PCT_CHOICES])
+        self.healbox.pack(side='left', padx=(4, 0))
+        ttk.Label(svrow, text='% 이하      베르  HP').pack(side='left')
+        self.berbox = ttk.Combobox(svrow, textvariable=self.berpct, width=4, state='readonly',
+                                   values=[str(v) for v in PCT_CHOICES])
+        self.berbox.pack(side='left', padx=(4, 0))
+        ttk.Label(svrow, text='% 이하      이뮨  주위 몹').pack(side='left')
+        self.immbox = ttk.Combobox(svrow, textvariable=self.immunen, width=4, state='readonly',
+                                   values=[str(v) for v in MOB_CHOICES])
+        self.immbox.pack(side='left', padx=(4, 0))
+        ttk.Label(svrow, text='마리 이상').pack(side='left')
+        ttk.Label(optbox, foreground='#555',
+                  text='위 표에서 힐 / 이뮨 / 베르 키를 지정해야 동작합니다. 주위 몹은 탐지 거리 안의 살아 있는 몹 수입니다.'
+                  ).pack(anchor='w', padx=6, pady=(2, 0))
+
         self.detect = tk.BooleanVar(value=DEFAULT_OPTS['detect'])
         self.dtchk  = ttk.Checkbutton(optbox, text='감지만 (클릭 / 귀환 없이 로그만 - 확인용)',
                                       variable=self.detect)
@@ -1761,7 +1891,77 @@ class App:
         seconds, roles, opts, found = loadconfig()
         self.setform(seconds, roles, opts)
         self.drainlog()
+        self.pollinfo()
         log(('설정 불러옴 : ' + CONFIG_PATH) if found else '저장된 설정 없음 - 기본 셋팅 사용')
+
+    #--- 내 캐릭터 정보 ---
+
+    #INFO_POLL 마다 캐릭터 정보를 읽어 표시한다. GUI 스레드에서 돌고 메모리는 읽기만 한다
+    def pollinfo(self):
+        try:
+            self.infovar.set(self.readinfo())
+        except Exception as e:
+            self.infovar.set('정보 읽기 오류 : ' + str(e))
+        self.root.after(INFO_POLL, self.pollinfo)
+
+    #표시할 글자를 만든다. 못 붙었으면 몇 초마다 다시 붙어 본다
+    def readinfo(self):
+        if self.imem == None:
+            if self.iretry > 0:
+                self.iretry -= 1
+                return '게임을 찾는 중... (Lin.exe 가 떠 있어야 합니다)'
+            self.iretry = 6          #약 3초 뒤 다시 시도
+            path, okay, tried = mr.findfile('mem.json')
+            m = mr.Mem(path, lambda msg: None)     #붙었다는 로그는 찍지 않는다
+            if not m.attach():
+                return '게임에 못 붙음 : ' + str(m.err)
+            self.imem  = m
+            self.ifail = 0
+        m = self.imem
+        c = m.charinfo()
+        if c == None or c.get('level') == None or c.get('hp_max') in (None, 0):
+            #게임이 꺼졌거나 캐릭터 선택 화면이다. 계속 못 읽으면 떼고 다시 붙는다
+            self.ifail += 1
+            if self.ifail >= 6:
+                m.detach()
+                self.imem = None
+            return '캐릭터 정보를 못 읽음 (월드에 들어가 있어야 합니다)'
+        self.ifail = 0
+        def f(v):
+            return '?' if v == None else str(v)
+        def pct(a, b):
+            return '?' if (a == None or not b) else str(int(a * 100 / b))
+        name = '?'
+        pos  = '?'
+        mobs = '?'
+        ppl  = '?'
+        ents, head, count = m.entity_table()
+        me = m.selfent(ents) if len(ents) > 0 else None
+        if me != None:
+            name = str(me.get('name'))
+            mp_  = m.entpos(me)
+            pos  = str(mp_[0]) + ', ' + str(mp_[1])
+            nm = 0
+            np_ = 0
+            for o in ents:
+                if o['ptr'] == me['ptr']:
+                    continue
+                kind = m.kind(o)
+                op = m.entpos(o)
+                if kind == 'player':
+                    np_ += 1
+                elif (kind in ('other', 'monster') and not o['dead'] and o.get('name')
+                      and max(abs(op[0] - mp_[0]), abs(op[1] - mp_[1])) <= HUNT_DIST):
+                    nm += 1
+            mobs = str(nm)
+            ppl  = str(np_)
+        return ('%s   LV %s   경험치 %s%%   AC %s\n'
+                'HP %s / %s (%s%%)    MP %s / %s (%s%%)\n'
+                '좌표 %s    주위 몹 %s    다른 캐릭터 %s'
+                % (name, f(c['level']), f(c['exp_pct']), f(c['ac']),
+                   f(c['hp']), f(c['hp_max']), pct(c['hp'], c['hp_max']),
+                   f(c['mp']), f(c['mp_max']), pct(c['mp'], c['mp_max']),
+                   pos, mobs, ppl))
 
     #--- 폼 <-> 값 ---
 
@@ -1777,6 +1977,9 @@ class App:
         self.sound.set(bool(opts.get('sound',  DEFAULT_OPTS['sound'])))
         self.dist.set(str(opts.get('dist',     DEFAULT_OPTS['dist'])))
         self.detect.set(bool(opts.get('detect', DEFAULT_OPTS['detect'])))
+        self.healpct.set(str(opts.get('heal_pct', DEFAULT_OPTS['heal_pct'])))
+        self.berpct.set(str(opts.get('ber_pct',   DEFAULT_OPTS['ber_pct'])))
+        self.immunen.set(str(opts.get('immune_n', DEFAULT_OPTS['immune_n'])))
         self.refreshrows()
 
     #위젯에서 값을 읽는다. 주기가 숫자가 아니면 (None, None, None) 을 돌려준다
@@ -1813,7 +2016,10 @@ class App:
                 'nohit':  int(raw),
                 'sound':  self.sound.get(),
                 'dist':   int(rawdist),
-                'detect': self.detect.get()}
+                'detect': self.detect.get(),
+                'heal_pct': int(self.healpct.get()),
+                'ber_pct':  int(self.berpct.get()),
+                'immune_n': int(self.immunen.get())}
         return seconds, roles, opts
 
     def onsave(self):
@@ -1860,6 +2066,9 @@ class App:
             elif rid == 'skill':
                 self.entry[key].configure(state='normal')
                 self.note[key].configure(text='스킬 쿨타임 (공격 중만)')
+            elif rid in GAP_DEFAULT:
+                self.entry[key].configure(state='normal')
+                self.note[key].configure(text='재사용 간격 (0 = %d초)' % GAP_DEFAULT[rid])
             elif rid != None:
                 self.entry[key].configure(state='disabled')
                 self.note[key].configure(text='주기 없음')
@@ -1874,6 +2083,8 @@ class App:
                 self.check[(key, rid)].configure(state='disabled')
         for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.nhent, self.dsent, self.dtchk) + tuple(self.rngbtn):
             b.configure(state='disabled')
+        for b in (self.healbox, self.berbox, self.immbox):
+            b.configure(state='disabled')
         self.btn.configure(state='disabled', text='동작 중  (tab = 정지)')
 
     #정지하면 설정을 다시 만질 수 있게 열어준다
@@ -1883,6 +2094,8 @@ class App:
                 self.check[(key, rid)].configure(state='normal')
         for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.nhent, self.dsent, self.dtchk) + tuple(self.rngbtn):
             b.configure(state='normal')
+        for b in (self.healbox, self.berbox, self.immbox):
+            b.configure(state='readonly')
         self.btn.configure(state='normal', text='시작하기')
         self.refreshrows()      #주기 입력칸은 역할에 따라 다시 결정
         self.started = False
@@ -1904,6 +2117,9 @@ class App:
         log('  공격 : ' + ('사용' if opts['attack'] else '끔'))
         log('  탐지 거리 : ' + str(opts['dist']) + '타일' + ('  (감지만)' if opts.get('detect') else ''))
         log('  새로고침(텔) : 주변에 몹이 없으면 바로')
+        log('  힐 : ' + ((roles['heal'].upper() + '  HP ' + str(opts['heal_pct']) + '% 이하') if roles.get('heal') else '미지정'))
+        log('  베르 : ' + ((roles['ber'].upper() + '  HP ' + str(opts['ber_pct']) + '% 이하') if roles.get('ber') else '미지정'))
+        log('  이뮨 : ' + ((roles['immune'].upper() + '  주위 몹 ' + str(opts['immune_n']) + '마리 이상') if roles.get('immune') else '미지정'))
         for rid, label in ROLES:
             log('  ' + label + ' : ' + (roles[rid].upper() if roles[rid] else '미지정'))
         act = [(n, key, s) for n, key, s in BUFFS if s > 0]

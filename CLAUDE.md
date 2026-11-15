@@ -111,6 +111,14 @@ To stop a running script: `pyautogui.FAILSAFE` is disabled in `oman.py`/`tell.py
   cells in place → Enter; `memchat.put` refuses to write more cells than are already there.
   `0x9BF98` is the "focused edit" pointer and is 0 when the input is empty — do not use it.
   `python memchat.py ".버프" --auto` runs the same sequence standalone.
+- **Heal / Ber / Immune** — three more F-key roles (`heal`, `ber`, `immune`). Each hunt-loop tick
+  reads HP (`readhp()`: secure holder first, then `chains.hp`) and the live-mob count from
+  `scanents()`: HP% ≤ `heal_pct` / `ber_pct` presses that key, mobs ≥ `immune_n` presses immune.
+  The key's 주기 column is the re-press gap (0 → `GAP_DEFAULT`: 2 s / 2 s / 30 s). They run with
+  attack off too, never in detect-only, and `MEM_FAIL_LIMIT` unreadable HP reads stop the macro.
+- **Character panel** — `App.pollinfo()` shows name / LV / HP / MP / exp / AC / position / nearby
+  counts every `INFO_POLL` ms through its own read-only `Mem` (`self.imem`), separate from the
+  macro's `MEM`, so it works before Start.
 - **`감지만` (detect-only)** logs the chosen target and nearby players without clicking or recalling.
 - The old code is kept, unused by `main.py`: `huntloop_sweep`, `_checkmarks`, `soundwatch`.
   `pit.py`, `memcalib.py`, `collect.py`, `sweep.py` and `sound_record.py` import main's helpers
