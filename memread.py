@@ -1129,6 +1129,8 @@ class Mem(object):
     #엔티티의 종류. mem.json ent.rules 를 위에서부터 보고 처음 맞는 규칙의 kind 를 돌려준다.
     #  규칙 = {"kind": "player", "off": "0x4C", "type": "u32", "values": [255]}
     #         {"kind": "monster", "any": true}   <- 앞 규칙에 안 걸린 나머지 전부
+    #         {"kind": "effect", "name_has": ["마법진"]}   <- 이름에 그 글자가 든 것
+    #         {"kind": "player", "field": "id", "min": 1000000, "max": 1999999}   <- id 범위
     #아무 규칙에도 안 걸리면 'other', 규칙이 없거나 값을 못 읽으면 None (판정 불가)
     def kind(self, o):
         ent = (self.cfg or {}).get('ent') or {}
@@ -1138,16 +1140,38 @@ class Mem(object):
         raw = o.get('raw')
         if raw == None:
             return None
+        name = ''.join(str(o.get('name') or '').split())
         for r in rules:
             if r.get('any'):
                 return str(r.get('kind'))
-            off = num(r.get('off'))
-            fmt = FMT.get(str(r.get('type', 'u32')))
-            if off == None or fmt == None or off + fmt[1] > len(raw):
-                return None
-            v = struct.unpack_from(fmt[0], raw, off)[0]
-            if v in (r.get('values') or []):
-                return str(r.get('kind'))
+            if r.get('name_has') != None:
+                #이름에 이 글자가 들어 있으면 그 종류 (공백은 무시). 값으로 못 가르는 것의 임시 구분용
+                if any(str(x) != '' and ''.join(str(x).split()) in name for x in r['name_has']):
+                    return str(r.get('kind'))
+                continue
+            if r.get('field') != None:
+                #entity_table 이 이미 풀어 둔 값으로 본다 (id, type, clan, act, base ...)
+                v = o.get(str(r['field']))
+                if not isinstance(v, int):
+                    return None
+            else:
+                off = num(r.get('off'))
+                fmt = FMT.get(str(r.get('type', 'u32')))
+                if off == None or fmt == None or off + fmt[1] > len(raw):
+                    return None
+                v = struct.unpack_from(fmt[0], raw, off)[0]
+            #values(목록) 와 min/max(범위) 중 적힌 조건을 전부 만족해야 한다
+            if r.get('values') != None and v not in r['values']:
+                continue
+            lo = num(r.get('min'))
+            hi = num(r.get('max'))
+            if lo != None and v < lo:
+                continue
+            if hi != None and v > hi:
+                continue
+            if r.get('values') == None and lo == None and hi == None:
+                continue      #조건이 하나도 없는 규칙은 무시한다
+            return str(r.get('kind'))
         return 'other'
 
     #스킬(마법) 창 슬롯 순회. (스킬 목록, 창 주소, 슬롯 개수) 를 돌려준다.

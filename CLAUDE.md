@@ -93,9 +93,11 @@ To stop a running script: `pyautogui.FAILSAFE` is disabled in `oman.py`/`tell.py
 - **Recall (`_checkrHp`)** — any entity of kind `player` other than self → `request('return')`.
   "Could not read" is never treated as "nobody around": `MEM_FAIL_LIMIT` consecutive failures stop
   the macro. The HP check is still the `checkhp.PNG` image.
-- **Entity kinds** come from `mem.json` `ent.rules` via `Mem.kind()`. Only the `player` rule
-  (`+0x4C == 255`, seen on one character) exists. With no `monster` rule, every non-player is a
-  candidate and the cursor check filters NPCs. `python memprobe.py --entkind --mob … --npc … --pc …`
+- **Entity kinds** come from `mem.json` `ent.rules` via `Mem.kind()`. `player` is "id in
+  1,000,000–1,999,999" (measured 2026-11-15 on seven characters; `+0x4C == 255` was dropped
+  because ground effects such as `마법진3` share it), preceded by a name-based `effect` rule.
+  With no `monster` rule, every entity judged `other` is a candidate and the cursor check
+  filters NPCs. `python memprobe.py --entkind --mob … --npc … --pc …`
   finds a discriminating offset.
 - **`감지만` (detect-only)** logs the chosen target and nearby players without clicking or recalling.
 - The old code is kept, unused by `main.py`: `huntloop_sweep`, `_checkmarks`, `soundwatch`.

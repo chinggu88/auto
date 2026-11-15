@@ -1231,6 +1231,8 @@ def scanents():
             continue
         if 'monster' in kinds and kind != 'monster':
             continue
+        if 'monster' not in kinds and kind != 'other':
+            continue      #이펙트처럼 다른 종류로 판정된 것은 사냥 후보에서도 뺀다
         mobs.append((dist, o, pos))
     mobs.sort(key=lambda r: r[0])
     if people != None:
