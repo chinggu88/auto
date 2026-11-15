@@ -103,7 +103,8 @@ PARK_GAP   = 68    # 가장 바깥 바퀴보다 이만큼 더 아래를 파크 �
 SCAN_OFFSET_Y = -43   # 스캔 중심의 y 보정(px). 음수면 위, 양수면 아래
                       # 원본은 -40 이었고 어택포인트를 2px 내려서 -38
 
-BUFF_GAP    = 1    #버프 키 누른 뒤 대기(초)
+BUFF_GAP    = 1    #채팅버프를 보낸 뒤 대기(초)
+BUFF_KEY_GAP = 0.2 #버프 키 하나를 누른 뒤 다음 버프 키까지 대기(초). 버프는 한 번에 하나씩 이 간격으로 누른다
 #단축키 페이지 : 게임의 F5~F12 단축키 칸은 F1 / F2 로 페이지를 바꾼다
 #  F1 = 공격 페이지 (공격 탭의 공격 키 / 새로고침 / 힐 / 이뮨 / 베르)
 #  F2 = 버프 페이지 (버프 탭의 버프 / 변신)
@@ -305,7 +306,7 @@ STUCK_REACH    = 2      #이 거리(타일) 안이면 붙어서 싸우는 중으
 STUCK_SEC      = 4.0    #이만큼 진전이 없으면 막힌 것으로 본다
 SKIP_SEC       = 20.0   #막힌 몹을 대상에서 빼 두는 시간
 IDLE_TELE_SEC  = 20.0   #같은 대상을 잡은 채 이만큼 아무 변화(대상 바뀜/끝/텔)가 없으면 강제로 텔한다
-TELE_DELAY     = 0.3    #몹이 없다고 판단한 뒤 텔 키를 누르기까지 두는 시간(초)
+TELE_DELAY     = 0.5    #몹이 없다고 판단한 뒤 텔 키를 누르기까지 두는 시간(초)
 TELE_GAP       = 1.5    #텔(새로고침 키)을 누른 뒤 다음 텔까지 최소 간격(초). 이동 뒤 주변이 다시 읽힐 시간
 MEM_FAIL_LIMIT = 10     #엔티티 테이블을 연속으로 이만큼 못 읽으면 멈춘다 (화면으로 넘어가지 않는다)
 CALIB_FILES    = ['scarecrow_calib.json', 'calib.json']   #앞엣것 우선
@@ -536,7 +537,7 @@ def dobuff(name):
     key = BUFFKEY[name]
     log(name + ' 버프 : ' + key)
     gu.press(key, presses=1)
-    time.sleep(BUFF_GAP)
+    time.sleep(BUFF_KEY_GAP)     #다음 버프 키까지. 쌓인 버프는 runpending 이 이 간격으로 하나씩 누른다
 
 #단축키 페이지를 바꾼다 (F1 = 공격, F2 = 버프)
 def setpage(key):
