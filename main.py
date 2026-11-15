@@ -490,6 +490,10 @@ def dobuff(name):
 #채팅버프 : 엔터로 채팅창을 열고 '.버프' 를 쳐서 엔터로 보낸다
 #글자는 채팅 입력칸 메모리에 바로 써 넣는다 (memchat.py). 키로 치면 한/영 상태에 따라
 #'.버프' 가 '.qjvm' 로 들어가서 명령이 안 먹었다. 채팅칸 열기와 전송만 엔터 키로 한다
+#빈 입력칸에는 글자 버퍼가 아직 없으므로(게임이 첫 글자 때 만든다) 한/영과 상관없는 숫자 키를
+#글자 수만큼 먼저 쳐서 자리를 만들고, 그 자리를 명령어로 덮어쓴다
+CHAT_FILL = '1'       #자리 만들기용 키. 한글 입력 상태에서도 그대로 들어가는 글자여야 한다
+
 def dochatbuff():
     log('채팅버프 : ' + CHAT_CMD)
     usemem = (MEM != None
@@ -498,12 +502,15 @@ def dochatbuff():
     time.sleep(CHAT_GAP)
     if usemem:
         import memchat
+        gu.press(CHAT_FILL, presses=len(CHAT_CMD), interval=0.05)
+        time.sleep(CHAT_GAP)
         chat = memchat.Chat(MEM)
         okay = chat.put(CHAT_CMD)
         chat.close()
         if not okay:
-            #써 넣지 못했으면 아무것도 보내지 않는다. 빈 채팅칸은 엔터로 닫힌다
+            #덮어쓰지 못했으면 쳐 둔 숫자를 지우고 아무것도 보내지 않는다. 빈 채팅칸은 엔터로 닫힌다
             log('채팅버프 실패 : ' + str(chat.err))
+            gu.press('backspace', presses=len(CHAT_CMD) + 2, interval=0.03)
     else:
         #mem.json 에 chat_str 가 없을 때의 예전 방식 (pit.py 도 이 길로 온다)
         k.write(CHAT_CMD, delay=0.05)         #유니코드로 직접 주입 (IME 안 거침)

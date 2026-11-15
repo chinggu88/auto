@@ -8,9 +8,13 @@
 #   mem.json chains.chat_str 이 가리키는 곳에 '글자 묶음' 이 있다
 #     +0  u32  글자 버퍼 포인터 (UTF-16LE)
 #     +4  u32  글자 수            (".qjvm" 을 쳤을 때 5)
-#     +8  u32  버퍼 크기(글자 수) (그때 12. 추정 - 이보다 길게는 쓰지 않는다)
-#   경로 [[lin.exe + 0x9BF98] + 0x28] + 0 은 게임을 껐다 켠 뒤에도 그대로였다 (두 번 확인).
-#   써 넣은 글자가 실제로 전송되는지는 아래 '혼자 돌리기' 로 확인한다.
+#     +8  u32  12 (뜻 모름. 글자가 없어 버퍼가 0 일 때도 12 라서 버퍼 크기는 아니다)
+#   경로는 [[lin.exe + 0xA3288] + 0x28] + 0 을 쓴다 (게임을 껐다 켜도 그대로, 세 번 확인).
+#   같이 나왔던 0x9BF98 은 '지금 입력 중인 칸' 포인터라 채팅칸에 글자가 없으면 0 이 된다.
+#   글자가 한 자도 없으면 버퍼 포인터가 0 이다 (게임이 첫 글자를 받을 때 버퍼를 만든다).
+#   버퍼가 얼마나 크게 잡히는지 모르므로, 밖에서 글자 수를 늘려 쓰지 않는다 :
+#   '이미 들어 있는 글자 수 이하' 로만 덮어쓴다. 그래서 부르는 쪽(main.dochatbuff)이
+#   한/영과 상관없는 숫자 키를 글자 수만큼 먼저 쳐서 자리를 만든 뒤 이 모듈로 덮어쓴다.
 #
 #쓰는 주소는 전부 mem.json 에 적힌 chains.chat_str 에서 나온다 (CLAUDE.md 규칙 2).
 #되돌리기는 하지 않는다 - 전송하면 게임이 입력칸을 스스로 비운다.
@@ -55,8 +59,9 @@ class Chat(object):
             self.err = '채팅 입력칸을 못 읽었다 (경로가 틀렸거나 월드 밖)'
             return None
         buf, cnt, cap = struct.unpack('<III', raw)
-        if buf < 0x10000 or cap < 1 or cap > 4096 or cnt > cap:
-            self.err = ('채팅 입력칸 값이 이상하다 (버퍼 0x%X, 글자 %d, 크기 %d) - 경로가 틀린 듯'
+        #글자가 없으면 버퍼가 0 이다 (정상). 글자가 있는데 버퍼가 주소가 아니면 경로가 틀린 것
+        if cnt > CHAT_MAX * 4 or (cnt > 0 and buf < 0x10000) or (cnt == 0 and buf != 0 and buf < 0x10000):
+            self.err = ('채팅 입력칸 값이 이상하다 (버퍼 0x%X, 글자 %d, +8 %d) - 경로가 틀린 듯'
                         % (buf, cnt, cap))
             return None
         return addr, buf, cnt, cap
@@ -76,7 +81,8 @@ class Chat(object):
         return raw.decode('utf-16le', 'replace')
 
     #입력칸의 글자를 text 로 바꾼다. 성공하면 True
-    #버퍼 크기를 넘으면 쓰지 않는다 (게임이 버퍼를 새로 잡아야 하는 길이라 밖에서 못 늘린다)
+    #지금 들어 있는 글자 수보다 길면 쓰지 않는다 (버퍼가 얼마나 큰지 몰라서 밖에서 못 늘린다).
+    #같은 길이면 글자만 덮어쓰고, 짧으면 글자 수 칸도 줄인다
     def put(self, text):
         import memcast                     #openwrite / writemem 을 빌려 쓴다
         got = self.info()
@@ -84,19 +90,26 @@ class Chat(object):
             return False
         addr, buf, cnt, cap = got
         n = len(text)
-        if n + 1 > cap or n > CHAT_MAX:
-            self.err = '글자가 버퍼보다 길다 (%d 글자, 버퍼 %d)' % (n, cap)
+        if n == 0 or n > CHAT_MAX:
+            self.err = '글자 수가 이상하다 (%d)' % n
+            return False
+        if buf == 0 or cnt < n:
+            self.err = ('입력칸에 든 글자(%d)가 써 넣을 글자(%d)보다 적다 - 먼저 그만큼 쳐 둬야 한다'
+                        % (cnt, n))
             return False
         if self.hw == None:
             self.hw = memcast.openwrite(self.mem.pid)
             if self.hw == None:
                 self.err = '쓰기 권한으로 프로세스를 못 열었다 (관리자 권한으로 실행)'
                 return False
-        data = text.encode('utf-16le') + b'\x00\x00'
+        #글자만 덮어쓴다. 끝의 0 은 이미 있던 자리(글자 수 cnt 뒤)를 넘지 않을 때만 쓴다
+        data = text.encode('utf-16le')
+        if n < cnt:
+            data += b'\x00\x00'
         if not memcast.writemem(self.hw, buf, data):
             self.err = '글자 버퍼 쓰기 실패'
             return False
-        if not memcast.writemem(self.hw, addr + 4, struct.pack('<I', n)):
+        if n < cnt and not memcast.writemem(self.hw, addr + 4, struct.pack('<I', n)):
             self.err = '글자 수 쓰기 실패'
             return False
         #다시 읽어 확인한다. 그 사이 게임이 버퍼를 바꿨으면 실패로 본다
@@ -161,11 +174,11 @@ def main():
         if got == None:
             print(c.err)
             return
-        print('글자 묶음 0x%X   버퍼 0x%X   글자 수 %d   버퍼 크기 %d' % got)
+        print('글자 묶음 0x%X   버퍼 0x%X   글자 수 %d   +8 값 %d' % got)
         print('지금 글자 : ' + repr(c.text()))
         args = [a for a in sys.argv[1:] if not a.startswith('--')]
         if len(args) == 0:
-            print('써 넣으려면 : python memchat.py ".버프"   (채팅칸을 열어 둔 채로)')
+            print('써 넣으려면 : 채팅칸에 숫자를 글자 수만큼 쳐 두고 (".버프" 면 111)  python memchat.py ".버프"')
             return
         if c.put(args[0]):
             print('써 넣음 : ' + repr(args[0]) + '   게임 채팅칸에 보이는지 확인하고 엔터로 전송해 본다')
