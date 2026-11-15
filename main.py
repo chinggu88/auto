@@ -268,9 +268,9 @@ DETECT_ONLY        = DEFAULT_OPTS['detect'] #감지만 (클릭/귀환 안 함)
 #몹의 화면 좌표는 보정 파일(게임 좌표 차이 -> 화면 픽셀 아핀 변환)로 구한다
 #  scarecrow_calib.json (postracker.py 의 허수아비 보정) > calib.json (turnundead_mem.py 의 보정)
 HUNT_POLL      = 0.1    #사냥 루프 한 바퀴 간격(초)
-RECLICK_SEC    = 2.0    #같은 대상이 살아 있을 때 다시 클릭하는 간격(초)
+RECLICK_SEC    = 1.0    #클릭 간격(초). 클릭할 때마다 가장 가까운 몹을 다시 고른다
 MISS_COOL      = 3.0    #그 자리에 공격 커서가 안 뜬 대상을 다시 보기까지 쉬는 시간(초)
-NOMOB_SEC      = 2.0    #대상이 없는 채로 이만큼 지나면 '헛돔' 1회로 센다
+TELE_GAP       = 1.5    #텔(새로고침 키)을 누른 뒤 다음 텔까지 최소 간격(초). 이동 뒤 주변이 다시 읽힐 시간
 MEM_FAIL_LIMIT = 10     #엔티티 테이블을 연속으로 이만큼 못 읽으면 멈춘다 (화면으로 넘어가지 않는다)
 CALIB_FILES    = ['scarecrow_calib.json', 'calib.json']   #앞엣것 우선
 MEM            = None   #memread.Mem. runmacro 가 붙이고 뗀다
@@ -1241,6 +1241,7 @@ def scanents():
 
 #사냥 루프 (매크로 스레드)
 #  가장 가까운 몹을 클릭하고, 그 몹이 죽거나 사라지면 다음으로 가까운 몹으로 넘어간다
+#  클릭할 차례(RECLICK_SEC)마다 더 가까운 몹이 생겼는지 다시 보고, 있으면 그쪽으로 바꾼다
 #  클릭 전에 그 자리에 공격 커서가 뜨는지 반드시 확인한다 (좌표가 틀리면 아예 안 누른다)
 #p, atkvalue 는 예전 huntloop 과 같은 뜻 (스캔 중심, 공격 커서 핸들)
 def huntloop(p, atkvalue):
@@ -1251,8 +1252,7 @@ def huntloop(p, atkvalue):
     clicked = 0.0      #마지막으로 클릭한 시각
     cool    = {}       #id -> 다시 봐도 되는 시각 (공격 커서가 안 뜬 대상)
     fail    = 0        #테이블을 연속으로 못 읽은 횟수
-    cnt     = 0        #헛돈 횟수
-    empty   = None     #대상이 없어진 시각
+    teled   = 0.0      #마지막으로 텔(새로고침 키)을 누른 시각
 
     skillon  = ATTACK_ON and (not DETECT_ONLY) and KEY_SKILL != None and SKILL_COOL > 0
     skillsec = float(SKILL_COOL)
@@ -1303,22 +1303,22 @@ def huntloop(p, atkvalue):
             clicked = 0.0
             if len(mobs) > 0:
                 cur = mobs[0]
+        elif now - clicked >= RECLICK_SEC and mobs[0][0] < cur[0]:
+            #클릭할 차례마다 서치를 갱신한다 : 잡던 몹보다 더 가까운 몹이 생겼으면 그쪽으로 바꾼다
+            #(거리가 같으면 잡던 몹을 그대로 둔다. 안 그러면 두 몹 사이를 오락가락한다)
+            cur = mobs[0]
 
         if cur == None:
-            #대상이 없다. 한동안 없으면 헛돔으로 세고 새로고침
-            if empty == None:
-                empty = now
-            elif now - empty >= NOMOB_SEC:
-                empty = now
-                cnt  += 1
-                if KEY_REFRESH != None and (not DETECT_ONLY) and cnt >= NOHIT_LIMIT:
-                    log('새로고침 : ' + KEY_REFRESH + '  (헛돔 ' + str(cnt) + '/' + str(NOHIT_LIMIT) + ')')
-                    gu.press(KEY_REFRESH, presses=1)
-                    cnt = 0
+            #주변에 잡을 몹이 없다 -> 기다리지 않고 바로 텔 (새로고침 키)
+            #텔 직후에는 주변이 아직 안 읽혔을 수 있으므로 TELE_GAP 동안은 다시 누르지 않는다
+            #(예전에는 NOHIT_LIMIT 회 헛돌 때까지 기다렸다)
+            if KEY_REFRESH != None and (not DETECT_ONLY) and now - teled >= TELE_GAP:
+                log('몹 없음 - 텔 : ' + KEY_REFRESH)
+                gu.press(KEY_REFRESH, presses=1)
+                teled = time.perf_counter()
             tick = now       #대상이 없는 시간은 공격이 아니므로 쿨타임에서 뺀다
             time.sleep(HUNT_POLL)
             continue
-        empty = None
 
         dist, o, pos = cur
         if o['id'] != target:
@@ -1346,7 +1346,6 @@ def huntloop(p, atkvalue):
                     hit = True
             if hit:
                 clicked = time.perf_counter()
-                cnt     = 0
             else:
                 #화면 밖이거나 그 자리에 공격 커서가 안 떴다 (NPC, 가려짐, 좌표 어긋남)
                 #잠깐 제쳐 두고 다음으로 가까운 몹을 본다
@@ -1692,12 +1691,12 @@ class App:
         #--- 새로고침 트리거 ---
         nhrow = ttk.Frame(optbox)
         nhrow.pack(fill='x', padx=6, pady=(4, 6))
-        ttk.Label(nhrow, text='새로고침 트리거', width=12).pack(side='left')
+        ttk.Label(nhrow, text='(예전) 헛돔 횟수', width=12).pack(side='left')
         self.nohit = tk.StringVar(value=str(DEFAULT_OPTS['nohit']))
         self.nhent = ttk.Entry(nhrow, textvariable=self.nohit, width=6, justify='center')
         self.nhent.pack(side='left')
         ttk.Label(nhrow, foreground='#555',
-                  text='  회 연속 몹이 없으면 새로고침 키를 누릅니다 (한 번이라도 잡으면 초기화)'
+                  text='  지금은 쓰지 않음 - 주변에 몹이 없으면 바로 새로고침(텔) 키를 누릅니다'
                   ).pack(side='left')
 
         #--- 소리 감지 ---
@@ -1881,7 +1880,7 @@ class App:
         log('=== 설정 ===')
         log('  공격 : ' + ('사용' if opts['attack'] else '끔'))
         log('  탐지 거리 : ' + str(opts['dist']) + '타일' + ('  (감지만)' if opts.get('detect') else ''))
-        log('  새로고침 트리거 : ' + str(opts['nohit']) + '회 연속 몹 없음')
+        log('  새로고침(텔) : 주변에 몹이 없으면 바로')
         for rid, label in ROLES:
             log('  ' + label + ' : ' + (roles[rid].upper() if roles[rid] else '미지정'))
         act = [(n, key, s) for n, key, s in BUFFS if s > 0]

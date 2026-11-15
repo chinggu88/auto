@@ -17,6 +17,8 @@
 #   python memprobe.py --entkind --raw            위에 더해 엔티티마다 원본 바이트를 같이 찍는다
 #   python memprobe.py --entkind --mob "오크,늑대" --npc "판도라" --pc "다른캐릭"
 #                        이름으로 묶음을 알려주면 묶음을 가르는 오프셋 후보를 찾아준다 (mem.json ent.rules 채우기용)
+#   python memprobe.py --chatfind ".qjvm"         채팅 입력칸 찾기 - 채팅칸에 그 글자를 쳐 둔 채로(전송 X) 돌린다
+#                        글자 버퍼 -> 그걸 가리키는 칸 -> 모듈 고정 주소까지의 포인터 경로를 찾는다 (--depth 3 --span 0x400)
 #   python memprobe.py --spells                   스킬(마법) 창 순회 - 배운 스킬의 슬롯/id/아이콘/메모리 주소/이름
 #   python memprobe.py --char                     캐릭터 정보 - 레벨/경험치%/HP/MP/AC/성향/스탯/포만도/무게/저항
 #   python memprobe.py --items                   인벤토리 창 순회 - 소지품의 id/종류/아이콘/축복/수량/확인/이름
@@ -1361,6 +1363,148 @@ def dumpentkind(pid):
         m.detach()
 
 
+#채팅 입력칸 찾기.
+#  채팅칸에 쳐 둔 글자(UTF-16)를 찾고, 그 글자 버퍼를 가리키는 포인터 칸을 찾은 뒤,
+#  그 칸에서 거꾸로 올라가 모듈 고정 주소(게임을 다시 켜도 안 바뀌는 자리)까지의 경로를 찾는다.
+#  경로는 mem.json chains 에 그대로 적을 수 있는 꼴(base RVA + offsets)로 찍는다.
+#  읽기 전용이다
+import re
+
+#값이 lo~hi 인 4바이트(리틀엔디언)를 찾는 정규식들. 64KB 경계를 넘으면 둘로 나눈다
+def _rangepats(lo, hi):
+    out = []
+    while lo <= hi:
+        top = min(hi, lo | 0xFFFF)
+        b1a, b1b = (lo >> 8) & 0xFF, (top >> 8) & 0xFF
+        out.append(re.compile(b'[\x00-\xff]'
+                              + b'[' + re.escape(bytes([b1a])) + b'-' + re.escape(bytes([b1b])) + b']'
+                              + re.escape(bytes([(lo >> 16) & 0xFF, (lo >> 24) & 0xFF])), re.S))
+        lo = top + 1
+    return out
+
+
+#target 을 (target-span ~ target) 범위로 가리키는 4바이트 정렬 칸들. [(칸 주소, 오프셋)]
+def _pointersto(h, regs, target, span):
+    lo = max(0x10000, target - span)
+    pats = _rangepats(lo, target)
+    out = []
+    for base, size in regs:
+        for cbase, craw in mr.readchunks(h, base, size):
+            for pat in pats:
+                for mt in pat.finditer(craw):
+                    i = mt.start()
+                    if (cbase + i) % 4 != 0:
+                        continue
+                    v = struct.unpack_from('<I', craw, i)[0]
+                    if lo <= v <= target:
+                        out.append((cbase + i, target - v))
+    out.sort(key=lambda r: r[1])
+    return out
+
+
+def dochatfind(pid, text):
+    if not text:
+        say('채팅칸에 쳐 둔 글자를 적는다 : python memprobe.py --chatfind ".qjvm"')
+        return
+    try:
+        depth = max(1, min(int(arg('--depth', '3'), 0), 5))
+        span  = max(0, min(int(arg('--span', '0x400'), 0), 0x4000))
+    except ValueError:
+        say('--depth / --span 은 숫자여야 한다')
+        return
+    m = mr.Mem(MEM_PATH, say)
+    if not m.attach(pid):
+        say('붙기 실패 : ' + str(m.err))
+        return
+    try:
+        h = m.h
+        msize = 0
+        want = str(m.cfg.get('module', '')).lower()
+        for name, mbase, sz in mr.modules(m.pid):
+            if name.lower() == want:
+                msize = sz
+        def static(a):
+            return m.base <= a < m.base + msize
+        regs = mr.regions(h, maxaddr=1 << 32)
+        pat  = text.encode('utf-16le')
+        say('찾는 글자 : ' + text + '  (UTF-16, %d 글자)   영역 %d개' % (len(text), len(regs)))
+
+        bufs = []
+        for base, size in regs:
+            for cbase, craw in mr.readchunks(h, base, size):
+                st = craw.find(pat)
+                while st >= 0:
+                    bufs.append(cbase + st)
+                    st = craw.find(pat, st + 1)
+        say('[1] 글자 버퍼 : %d곳' % len(bufs))
+        for a in bufs[:20]:
+            say('  0x%X%s' % (a, '  (모듈 고정 주소 RVA 0x%X)' % (a - m.base) if static(a) else ''))
+        if len(bufs) == 0:
+            say('  못 찾았다. 채팅칸에 글자가 그대로 떠 있는지 확인한다 (전송하면 사라진다)')
+            return
+        if len(bufs) > 8:
+            say('  너무 많다. 더 길고 흔치 않은 글자로 다시 한다')
+            return
+
+        for buf in bufs:
+            say()
+            say('=== 버퍼 0x%X ===' % buf)
+            slots = [r for r in _pointersto(h, regs, buf, 0)]
+            say('[2] 이 버퍼를 가리키는 칸 : %d곳' % len(slots))
+            for slot, off in slots[:8]:
+                say('  칸 0x%X%s' % (slot, '  (모듈 고정 주소 RVA 0x%X)' % (slot - m.base) if static(slot) else ''))
+                raw = mr.readmem(h, slot - 0x20, 0x60)
+                if raw != None:
+                    vals = struct.unpack('<24I', raw)
+                    for j, v in enumerate(vals):
+                        o = (j - 8) * 4
+                        note = ''
+                        if o == 0:
+                            note = '  <= 글자 버퍼 포인터'
+                        elif v == len(text):
+                            note = '  <= 글자 수와 같다 (길이 칸 후보)'
+                        elif v == len(text) * 2:
+                            note = '  <= 바이트 수와 같다 (길이 칸 후보)'
+                        say('      %+5d  0x%08X  %d%s' % (o, v, v, note))
+
+            #칸에서 거꾸로 올라가 고정 주소를 찾는다. 경로 = (지금 주소, [오프셋들])
+            say('[3] 고정 주소까지의 경로 (깊이 %d, 간격 0x%X)' % (depth, span))
+            level = [(slot, []) for slot, off in slots[:8]]
+            found = 0
+            for slot, offs in level:
+                if static(slot):
+                    say('  ★ base 0x%X  offsets []   -> 그 자리에 버퍼 포인터가 있다' % (slot - m.base))
+                    found += 1
+            for d in range(depth):
+                nxt = []
+                for target, offs in level:
+                    if static(target):
+                        continue
+                    refs = _pointersto(h, regs, target, span)
+                    for loc, off in refs[:40]:
+                        chain = [off] + offs
+                        if static(loc):
+                            say('  ★ base 0x%X  offsets [%s]'
+                                % (loc - m.base, ', '.join('0x%X' % x for x in chain)))
+                            found += 1
+                        else:
+                            nxt.append((loc, chain))
+                #가까운(오프셋이 작은) 것부터 조금만 다음 단계로 올린다
+                nxt.sort(key=lambda r: r[1][0])
+                level = nxt[:30]
+                say('  깊이 %d : 다음 단계 후보 %d개' % (d + 1, len(level)))
+                if len(level) == 0:
+                    break
+            if found == 0:
+                say('  고정 주소까지 못 올라갔다. --depth 4 또는 --span 0x1000 으로 다시 해 본다')
+        say()
+        say('★ 줄의 뜻 : [[모듈베이스 + base] + 오프셋...] 을 따라가면 "글자 버퍼 포인터가 든 칸" 이 나온다')
+        say('  (마지막 오프셋은 더하기만 한다 = mem.json chains 규약 그대로)')
+        say('게임을 껐다 켠 뒤 한 번 더 돌려서 두 번 다 나오는 ★ 줄이 진짜다. 두 출력을 같이 보낸다')
+    finally:
+        m.detach()
+
+
 def dumpspells(pid):
     m = mr.Mem(MEM_PATH, say)
     if not m.attach(pid):
@@ -2356,6 +2500,10 @@ def main():
 
     if has('--entkind'):
         dumpentkind(pid)
+        return
+
+    if has('--chatfind'):
+        dochatfind(pid, arg('--chatfind'))
         return
 
     if has('--spells'):
