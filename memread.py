@@ -1149,6 +1149,125 @@ class Mem(object):
                         s['name'] if s['name'] != None else '(이름 못 읽음)'))
         return out
 
+    #--- 버프(상태효과) 아이콘 바 ---
+    #
+    #  켜져 있는 버프 목록을 읽는다. 읽기 전용이다 (메모리에 아무것도 쓰지 않는다).
+    #  위젯 주소는 mem.json chains.buff_win, 칸 구조는 mem.json buff 블록에 있다.
+    #  정적 분석 추정값이라, buffwatch.py / memprobe.py --buffs 로 게임에서 맞춘 뒤 쓴다.
+    #
+    #  돌려주는 값 : (buffs, win, count)
+    #    buffs : [{'slot','ptr','icon','name','name_ptr','sec'}], sec 는 설정 없으면 None
+    #    win   : 버프 바 위젯 주소 (못 읽으면 None)
+    #    count : 위젯이 말하는 칸 개수 (못 읽으면 None)
+
+    #버프 칸 객체 하나에서 아이콘/이름/남은시간을 뽑는다
+    def _buff_entry(self, ptr, bcfg):
+        if ptr == None or ptr < 0x10000:
+            return None
+        size = num(bcfg.get('entry_size'), 0x80)
+        ent = readmem(self.h, ptr, size)
+        if ent == None:
+            return None
+        icon_off = num(bcfg.get('icon_off'), 0x68)
+        name_off = num(bcfg.get('name_ptr_off'), 0x10)
+        sub_off  = num(bcfg.get('name_sub_off'), 0x0C)
+        sec_off  = num(bcfg.get('sec_off'))
+        try:
+            icon = struct.unpack_from('<i', ent, icon_off)[0]
+            nptr = struct.unpack_from('<I', ent, name_off)[0]
+            sub  = struct.unpack_from('<I', ent, sub_off)[0] if sub_off + 4 <= size else 0
+        except Exception:
+            return None
+        #이름 건너뛸 오프셋(sub)이 말이 안 되게 크면 0 으로 본다
+        if sub > 64:
+            sub = 0
+        nm = None
+        if nptr >= 0x10000:
+            raw = readmem(self.h, nptr + sub, 64)
+            if raw != None:
+                nm = _decode_name(raw)
+        sec = None
+        if sec_off != None:
+            try:
+                sec = struct.unpack_from('<I', ent, sec_off)[0]
+            except Exception:
+                sec = None
+        return {'ptr': ptr, 'icon': icon, 'name': nm, 'name_ptr': nptr, 'sec': sec}
+
+    def buffs(self):
+        if self.h == None or self.cfg == None:
+            return [], None, None
+        chains = self.cfg.get('chains') or {}
+        spec = chains.get('buff_win')
+        if spec == None:
+            return [], None, None
+        bcfg = self.cfg.get('buff') or {}
+        count_off = num(bcfg.get('count_off'), 0x08)
+        list_off  = num(bcfg.get('list_off'), 0x0C)
+        ptr_array = bool(bcfg.get('ptr_array', True))
+        stride    = num(bcfg.get('stride'), 0x80)
+        maxc      = num(bcfg.get('max_count'), 64)
+        with self.lock:
+            win = self.resolve(spec)
+            if win == None:
+                return [], None, None
+            raw = readmem(self.h, win + count_off, 4)
+            if raw == None:
+                return [], win, None
+            count = struct.unpack('<I', raw)[0]
+            if count <= 0 or count > maxc:
+                return [], win, count
+            out = []
+            if ptr_array:
+                #칸들이 '포인터 배열' 로 늘어서 있다 (스킬/아이템 창과 같은 꼴)
+                #list_off 가 가리키는 곳이 포인터 배열의 시작이면 한 번 역참조하고,
+                #아니면 win+list_off 부터가 바로 배열이라고 본다. 둘 다 시험한다
+                arr = self._ptr(win + list_off)
+                bases = [arr] if arr != None else []
+                bases.append(win + list_off)
+                for arrbase in bases:
+                    blob = readmem(self.h, arrbase, 4 * count)
+                    if blob == None:
+                        continue
+                    tmp = []
+                    for i in range(count):
+                        p = struct.unpack_from('<I', blob, i * 4)[0]
+                        e = self._buff_entry(p, bcfg)
+                        if e != None:
+                            e['slot'] = i
+                            tmp.append(e)
+                    #이름이 하나라도 읽힌 해석을 택한다 (맞는 배열 베이스 고르기)
+                    if any(x['name'] for x in tmp):
+                        out = tmp
+                        break
+                    if len(out) == 0:
+                        out = tmp
+            else:
+                #칸 객체가 win+list_off 부터 stride 간격으로 통째로 늘어서 있다
+                for i in range(count):
+                    e = self._buff_entry(win + list_off + i * stride, bcfg)
+                    if e != None:
+                        e['slot'] = i
+                        out.append(e)
+            return out, win, count
+
+    #켜져 있는 버프를 로그에 찍는다
+    def logbuffs(self):
+        out, win, count = self.buffs()
+        if win == None:
+            self.log('버프 바를 못 읽었다 - 캐릭터로 월드에 들어간 뒤에 다시 읽는다 (mem.json chains.buff_win 확인)')
+            return []
+        self.log('버프 바 : 0x%X   칸 %s개   읽은 버프 %d개' % (win, str(count), len(out)))
+        self.log('  (칸 객체 안 : 아이콘 +0x%X, 이름 포인터 +0x%X. mem.json buff 블록에서 조정)'
+                 % (num((self.cfg.get('buff') or {}).get('icon_off'), 0x68),
+                    num((self.cfg.get('buff') or {}).get('name_ptr_off'), 0x10)))
+        for b in out:
+            sec = '' if b.get('sec') == None else ('  남은 %ds' % b['sec'])
+            self.log('  칸 %-2d 아이콘 %-5d 객체 0x%08X  이름 0x%08X  %s%s'
+                     % (b['slot'], b['icon'], b['ptr'], b['name_ptr'],
+                        b['name'] if b['name'] != None else '(이름 못 읽음)', sec))
+        return out
+
     #--- 캐릭터 정보 (왼쪽 HUD) ---
     #
     #  캐릭터 상태 패킷(dcdcccccchhhhcdcchcccc)을 FUN_0044d300 이 정적 주소에 풀어 넣는 값들.

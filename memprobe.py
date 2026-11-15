@@ -16,6 +16,7 @@
 #   python memprobe.py --spells                   스킬(마법) 창 순회 - 배운 스킬의 슬롯/id/아이콘/메모리 주소/이름
 #   python memprobe.py --char                     캐릭터 정보 - 레벨/경험치%/HP/MP/AC/성향/스탯/포만도/무게/저항
 #   python memprobe.py --items                   인벤토리 창 순회 - 소지품의 id/종류/아이콘/축복/수량/확인/이름
+#   python memprobe.py --buffs                   켜져 있는 버프(상태효과) 순회 - 아이콘/이름 + 위젯·칸 원본 바이트
 #   python memprobe.py --objdump                   플레이어 좌표 일치 객체 전부 덤프
 #   python memprobe.py --objdump 0x12031030        그 주소의 객체 덤프
 #   python memprobe.py --findplayer                테이블 객체 안에서 현재 HP/MaxHP 쌍 찾기 (플레이어 객체 특정)
@@ -1264,6 +1265,46 @@ def dumpitems(pid):
         m.detach()
 
 
+def dumpbuffs(pid):
+    #버프 바를 읽고, 위젯/칸 원본 바이트까지 찍어 오프셋을 게임에서 확인하게 한다
+    #  python memprobe.py --buffs
+    m = mr.Mem(MEM_PATH, say)
+    if not m.attach(pid):
+        say('붙기 실패 : ' + str(m.err))
+        return
+    try:
+        say()
+        buffs = m.logbuffs()
+        say()
+        #위젯 원본 바이트 (count_off/list_off 를 눈으로 맞출 때)
+        chains = m.cfg.get('chains') or {}
+        spec = chains.get('buff_win')
+        win = m.resolve(spec) if spec else None
+        if win:
+            raw = mr.readmem(m.h, win, 0x40)
+            if raw:
+                say('버프 바 위젯 원본 (0x%08X, +0x00~0x3F):' % win)
+                say(hexdump(raw, win))
+                say('  이 안에서 켠 버프 개수(작은 정수)가 든 자리가 count_off, 칸들이 늘어선 곳의 오프셋이 list_off 다')
+        if len(buffs) == 0:
+            say()
+            say('  켠 버프가 없거나, 오프셋이 아직 안 맞는다.')
+            say('  확인법 : 게임에서 버프(예: 지혜/마력 물약, 아이언스킨)를 켜 두고 다시 돌린다.')
+            say('           이름이 뜨면 맞는 것이고, 안 뜨면 mem.json 의 buff 블록 값을 조정한다')
+            say('           (ptr_array true↔false, icon_off/name_ptr_off, entry_size 순으로 바꿔 본다)')
+        else:
+            #첫 칸 원본 바이트 (icon_off/name_ptr_off 확인)
+            first = buffs[0]
+            raw = mr.readmem(m.h, first['ptr'], num((m.cfg.get('buff') or {}).get('entry_size'), 0x80))
+            if raw:
+                say('첫 버프 칸 객체 원본 (0x%08X):' % first['ptr'])
+                say(hexdump(raw, first['ptr']))
+                say('  화면 버프 이름과 같은 글자가 가리켜지는 포인터가 name_ptr_off,')
+                say('  아이콘 번호(SpellIcon.idx 인덱스)가 든 자리가 icon_off 다')
+    finally:
+        m.detach()
+
+
 def dosecure(pid):
     #보안 홀더(HP/MP) 디코드 검증. 버퍼 chains 값과 나란히 찍어 맞는지 본다
     #  python memprobe.py --secure
@@ -1972,6 +2013,10 @@ def main():
 
     if has('--items'):
         dumpitems(pid)
+        return
+
+    if has('--buffs'):
+        dumpbuffs(pid)
         return
 
     if has('--char'):
