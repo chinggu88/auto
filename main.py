@@ -116,7 +116,7 @@ TRANSFORM_WAIT     = 1.0   #변신 키를 누르기 전 대기(초). 바로 앞 
 TRANSFORM_MENU_SEC = 3.0   #변신 메뉴(lv80.PNG)가 뜰 때까지 기다리는 최대 시간(초)
 TRANSFORM_MENU_POLL = 0.3  #그동안 메뉴를 다시 찾는 간격(초)
 CHAT_CMD      = '.버프'   #채팅창에 넣는 매크로 명령어
-CHAT_INTERVAL = 900       #채팅버프 주기(초). 15분
+CHAT_INTERVAL = 600       #채팅버프 주기(초). 10분
 CHAT_GAP      = 0.3       #엔터 -> 입력 -> 엔터 사이 대기(초)
 LOOP_LIMIT  = 50   #공격 루프 최대 횟수. 채우면 새로고침
                    #칼질을 계속 해도 안 줄고, 새로고침될 때만 초기화된다
