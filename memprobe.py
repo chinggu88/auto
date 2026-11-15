@@ -17,6 +17,8 @@
 #   python memprobe.py --char                     캐릭터 정보 - 레벨/경험치%/HP/MP/AC/성향/스탯/포만도/무게/저항
 #   python memprobe.py --items                   인벤토리 창 순회 - 소지품의 id/종류/아이콘/축복/수량/확인/이름
 #   python memprobe.py --buffs                   켜져 있는 버프(상태효과) 순회 - 아이콘/이름 + 위젯·칸 원본 바이트
+#   python memprobe.py --gsnap                   모듈 전역 영역 스냅샷 (버프 끈 상태에서)
+#   python memprobe.py --gdiff                   스냅샷 뒤 바뀐 4바이트 찾기 (버프 켜고) - 버프 바 위치 찾기용
 #   python memprobe.py --objdump                   플레이어 좌표 일치 객체 전부 덤프
 #   python memprobe.py --objdump 0x12031030        그 주소의 객체 덤프
 #   python memprobe.py --findplayer                테이블 객체 안에서 현재 HP/MaxHP 쌍 찾기 (플레이어 객체 특정)
@@ -1265,6 +1267,108 @@ def dumpitems(pid):
         m.detach()
 
 
+#--- 전역 데이터 영역 스냅샷/비교 (버프처럼 '켜면 어딘가 바뀌는' 값을 찾는다) ---
+#
+#  버프 바가 어느 전역에 있는지 정적 분석으로 못 찾았을 때, 게임에서 직접 찾는다.
+#  버프를 끈 상태로 --gsnap, 버프를 켜고 --gdiff 하면 그 사이에 바뀐 4바이트를 찍는다.
+#  모듈(Lin.exe) 정적/전역 영역만 본다 (위젯 전역 포인터·개수가 여기 산다). 읽기 전용.
+
+GSNAP_PATH = os.path.join(mr.appdir(), 'gsnap.bin')
+GSPAN = 0x300000        #base 부터 이만큼 (전역/.bss 까지 덮는다)
+
+
+def _gsnap_regions(m):
+    lo, hi = m.base, m.base + GSPAN
+    out = []
+    for rb, rs in mr.regions(m.h, writable=False, maxaddr=hi):
+        a = max(rb, lo)
+        b = min(rb + rs, hi)
+        if a < b:
+            blob = mr.readmem(m.h, a, b - a)
+            if blob:
+                out.append((a, blob))
+    return out
+
+
+def dogsnap(pid):
+    m = mr.Mem(MEM_PATH, say)
+    if not m.attach(pid):
+        say('붙기 실패 : ' + str(m.err))
+        return
+    try:
+        import pickle
+        regs = _gsnap_regions(m)
+        total = sum(len(b) for _, b in regs)
+        with open(GSNAP_PATH, 'wb') as f:
+            pickle.dump({'base': m.base, 'regs': regs}, f)
+        say('스냅샷 저장 : %s' % GSNAP_PATH)
+        say('  영역 %d개, %d KB. 이제 게임에서 버프를 켠 뒤 : python memprobe.py --gdiff' % (len(regs), total // 1024))
+    finally:
+        m.detach()
+
+
+def _classify(old, new, m):
+    #바뀐 4바이트를 사람이 알아보게 분류한다
+    def isheap(v):
+        return 0x00400000 < v < 0x7FFF0000
+    if old == 0 and isheap(new):
+        return '0 -> 힙포인터 0x%08X  (새 객체 생겼을 가능성 ↑)' % new
+    if isheap(new) and not isheap(old):
+        return '0x%08X -> 힙포인터 0x%08X' % (old, new)
+    if new < 0x10000 and old < 0x10000:
+        return '%d -> %d' % (old, new)
+    return '0x%08X -> 0x%08X' % (old, new)
+
+
+def dogdiff(pid):
+    if not os.path.exists(GSNAP_PATH):
+        say('스냅샷이 없다. 먼저 버프를 끈 상태로 : python memprobe.py --gsnap')
+        return
+    m = mr.Mem(MEM_PATH, say)
+    if not m.attach(pid):
+        say('붙기 실패 : ' + str(m.err))
+        return
+    try:
+        import pickle, struct as _st
+        with open(GSNAP_PATH, 'rb') as f:
+            snap = pickle.load(f)
+        if snap.get('base') != m.base:
+            say('경고: 스냅샷 때와 모듈 베이스가 다르다 (게임 재시작?). 다시 --gsnap 한다')
+            return
+        hits = []
+        for a, oldblob in snap['regs']:
+            newblob = mr.readmem(m.h, a, len(oldblob))
+            if newblob == None or len(newblob) != len(oldblob):
+                continue
+            for off in range(0, len(oldblob) - 3, 4):
+                o = _st.unpack_from('<I', oldblob, off)[0]
+                n = _st.unpack_from('<I', newblob, off)[0]
+                if o != n:
+                    hits.append((a + off, o, n))
+        #'새 힙포인터' 가 된 것부터 보여 준다 (버프 칸이 새로 달릴 때의 전형적 신호)
+        def rank(h):
+            o, n = h[1], h[2]
+            if o == 0 and 0x00400000 < n < 0x7FFF0000:
+                return 0
+            if 0x00400000 < n < 0x7FFF0000:
+                return 1
+            if n < 0x10000:
+                return 2
+            return 3
+        hits.sort(key=rank)
+        say('바뀐 4바이트 %d개 (모듈 전역 영역, RVA = 주소-베이스):' % len(hits))
+        say('  * 힙포인터로 바뀐 줄이 버프 목록/개수일 가능성이 높다. 그 RVA 를 mem.json 에 적어 확인한다')
+        for addr, o, n in hits[:120]:
+            say('  0x%08X (RVA 0x%06X)  %s' % (addr, addr - m.base, _classify(o, n, m)))
+        if len(hits) > 120:
+            say('  ... 외 %d개 (너무 많으면 버프만 바꾸고 다른 조작은 멈춘 뒤 다시 한다)' % (len(hits) - 120))
+        say()
+        say('  쓰는 법: (버프 끈 상태) --gsnap  ->  버프 켜기  ->  --gdiff.')
+        say('           반대로 (버프 켠 상태) --gsnap -> 버프 풀기 -> --gdiff 로 사라지는 값도 본다.')
+    finally:
+        m.detach()
+
+
 def _readcstr(m, ptr, n=48):
     if ptr == None or ptr < 0x10000:
         return None
@@ -2081,6 +2185,14 @@ def main():
 
     if has('--buffs'):
         dumpbuffs(pid)
+        return
+
+    if has('--gsnap'):
+        dogsnap(pid)
+        return
+
+    if has('--gdiff'):
+        dogdiff(pid)
         return
 
     if has('--char'):
