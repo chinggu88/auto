@@ -24,7 +24,10 @@
 #
 #혼자 돌리기 (Windows. 게임에서 엔터로 채팅칸을 열어 둔 채로) :
 #   python memchat.py               지금 입력칸의 글자와 길이/크기를 읽어 보여준다 (읽기만)
-#   python memchat.py ".버프"       그 글자를 입력칸에 써 넣는다. 화면에 보이면 엔터로 전송해 본다
+#   python memchat.py ".버프"       그 글자를 입력칸에 써 넣는다 (입력칸에 숫자를 글자 수만큼 미리 쳐 둬야 한다)
+#   python memchat.py ".버프" --auto   main.py 채팅버프와 똑같이 전부 알아서 한다 :
+#                                      3초 안에 게임 창을 클릭 -> 엔터 -> 111 -> 덮어쓰기 -> 엔터(전송)
+#                                      (채팅칸은 닫아 둔 채로 시작한다)
 #
 #같은 폴더에 memread.py, memcast.py (쓰기 함수를 빌려 쓴다) 가 있어야 한다
 
@@ -222,6 +225,26 @@ def main():
                 print('2바이트씩 : ' + ' '.join('%04X' % v for v in
                                               struct.unpack('<%dH' % (len(raw) // 2), raw)))
         args = [a for a in sys.argv[1:] if not a.startswith('--')]
+        if len(args) > 0 and '--auto' in sys.argv:
+            #main.dochatbuff 와 같은 순서. 키 입력은 채팅칸 열기 / 자리 만들기 / 전송뿐이다
+            import time
+            import pyautogui as gu
+            for i in (3, 2, 1):
+                print('게임 창을 클릭하세요 (채팅칸은 닫아 둔다)... ' + str(i))
+                time.sleep(1)
+            gu.press('enter')
+            time.sleep(0.3)
+            gu.press('1', presses=len(args[0]), interval=0.05)
+            time.sleep(0.3)
+            print('덮어쓰기 전 글자 : ' + repr(c.text()))
+            if c.put(args[0]):
+                print('덮어씀 : ' + repr(c.text()) + '  -> 엔터로 전송')
+            else:
+                print('실패 : ' + str(c.err) + '  -> 쳐 둔 숫자를 지우고 닫는다')
+                gu.press('backspace', presses=len(args[0]) + 2, interval=0.03)
+            time.sleep(0.3)
+            gu.press('enter')
+            return
         if len(args) == 0:
             print('써 넣으려면 : 채팅칸에 숫자를 글자 수만큼 쳐 두고 (".버프" 면 111)  python memchat.py ".버프"')
             return
