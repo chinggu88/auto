@@ -305,7 +305,7 @@ RECLICK_SEC    = 0.5    #클릭 간격(초). 클릭할 때마다 가장 가까�
 STUCK_REACH    = 2      #이 거리(타일) 안이면 붙어서 싸우는 중으로 보고 막힘 판정을 안 한다
 STUCK_SEC      = 4.0    #이만큼 진전이 없으면 막힌 것으로 본다
 SKIP_SEC       = 20.0   #막힌 몹을 대상에서 빼 두는 시간
-IDLE_TELE_SEC  = 20.0   #같은 대상을 잡은 채 이만큼 아무 변화(대상 바뀜/끝/텔)가 없으면 강제로 텔한다
+IDLE_TELE_SEC  = 5.0    #같은 대상을 잡은 채 이만큼 아무 변화(대상 바뀜/끝/텔)가 없으면 강제로 텔한다
 TELE_DELAY     = 0.5    #몹이 없다고 판단한 뒤 텔 키를 누르기까지 두는 시간(초)
 TELE_GAP       = 1.5    #텔(새로고침 키)을 누른 뒤 다음 텔까지 최소 간격(초). 이동 뒤 주변이 다시 읽힐 시간
 MEM_FAIL_LIMIT = 10     #엔티티 테이블을 연속으로 이만큼 못 읽으면 멈춘다 (화면으로 넘어가지 않는다)
@@ -346,7 +346,7 @@ FIGHT_READY = False   #소리 감시가 실제로 도는 중인지
                       #루프백을 못 열면 False 라서 게이트가 통째로 꺼지고 예전처럼 계속 서치한다
 
 TRIGGER ={'hunt': False, 'stop': False, 'transform': False, 'return': False, 'chatbuff': False}
-ORDER   = ['stop', 'return', 'transform', 'chatbuff']   #처리 우선순위 : 정지 > 귀환 > 변신 > 채팅버프 > 버프
+ORDER   = ['stop', 'return', 'chatbuff', 'transform']   #처리 우선순위 : 정지 > 귀환 > 채팅버프 > 버프 > 변신 (변신은 맨 뒤. 변신 뒤에는 버프 키가 씹힌다)
 
 PENDING      = {}                 #타이머 스레드가 채우는 실행 요청
 PENDING_LOCK = threading.Lock()
@@ -1376,20 +1376,40 @@ def readexp():
         return None
     return lv, exp, MEM.exppct(lv, exp)
 
-#사냥을 시작할 때와 끝날 때의 경험치를 비교해 한 줄로 만든다
+#사냥을 시작할 때와 끝날 때의 경험치를 비교해 한 줄로 만든다. 늘어난 수치만 간결하게
 def fmtexp(a, b):
     if a == None or b == None:
         return '경험치 : 못 읽음'
-    def one(v):
-        return 'LV ' + str(v[0]) + ' ' + ('?' if v[2] == None else '%.2f' % v[2]) + '%'
     gain = b[1] - a[1]
-    line = '경험치 : ' + ('+' if gain >= 0 else '') + '{:,}'.format(gain) + '  (' + one(a) + ' -> ' + one(b)
+    line = '경험치 : ' + ('+' if gain >= 0 else '') + '{:,}'.format(gain)
     if a[0] == b[0] and a[2] != None and b[2] != None:
         diff = b[2] - a[2]
-        line += ', ' + ('+' if diff >= 0 else '') + '%.2f' % diff + '%'
+        line += ' (' + ('+' if diff >= 0 else '') + '%.2f' % diff + '%)'
     elif b[0] > a[0]:
-        line += ', 레벨 ' + str(b[0] - a[0]) + ' 상승'
-    return line + ')'
+        line += ' (레벨 ' + str(b[0] - a[0]) + ' 상승)'
+    return line
+
+#소지 아데나. 인벤토리 창에서 이름이 '아데나' 인 항목의 개수. 못 읽으면 None
+ADENA_NAME = '아데나'
+def readadena():
+    if MEM == None:
+        return None
+    try:
+        items, win, count = MEM.item_table()
+    except Exception:
+        return None
+    for it in items:
+        nm = it.get('name')
+        if nm != None and nm.startswith(ADENA_NAME):
+            return it.get('count')
+    return None
+
+#시작과 끝의 아데나 차이를 한 줄로
+def fmtadena(a, b):
+    if a == None or b == None:
+        return '아데나 : 못 읽음'
+    diff = b - a
+    return '아데나 : ' + ('+' if diff >= 0 else '') + '{:,}'.format(diff)
 
 #사냥 루프 (매크로 스레드)
 #  가장 가까운 몹을 클릭하고, 그 몹이 죽거나 사라지면 다음으로 가까운 몹으로 넘어간다
@@ -1459,6 +1479,10 @@ def huntloop(p=None, atkvalue=None):
                         log('베르 ' + KEY_BER.upper() + '  (HP ' + str(int(pct)) + '% <= ' + str(BER_PCT) + '%)')
                         gu.press(KEY_BER, presses=1)
                         pressed['ber'] = now
+                        #베르를 썼으면 매크로를 끝낸다 (피가 그만큼 빠진 것이므로 더 돌지 않는다)
+                        log('베르 사용 - 정지')
+                        dostop()
+                        break
             if (KEY_IMMUNE != None and len(found['mobs']) >= IMMUNE_N
                     and now - pressed['immune'] >= IMMUNE_GAP):
                 log('이뮨 ' + KEY_IMMUNE.upper() + '  (주위 몹 ' + str(len(found['mobs']))
@@ -1777,7 +1801,7 @@ def applyconfig(seconds, roles, opts=None):
     TRIGGER = {'hunt': False, 'stop': False, 'transform': False, 'return': False, 'chatbuff': False}
     for n, key, s in BUFFS:
         TRIGGER[n] = False
-    ORDER = ['stop', 'return', 'transform', 'chatbuff'] + [n for n, key, s in BUFFS]
+    ORDER = ['stop', 'return', 'chatbuff'] + [n for n, key, s in BUFFS] + ['transform']   #변신은 맨 뒤
     with PENDING_LOCK:
         PENDING = {}
 
@@ -1785,7 +1809,8 @@ def applyconfig(seconds, roles, opts=None):
 #끝나면(정지/오류) GUI 가 스레드 종료를 보고 시작 버튼을 다시 켠다
 def runmacro():
     global ALIVE, HOTKEY, HUNT_START, MEM, CALIB, WATCH_FAIL, WATCH_SEEN, CASTER
-    expstart = None      #사냥을 시작할 때의 (레벨, 경험치, %)
+    expstart   = None    #사냥을 시작할 때의 (레벨, 경험치, %)
+    adenastart = None    #사냥을 시작할 때의 아데나
     try:
         ALIVE  = True
         HOTKEY = k.add_hotkey('tab', requeststop)
@@ -1865,6 +1890,7 @@ def runmacro():
 
         HUNT_START = time.time()
         expstart   = readexp()     #끝날 때 얼마나 올랐는지 찍으려고 잡아 둔다
+        adenastart = readadena()
         #시작 순서 : 버프 / 변신 요청이 쌓여 있으면 사냥 루프 첫 바퀴의 runpending 이 F2 -> 전부 누름 -> F1 로 처리한다
         #쌓인 것이 없어도 공격 페이지에서 시작하도록 F1 을 한 번 누른다 (감지만 모드에서는 키를 안 누른다)
         if not DETECT_ONLY:
@@ -1886,6 +1912,10 @@ def runmacro():
                 log(fmtexp(expstart, readexp()))      #사냥하는 동안 오른 경험치
             except Exception as e:
                 log('경험치 : 못 읽음 (' + str(e) + ')')
+            try:
+                log(fmtadena(adenastart, readadena()))   #사냥하는 동안 늘어난 아데나
+            except Exception as e:
+                log('아데나 : 못 읽음 (' + str(e) + ')')
             HUNT_START = None
         else:
             log('사냥 시작 전 종료')
