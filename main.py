@@ -346,7 +346,7 @@ FIGHT_READY = False   #소리 감시가 실제로 도는 중인지
                       #루프백을 못 열면 False 라서 게이트가 통째로 꺼지고 예전처럼 계속 서치한다
 
 TRIGGER ={'hunt': False, 'stop': False, 'transform': False, 'return': False, 'chatbuff': False}
-ORDER   = ['stop', 'return', 'chatbuff', 'transform']   #처리 우선순위 : 정지 > 귀환 > 채팅버프 > 버프 > 변신 (변신은 맨 뒤. 변신 뒤에는 버프 키가 씹힌다)
+ORDER   = ['stop', 'return', 'transform', 'chatbuff']   #처리 우선순위 : 정지 > 귀환 > 버프 > 변신 > 채팅버프 (채팅버프는 맨 뒤. 채팅 뒤에 누른 키는 채팅칸에 먹혀 안 들어간다)
 
 PENDING      = {}                 #타이머 스레드가 채우는 실행 요청
 PENDING_LOCK = threading.Lock()
@@ -634,7 +634,12 @@ def runpending():
             doreturn()            #안에서 dostop() 을 부른다
             return True
         if name == 'chatbuff':
-            dochatbuff()          #채팅은 페이지와 상관없다
+            #채팅을 보낸 뒤에는 입력칸에 포커스가 남아 다음 키가 씹힌다. 그래서 ORDER 의 맨 뒤이고,
+            #F2 페이지였다면 채팅 전에 F1 로 먼저 돌아온다 (채팅 뒤의 F1 은 안 먹을 수 있다)
+            if onbuff:
+                setpage(PAGE_ATTACK)
+                onbuff = False
+            dochatbuff()
         else:
             if not onbuff:
                 setpage(PAGE_BUFF)
@@ -1801,7 +1806,7 @@ def applyconfig(seconds, roles, opts=None):
     TRIGGER = {'hunt': False, 'stop': False, 'transform': False, 'return': False, 'chatbuff': False}
     for n, key, s in BUFFS:
         TRIGGER[n] = False
-    ORDER = ['stop', 'return', 'chatbuff'] + [n for n, key, s in BUFFS] + ['transform']   #변신은 맨 뒤
+    ORDER = ['stop', 'return'] + [n for n, key, s in BUFFS] + ['transform', 'chatbuff']   #채팅버프는 맨 뒤 (채팅 뒤의 키가 씹힌다)
     with PENDING_LOCK:
         PENDING = {}
 
