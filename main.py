@@ -228,12 +228,23 @@ DEFAULT_ROLES = {
     'return':    'f8',
     'refresh':   'f5',
     'transform': 'f7',
-    'skill':     'f6',    #공격스킬 - 공격 중에만 쿨타임이 돌고, 대상을 치고 나서 누른다
     'heal':      None,    #힐 - HP 가 정한 % 이하로 내려가면 누른다
     'immune':    None,    #이뮨 - 주위 몹이 정한 수 이상이면 누른다
     'ber':       None,    #베르 - 힐과 같은 방식 (HP % 는 따로 정한다)
 }
-ROLE_IDS = ['return', 'refresh', 'transform', 'skill', 'heal', 'immune', 'ber']   #config.json 에 저장하는 역할 목록
+ROLE_IDS = ['return', 'refresh', 'transform', 'heal', 'immune', 'ber']   #config.json 에 저장하는 역할 목록
+#(예전의 'skill' 역할은 공격 탭으로 옮겼다. 옛 config.json 의 roles.skill 은 불러올 때 공격 키 1번으로 바꾼다)
+
+#공격 키 : 대상을 클릭한 뒤 조건이 맞으면 누르는 키. 공격 탭에서 최대 ATTACK_MAX 개까지 둔다
+#  key   : f5~f12 또는 None (안 씀)
+#  delay : 다시 누르기까지의 간격(초)
+#  dist  : 대상과의 거리(타일)가 이 값 이하일 때만 누른다
+#버프 / 변신 / 귀환 / 채팅버프(runpending) 가 먼저 처리되고 나서야 공격 키 차례가 온다
+ATTACK_MAX  = 4
+DIST_CHOICES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]     #공격 키의 몹과의 거리 드롭다운
+def defaultattacks():
+    #기본 한 개 : F6, 4초, 거리 3 (예전 공격스킬 기본값과 같다). 매번 새 리스트를 만든다
+    return [{'key': 'f6', 'delay': 4.0, 'dist': 3}]
 #옵션 기본값. 항목이 계속 늘어서 dict 하나로 묶는다 (config.json 에도 이 키 그대로 들어간다)
 DEFAULT_OPTS = {
     'attack': True,     #공격(마우스 서치 + 칼질) 사용 여부
@@ -245,6 +256,7 @@ DEFAULT_OPTS = {
     'heal_pct': 50,     #HP 가 이 % 이하면 힐 키
     'ber_pct':  50,     #HP 가 이 % 이하면 베르 키
     'immune_n': 4,      #주위 몹이 이 수 이상이면 이뮨 키
+    'attacks':  None,   #공격 키 목록 [{'key','delay','dist'}, ...]. None 이면 defaultattacks()
 }
 PCT_CHOICES = [10, 20, 30, 40, 50, 60, 70, 80, 90]    #힐 / 베르 HP % 드롭다운
 MOB_CHOICES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]         #이뮨 몹 수 드롭다운
@@ -256,8 +268,9 @@ BUFFKEY = {}      # 트리거명 -> 키
 KEY_REFRESH        = None   #사냥 헛돌 때 새로고침
 KEY_TRANSFORM      = None   #변신
 KEY_RETURN         = None   #귀환
-KEY_SKILL          = None   #공격스킬. 대상을 클릭한 뒤 / 칼질 중에 쿨타임이 차 있으면 누른다
-SKILL_COOL         = 0      #공격스킬 쿨타임(초). 주기 칸 값. 0 이면 끔
+ATTACKS            = []     #공격 키 [(키, 딜레이(초), 거리(타일)), ...]  공격 탭 순서 = 우선순위
+KEY_SKILL          = None   #(호환) 공격 키 1번의 키. pit.py 가 아직 이 이름을 쓴다
+SKILL_COOL         = 0      #(호환) 공격 키 1번의 딜레이(초). 0 이면 끔
                             #타이머가 아니라 사냥 루프 안에서 '공격 중인 시간' 만 누적해서 잰다
                             #-> 버프/변신으로 공격이 멈춘 동안, 공격을 껐을 때는 쿨타임도 같이 멈춘다
 TRANSFORM_INTERVAL = 0      #변신 주기(초). 0 이면 변신 안 함
@@ -276,7 +289,7 @@ DETECT_ONLY        = DEFAULT_OPTS['detect'] #감지만 (클릭/귀환 안 함)
 #몹의 화면 좌표는 보정 파일(게임 좌표 차이 -> 화면 픽셀 아핀 변환)로 구한다
 #  scarecrow_calib.json (postracker.py 의 허수아비 보정) > calib.json (turnundead_mem.py 의 보정)
 HUNT_POLL      = 0.1    #사냥 루프 한 바퀴 간격(초)
-RECLICK_SEC    = 1.0    #클릭 간격(초). 클릭할 때마다 가장 가까운 몹을 다시 고른다
+RECLICK_SEC    = 0.5    #클릭 간격(초). 클릭할 때마다 가장 가까운 몹을 다시 고른다
 #벽 너머 몹 걸러내기 : 지형(벽) 자체는 메모리에서 못 읽는다. 대신 '다가가지 못하는 몹' 을 본다.
 #대상이 STUCK_REACH 타일보다 먼데 STUCK_SEC 동안 내 좌표도 안 바뀌고 거리도 안 줄면
 #막힌 것으로 보고 SKIP_SEC 동안 그 몹을 대상에서 뺀다. 남은 몹이 없으면 평소처럼 텔한다
@@ -284,7 +297,7 @@ STUCK_REACH    = 2      #이 거리(타일) 안이면 붙어서 싸우는 중으
 STUCK_SEC      = 4.0    #이만큼 진전이 없으면 막힌 것으로 본다
 SKIP_SEC       = 20.0   #막힌 몹을 대상에서 빼 두는 시간
 IDLE_TELE_SEC  = 20.0   #같은 대상을 잡은 채 이만큼 아무 변화(대상 바뀜/끝/텔)가 없으면 강제로 텔한다
-TELE_DELAY     = 0.1    #몹이 없다고 판단한 뒤 텔 키를 누르기까지 두는 시간(초)
+TELE_DELAY     = 0.3    #몹이 없다고 판단한 뒤 텔 키를 누르기까지 두는 시간(초)
 TELE_GAP       = 1.5    #텔(새로고침 키)을 누른 뒤 다음 텔까지 최소 간격(초). 이동 뒤 주변이 다시 읽힐 시간
 MEM_FAIL_LIMIT = 10     #엔티티 테이블을 연속으로 이만큼 못 읽으면 멈춘다 (화면으로 넘어가지 않는다)
 CALIB_FILES    = ['scarecrow_calib.json', 'calib.json']   #앞엣것 우선
@@ -1366,19 +1379,17 @@ def huntloop(p=None, atkvalue=None):
     moved   = time.perf_counter()   #사냥에 마지막으로 변화가 있던 시각 (대상 바뀜 / 텔)
     stuck   = {'id': None, 'best': 0, 'pos': None, 't': 0.0}   #지금 대상에게 다가가고 있는지
     hpfail  = 0        #HP 를 연속으로 못 읽은 횟수
-
-    skillon  = ATTACK_ON and (not DETECT_ONLY) and KEY_SKILL != None and SKILL_COOL > 0
-    skillsec = float(SKILL_COOL)
-    tick     = time.perf_counter()
+    atks    = [a for a in ATTACKS if a[0] != None and a[1] > 0]   #쓸 수 있는 공격 키만
+    apress  = [0.0] * len(atks)      #공격 키를 마지막으로 누른 시각
 
     log('사냥 : 탐지 거리 ' + str(HUNT_DIST) + '타일, 가까운 순')
-    if skillon:
-        log('공격스킬 : ' + KEY_SKILL.upper() + '  쿨타임 ' + str(SKILL_COOL) + '초 (대상이 있을 때만 흐름)')
+    for i, (akey, adelay, adist) in enumerate(atks):
+        log('공격 키 ' + str(i + 1) + ' : ' + akey.upper() + '  딜레이 ' + str(adelay)
+            + '초  거리 ' + str(adist) + '타일 이하')
 
     settrigger('hunt')
     while ALIVE:
-        if runpending():       #버프/변신/귀환이 먼저
-            tick = time.perf_counter()
+        if runpending():       #버프/변신/귀환이 먼저 (공격 키보다 우선)
             continue
 
         found = scanents()
@@ -1471,7 +1482,6 @@ def huntloop(p=None, atkvalue=None):
                 gu.press(KEY_REFRESH, presses=1)
                 teled = time.perf_counter()
                 moved = teled
-            tick = now       #대상이 없는 시간은 공격이 아니므로 쿨타임에서 뺀다
             time.sleep(HUNT_POLL)
             continue
 
@@ -1517,9 +1527,6 @@ def huntloop(p=None, atkvalue=None):
             clicked = 0.0
             continue
 
-        skillsec += now - tick
-        tick      = now
-
         if now - clicked >= RECLICK_SEC:
             #칼 모양 확인 없이 바로 클릭한다
             # _movefast(parkpos[0], parkpos[1])      #커서 모양 초기화
@@ -1534,10 +1541,15 @@ def huntloop(p=None, atkvalue=None):
             gu.click()
             clicked = time.perf_counter()
 
-        if skillon and skillsec >= SKILL_COOL:
-            log('스킬 ' + KEY_SKILL.upper())
-            gu.press(KEY_SKILL, presses=1)
-            skillsec = 0.0
+        #공격 키 : 대상과의 거리가 정한 값 이하이고 딜레이가 지났으면 누른다
+        #한 바퀴에 하나만 누른다 (앞 번호가 먼저). 버프 / 변신 / 귀환은 바퀴 머리의 runpending 이 먼저 처리한다
+        now = time.perf_counter()
+        for i, (akey, adelay, adist) in enumerate(atks):
+            if dist <= adist and now - apress[i] >= adelay:
+                log('공격 키 ' + akey.upper() + '  (거리 ' + str(dist) + ' <= ' + str(adist) + ')')
+                gu.press(akey, presses=1)
+                apress[i] = time.perf_counter()
+                break
         time.sleep(HUNT_POLL)
 
 #=====================================================================
@@ -1579,6 +1591,42 @@ def loadconfig(path=None):
         roles[rid] = v if (v in FKEYS and v not in used) else None
         if roles[rid] != None:
             used.add(roles[rid])
+
+    #공격 키. 역할과 겹치는 키, 앞 줄과 겹치는 키는 '안 씀' 으로 돌린다
+    attacks = []
+    rawatk  = data.get('attacks')
+    if not isinstance(rawatk, list):
+        #옛 설정 : roles.skill + 그 키의 주기 칸 -> 공격 키 1번
+        old = raw.get('skill')
+        if old in FKEYS and old not in used:
+            rawatk = [{'key': old, 'delay': seconds.get(old, 0), 'dist': defaultattacks()[0]['dist']}]
+        else:
+            rawatk = defaultattacks()
+    for item in rawatk[:ATTACK_MAX]:
+        if not isinstance(item, dict):
+            continue
+        a = dict(defaultattacks()[0])
+        key = item.get('key')
+        a['key'] = key if (key in FKEYS and key not in used) else None
+        if a['key'] != None:
+            used.add(a['key'])
+        try:
+            v = float(item.get('delay', a['delay']))
+            if v >= 0:
+                a['delay'] = v
+        except (TypeError, ValueError):
+            pass
+        try:
+            v = int(item.get('dist', a['dist']))
+            if v in DIST_CHOICES:
+                a['dist'] = v
+        except (TypeError, ValueError):
+            pass
+        attacks.append(a)
+    if len(attacks) == 0:
+        attacks = defaultattacks()
+        attacks[0]['key'] = None
+    opts['attacks'] = attacks
 
     #옵션은 아는 키만, 값이 이상하면 기본값을 유지한다
     if isinstance(data.get('attack'), bool):
@@ -1623,7 +1671,11 @@ def saveconfig(seconds, roles, opts, path=None):
             'detect':  bool(opts.get('detect', DEFAULT_OPTS['detect'])),
             'heal_pct': int(opts.get('heal_pct', DEFAULT_OPTS['heal_pct'])),
             'ber_pct':  int(opts.get('ber_pct',  DEFAULT_OPTS['ber_pct'])),
-            'immune_n': int(opts.get('immune_n', DEFAULT_OPTS['immune_n']))}
+            'immune_n': int(opts.get('immune_n', DEFAULT_OPTS['immune_n'])),
+            'attacks':  [{'key':   (a.get('key') if a.get('key') in FKEYS else None),
+                          'delay': float(a.get('delay', 0)),
+                          'dist':  int(a.get('dist', defaultattacks()[0]['dist']))}
+                         for a in (opts.get('attacks') or defaultattacks())[:ATTACK_MAX]]}
     try:
         f = open(path, 'w', encoding='utf-8')
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -1637,10 +1689,10 @@ def saveconfig(seconds, roles, opts, path=None):
 # GUI 가 넘긴 설정을 전역에 반영
 #=====================================================================
 def applyconfig(seconds, roles, opts=None):
-    #seconds : {키 -> 초},  roles : {'return'/'refresh'/'transform'/'skill' -> 키 or None}
-    #opts    : {'attack': bool, 'range': 'near'/'far', 'nohit': int, 'sound': bool}
+    #seconds : {키 -> 초},  roles : {'return'/'refresh'/'transform'/'heal'/'immune'/'ber' -> 키 or None}
+    #opts    : {'attack': bool, 'range': 'near'/'far', 'nohit': int, 'sound': bool, ..., 'attacks': [...]}
     global BUFFS, BUFFKEY, TRIGGER, ORDER, PENDING
-    global KEY_RETURN, KEY_REFRESH, KEY_TRANSFORM, TRANSFORM_INTERVAL, KEY_SKILL, SKILL_COOL
+    global KEY_RETURN, KEY_REFRESH, KEY_TRANSFORM, TRANSFORM_INTERVAL, KEY_SKILL, SKILL_COOL, ATTACKS
     global ATTACK_ON, SCAN_ROUND, NOHIT_LIMIT, SOUND_ON, HUNT_DIST, DETECT_ONLY
     global KEY_HEAL, KEY_BER, KEY_IMMUNE, HEAL_PCT, BER_PCT, IMMUNE_N, HEAL_GAP, BER_GAP, IMMUNE_GAP
 
@@ -1655,7 +1707,17 @@ def applyconfig(seconds, roles, opts=None):
     KEY_RETURN    = roles.get('return')
     KEY_REFRESH   = roles.get('refresh')
     KEY_TRANSFORM = roles.get('transform')
-    KEY_SKILL     = roles.get('skill')
+
+    #공격 키. 역할 키와 겹치면 뺀다 (GUI 가 막지만 파일을 손으로 고쳤을 수 있다)
+    taken   = set(v for v in roles.values() if v)
+    ATTACKS = []
+    for a in (opts.get('attacks') or defaultattacks())[:ATTACK_MAX]:
+        key = a.get('key')
+        if key in FKEYS and key not in taken:
+            ATTACKS.append((key, float(a.get('delay', 0)), int(a.get('dist', defaultattacks()[0]['dist']))))
+            taken.add(key)
+    KEY_SKILL  = ATTACKS[0][0] if ATTACKS else None     #(호환) pit.py 용
+    SKILL_COOL = ATTACKS[0][1] if ATTACKS else 0
 
     KEY_HEAL      = roles.get('heal')
     KEY_BER       = roles.get('ber')
@@ -1669,10 +1731,8 @@ def applyconfig(seconds, roles, opts=None):
     IMMUNE_GAP    = float(seconds.get(KEY_IMMUNE, 0) or GAP_DEFAULT['immune']) if KEY_IMMUNE else GAP_DEFAULT['immune']
 
     TRANSFORM_INTERVAL = seconds.get(KEY_TRANSFORM, 0) if KEY_TRANSFORM else 0
-    SKILL_COOL         = seconds.get(KEY_SKILL, 0) if KEY_SKILL else 0
 
-    #역할이 지정된 키는 버프 슬롯에서 뺀다
-    taken = set(v for v in roles.values() if v)
+    #역할이나 공격 키로 지정된 키는 버프 슬롯에서 뺀다 (taken 에 둘 다 들어 있다)
     BUFFS = []
     for i, key in enumerate(FKEYS):
         if key in taken:
@@ -1811,9 +1871,13 @@ def runmacro():
 #=====================================================================
 # GUI
 #=====================================================================
-ROLES = [('return', '귀환'), ('refresh', '새로고침'), ('transform', '변신'), ('skill', '공격스킬'),
+ROLES = [('return', '귀환'), ('refresh', '새로고침'), ('transform', '변신'),
          ('heal', '힐'), ('immune', '이뮨'), ('ber', '베르')]
-NOTE_COL = 2 + len(ROLES)   #역할 체크박스 다음 칸 = 주기 설명
+NOTE_COL = 2                #버프 표에서 주기 다음 칸 = 설명
+KEY_NONE = '없음'            #키 드롭다운의 '안 씀'
+ROLE_HINT = {'return':  '피 부족 경고 / 다른 캐릭터가 보이면',
+             'refresh': '주변에 몹이 없으면 바로 (텔)'}
+KEY_CHOICES = [KEY_NONE] + [key.upper() for key in FKEYS]
 
 class App:
     def __init__(self, root):
@@ -1822,16 +1886,34 @@ class App:
         self.sec     = {}    #키 -> StringVar (주기)
         self.entry   = {}    #키 -> Entry
         self.note    = {}    #키 -> Label (주기 설명)
-        self.role    = {}    #(키, 역할) -> BooleanVar
-        self.check   = {}    #(키, 역할) -> Checkbutton
+        self.rolekey = {}    #역할 -> StringVar (KEY_NONE 또는 'F5'..'F12')  공격 탭
+        self.rolesec = {}    #역할 -> StringVar (변신 주기 / 재사용 간격)  그 키의 seconds 에 들어간다
+        self.rolewid = {}    #역할 -> 잠글 위젯들
         self.thread  = None  #매크로 스레드. 끝나면 UI 를 다시 연다
+        self.atkkey   = []   #공격 줄 -> StringVar (KEY_NONE 또는 'F5'..'F12')
+        self.atkdelay = []   #공격 줄 -> StringVar (딜레이 초)
+        self.atkdist  = []   #공격 줄 -> StringVar (몹과의 거리 타일)
+        self.atkwid   = []   #공격 줄 -> (키 콤보, 딜레이 Entry, 거리 콤보)
+        self.atkrow   = []   #공격 줄 -> 그 줄의 위젯들 (보이기/숨기기용)
+        self.atkn     = 1    #보이는 공격 줄 수 (기본 한 개)
 
         root.title('사냥 매크로')
         root.protocol('WM_DELETE_WINDOW', lambda: os._exit(0))
 
+        #--- 탭 : 메인 / 버프 / 공격 ---
+        #설정 저장 / 시작 버튼 / 로그는 탭 밖(아래)에 둬서 어느 탭에서나 보인다
+        self.nb = ttk.Notebook(root)
+        self.nb.pack(fill='x', padx=10, pady=(10, 0))
+        maintab = ttk.Frame(self.nb)
+        bufftab = ttk.Frame(self.nb)
+        atktab  = ttk.Frame(self.nb)
+        self.nb.add(maintab, text='  메인  ')
+        self.nb.add(bufftab, text='  버프  ')
+        self.nb.add(atktab,  text='  공격  ')
+
         #--- 내 캐릭터 정보 (실시간) ---
         #매크로가 안 돌 때도 보이도록 GUI 가 읽기 전용으로 따로 붙어서 읽는다
-        infobox = ttk.LabelFrame(root, text='내 캐릭터')
+        infobox = ttk.LabelFrame(maintab, text='내 캐릭터')
         infobox.pack(fill='x', padx=10, pady=(10, 0))
         self.infovar = tk.StringVar(value='게임에 붙는 중...')
         ttk.Label(infobox, textvariable=self.infovar, justify='left',
@@ -1840,15 +1922,13 @@ class App:
         self.iretry = 0       #다시 붙기까지 남은 갱신 횟수
         self.ifail  = 0       #연속으로 못 읽은 횟수
 
-        #--- 키 설정 표 ---
-        box = ttk.LabelFrame(root, text='버프 키 설정 (f5 ~ f12)')
+        #--- 키 설정 표 (버프 탭) ---
+        box = ttk.LabelFrame(bufftab, text='버프 키 설정 (f5 ~ f12)')
         box.pack(fill='x', padx=10, pady=(10, 4))
 
         ttk.Label(box, text='키',      width=6,  anchor='center').grid(row=0, column=0, padx=4, pady=4)
         ttk.Label(box, text='주기(초)', width=10, anchor='center').grid(row=0, column=1, padx=4, pady=4)
-        for c, (rid, label) in enumerate(ROLES):
-            ttk.Label(box, text=label, width=7, anchor='center').grid(row=0, column=2 + c, padx=2, pady=4)
-        ttk.Label(box, text='', width=14).grid(row=0, column=NOTE_COL, padx=4)
+        ttk.Label(box, text='', width=24).grid(row=0, column=NOTE_COL, padx=4)
 
         for r, key in enumerate(FKEYS, start=1):
             ttk.Label(box, text=key.upper(), width=6, anchor='center').grid(row=r, column=0, padx=4, pady=2)
@@ -1859,25 +1939,21 @@ class App:
             ent.grid(row=r, column=1, padx=4, pady=2)
             self.entry[key] = ent
 
-            for c, (rid, label) in enumerate(ROLES):
-                bv = tk.BooleanVar(value=False)
-                self.role[(key, rid)] = bv
-                cb = ttk.Checkbutton(box, variable=bv,
-                                     command=lambda kk=key, rr=rid: self.onrole(kk, rr))
-                cb.grid(row=r, column=2 + c, padx=2, pady=2)
-                self.check[(key, rid)] = cb
-
-            nl = ttk.Label(box, text='버프 주기', width=20, foreground='#555')
+            nl = ttk.Label(box, text='버프 주기', width=24, foreground='#555')
             nl.grid(row=r, column=NOTE_COL, padx=4, pady=2, sticky='w')
             self.note[key] = nl
 
-        ttk.Label(root, foreground='#555',
-                  text='역할은 각각 키 하나에만 지정됩니다. 변신은 주기, 공격스킬은 쿨타임, '
-                       '힐 / 이뮨 / 베르는 재사용 간격으로 주기 칸을 씁니다.').pack(anchor='w', padx=12)
+        ttk.Label(bufftab, foreground='#555',
+                  text='주기(초)마다 그 키를 누릅니다. 0 이면 안 씁니다.\n'
+                       '공격 탭에서 공격 키나 역할 키로 고른 키는 여기서 버프로 쓰지 않습니다 (주기 칸이 잠깁니다).'
+                  ).pack(anchor='w', padx=12, pady=(0, 8))
 
-        #--- 동작 설정 ---
-        optbox = ttk.LabelFrame(root, text='동작')
-        optbox.pack(fill='x', padx=10, pady=(8, 0))
+        #--- 공격 키 (공격 탭) ---
+        self._buildattack(atktab)
+
+        #--- 동작 설정 (메인 탭) ---
+        optbox = ttk.LabelFrame(maintab, text='동작')
+        optbox.pack(fill='x', padx=10, pady=(8, 10))
         self.attack = tk.BooleanVar(value=DEFAULT_OPTS['attack'])
         self.atkchk = ttk.Checkbutton(optbox, text='공격 사용 (가까운 몹부터 클릭)',
                                       variable=self.attack)
@@ -1895,29 +1971,6 @@ class App:
         self.dsent = ttk.Entry(dsrow, textvariable=self.dist, width=6, justify='center')
         self.dsent.pack(side='left')
         ttk.Label(dsrow, foreground='#555', text='  타일 안의 몹만 대상으로 삼습니다').pack(side='left')
-        #--- 힐 / 베르 / 이뮨 조건 ---
-        svrow = ttk.Frame(optbox)
-        svrow.pack(fill='x', padx=6, pady=(6, 0))
-        self.healpct = tk.StringVar(value=str(DEFAULT_OPTS['heal_pct']))
-        self.berpct  = tk.StringVar(value=str(DEFAULT_OPTS['ber_pct']))
-        self.immunen = tk.StringVar(value=str(DEFAULT_OPTS['immune_n']))
-        ttk.Label(svrow, text='힐  HP').pack(side='left')
-        self.healbox = ttk.Combobox(svrow, textvariable=self.healpct, width=4, state='readonly',
-                                    values=[str(v) for v in PCT_CHOICES])
-        self.healbox.pack(side='left', padx=(4, 0))
-        ttk.Label(svrow, text='% 이하      베르  HP').pack(side='left')
-        self.berbox = ttk.Combobox(svrow, textvariable=self.berpct, width=4, state='readonly',
-                                   values=[str(v) for v in PCT_CHOICES])
-        self.berbox.pack(side='left', padx=(4, 0))
-        ttk.Label(svrow, text='% 이하      이뮨  주위 몹').pack(side='left')
-        self.immbox = ttk.Combobox(svrow, textvariable=self.immunen, width=4, state='readonly',
-                                   values=[str(v) for v in MOB_CHOICES])
-        self.immbox.pack(side='left', padx=(4, 0))
-        ttk.Label(svrow, text='마리 이상').pack(side='left')
-        ttk.Label(optbox, foreground='#555',
-                  text='위 표에서 힐 / 이뮨 / 베르 키를 지정해야 동작합니다. 주위 몹은 탐지 거리 안의 살아 있는 몹 수입니다.'
-                  ).pack(anchor='w', padx=6, pady=(2, 0))
-
         self.detect = tk.BooleanVar(value=DEFAULT_OPTS['detect'])
         self.dtchk  = ttk.Checkbutton(optbox, text='감지만 (클릭 / 귀환 없이 로그만 - 확인용)',
                                       variable=self.detect)
@@ -1961,7 +2014,7 @@ class App:
                        '장치를 못 열면 자동으로 꺼지고 예전처럼 계속 서치합니다.'
                   ).pack(anchor='w', padx=6, pady=(0, 4))
 
-        #--- 저장 / 불러오기 / 기본값 ---
+        #--- 저장 / 불러오기 / 기본값 (탭 아래, 모든 탭 공통) ---
         cfgbar = ttk.Frame(root)
         cfgbar.pack(fill='x', padx=10, pady=(6, 0))
         self.savebtn = ttk.Button(cfgbar, text='설정 저장',   command=self.onsave)
@@ -1990,6 +2043,161 @@ class App:
         self.drainlog()
         self.pollinfo()
         log(('설정 불러옴 : ' + CONFIG_PATH) if found else '저장된 설정 없음 - 기본 셋팅 사용')
+
+    #--- 공격 탭 ---
+
+    #공격 키 표. ATTACK_MAX 줄을 다 만들어 두고 atkn 개만 보인다
+    def _buildattack(self, parent):
+        box = ttk.LabelFrame(parent, text='공격 키 (최대 %d개)' % ATTACK_MAX)
+        box.pack(fill='x', padx=10, pady=(10, 4))
+
+        ttk.Label(box, text='번호',  width=6,  anchor='center').grid(row=0, column=0, padx=4, pady=4)
+        ttk.Label(box, text='키',    width=8,  anchor='center').grid(row=0, column=1, padx=4, pady=4)
+        ttk.Label(box, text='딜레이(초)', width=10, anchor='center').grid(row=0, column=2, padx=4, pady=4)
+        ttk.Label(box, text='몹과의 거리(타일)', width=16, anchor='center').grid(row=0, column=3, padx=4, pady=4)
+
+        d0 = defaultattacks()[0]
+        for i in range(ATTACK_MAX):
+            kv = tk.StringVar(value=KEY_NONE)
+            dv = tk.StringVar(value=str(d0['delay']))
+            sv = tk.StringVar(value=str(d0['dist']))
+            self.atkkey.append(kv)
+            self.atkdelay.append(dv)
+            self.atkdist.append(sv)
+
+            num = ttk.Label(box, text=str(i + 1), width=6, anchor='center')
+            num.grid(row=i + 1, column=0, padx=4, pady=2)
+            kb = ttk.Combobox(box, textvariable=kv, width=6, state='readonly', values=KEY_CHOICES)
+            kb.grid(row=i + 1, column=1, padx=4, pady=2)
+            kb.bind('<<ComboboxSelected>>', lambda e, ii=i: self.onatkkey(ii))
+            de = ttk.Entry(box, textvariable=dv, width=10, justify='center')
+            de.grid(row=i + 1, column=2, padx=4, pady=2)
+            sb = ttk.Combobox(box, textvariable=sv, width=6, state='readonly',
+                              values=[str(v) for v in DIST_CHOICES])
+            sb.grid(row=i + 1, column=3, padx=4, pady=2)
+            self.atkwid.append((kb, de, sb))
+            self.atkrow.append((num, kb, de, sb))
+
+        btnrow = ttk.Frame(box)
+        btnrow.grid(row=ATTACK_MAX + 1, column=0, columnspan=4, sticky='w', padx=4, pady=(4, 6))
+        self.atkadd = ttk.Button(btnrow, text='+ 추가', width=8, command=self.onatkadd)
+        self.atkdel = ttk.Button(btnrow, text='- 제거', width=8, command=self.onatkdel)
+        self.atkadd.pack(side='left', padx=(0, 4))
+        self.atkdel.pack(side='left')
+
+        ttk.Label(parent, foreground='#555',
+                  text='대상을 클릭한 뒤, 대상과의 거리가 정한 타일 이하이고 딜레이가 지났으면 그 키를 누릅니다.\n'
+                       '버프 / 변신 / 귀환 / 채팅버프가 먼저 처리된 뒤에 눌리고, 윗줄이 먼저입니다. 딜레이 0 은 안 씀.'
+                  ).pack(anchor='w', padx=12, pady=(0, 4))
+        self.showatk()
+
+        #--- 역할 키 : 귀환 / 새로고침 / 변신 / 힐 / 이뮨 / 베르 ---
+        rbox = ttk.LabelFrame(parent, text='역할 키')
+        rbox.pack(fill='x', padx=10, pady=(4, 4))
+        self.healpct = tk.StringVar(value=str(DEFAULT_OPTS['heal_pct']))
+        self.berpct  = tk.StringVar(value=str(DEFAULT_OPTS['ber_pct']))
+        self.immunen = tk.StringVar(value=str(DEFAULT_OPTS['immune_n']))
+        for r, (rid, label) in enumerate(ROLES):
+            kv = tk.StringVar(value=KEY_NONE)
+            self.rolekey[rid] = kv
+            ttk.Label(rbox, text=label, width=8, anchor='e').grid(row=r, column=0, padx=4, pady=2, sticky='e')
+            kb = ttk.Combobox(rbox, textvariable=kv, width=6, state='readonly', values=KEY_CHOICES)
+            kb.grid(row=r, column=1, padx=4, pady=2)
+            kb.bind('<<ComboboxSelected>>', lambda e, rr=rid: self.onrolekey(rr))
+            wids = [kb]
+            extra = ttk.Frame(rbox)
+            extra.grid(row=r, column=2, padx=4, pady=2, sticky='w')
+            if rid in ROLE_HINT:
+                ttk.Label(extra, text=ROLE_HINT[rid], foreground='#555').pack(side='left')
+            else:
+                if rid == 'heal' or rid == 'ber':
+                    var = self.healpct if rid == 'heal' else self.berpct
+                    ttk.Label(extra, text='HP').pack(side='left')
+                    cb = ttk.Combobox(extra, textvariable=var, width=4, state='readonly',
+                                      values=[str(v) for v in PCT_CHOICES])
+                    cb.pack(side='left', padx=(4, 0))
+                    ttk.Label(extra, text='% 이하').pack(side='left', padx=(2, 10))
+                    wids.append(cb)
+                elif rid == 'immune':
+                    ttk.Label(extra, text='주위 몹').pack(side='left')
+                    cb = ttk.Combobox(extra, textvariable=self.immunen, width=4, state='readonly',
+                                      values=[str(v) for v in MOB_CHOICES])
+                    cb.pack(side='left', padx=(4, 0))
+                    ttk.Label(extra, text='마리 이상').pack(side='left', padx=(2, 10))
+                    wids.append(cb)
+                sv = tk.StringVar(value='0')
+                self.rolesec[rid] = sv
+                ttk.Label(extra, text='주기' if rid == 'transform' else '재사용 간격').pack(side='left')
+                se = ttk.Entry(extra, textvariable=sv, width=7, justify='center')
+                se.pack(side='left', padx=(4, 0))
+                ttk.Label(extra, text=('초' if rid == 'transform'
+                                       else '초  (0 = %d초)' % GAP_DEFAULT[rid]),
+                          foreground='#555').pack(side='left', padx=(2, 0))
+                wids.append(se)
+            self.rolewid[rid] = wids
+        ttk.Label(parent, foreground='#555',
+                  text='역할은 각각 키 하나에만 지정됩니다. 여기서 고른 키는 버프 탭에서 버프로 쓰지 않습니다.\n'
+                       '힐 / 이뮨은 내 캐릭터를 대상으로 시전하고, 주위 몹은 탐지 거리 안의 살아 있는 몹 수입니다.'
+                  ).pack(anchor='w', padx=12, pady=(0, 8))
+
+    #atkn 개의 줄만 보이게 한다
+    def showatk(self):
+        for i, row in enumerate(self.atkrow):
+            for w in row:
+                if i < self.atkn:
+                    w.grid()
+                else:
+                    w.grid_remove()
+        self.atkadd.configure(state='normal' if self.atkn < ATTACK_MAX else 'disabled')
+        self.atkdel.configure(state='normal' if self.atkn > 1 else 'disabled')
+
+    def onatkadd(self):
+        if self.atkn < ATTACK_MAX:
+            self.atkn += 1
+            self.showatk()
+
+    def onatkdel(self):
+        if self.atkn > 1:
+            self.atkn -= 1
+            self.atkkey[self.atkn].set(KEY_NONE)      #숨긴 줄은 안 쓰는 것으로
+            self.showatk()
+            self.refreshrows()
+
+    #i 번째 공격 줄의 키 (소문자) 또는 None
+    def atkkeyof(self, i):
+        v = self.atkkey[i].get()
+        return v.lower() if (i < self.atkn and v != KEY_NONE) else None
+
+    #key 를 쓰는 공격 줄 번호(1부터) 또는 None
+    def atkrowof(self, key):
+        for i in range(self.atkn):
+            if self.atkkeyof(i) == key:
+                return i + 1
+        return None
+
+    #공격 줄의 키가 바뀌면 같은 키를 쓰는 다른 줄과 버프 탭의 역할을 푼다
+    def onatkkey(self, i):
+        key = self.atkkeyof(i)
+        if key != None:
+            for j in range(ATTACK_MAX):
+                if j != i and self.atkkey[j].get().lower() == key:
+                    self.atkkey[j].set(KEY_NONE)
+            for rid, label in ROLES:
+                if self.rolekey[rid].get().lower() == key:
+                    self.rolekey[rid].set(KEY_NONE)
+        self.refreshrows()
+
+    #역할 키가 바뀌면 같은 키를 쓰는 다른 역할과 공격 줄을 푼다
+    def onrolekey(self, rid):
+        v = self.rolekey[rid].get()
+        if v != KEY_NONE:
+            for orid, label in ROLES:
+                if orid != rid and self.rolekey[orid].get() == v:
+                    self.rolekey[orid].set(KEY_NONE)
+            for i in range(ATTACK_MAX):
+                if self.atkkey[i].get() == v:
+                    self.atkkey[i].set(KEY_NONE)
+        self.refreshrows()
 
     #--- 내 캐릭터 정보 ---
 
@@ -2066,8 +2274,11 @@ class App:
     def setform(self, seconds, roles, opts):
         for key in FKEYS:
             self.sec[key].set(str(seconds.get(key, 0)))
-            for rid, label in ROLES:
-                self.role[(key, rid)].set(roles.get(rid) == key)
+        for rid, label in ROLES:
+            key = roles.get(rid)
+            self.rolekey[rid].set(key.upper() if key in FKEYS else KEY_NONE)
+            if rid in self.rolesec:
+                self.rolesec[rid].set(str(seconds.get(key, 0)) if key in FKEYS else '0')
         self.attack.set(bool(opts.get('attack', DEFAULT_OPTS['attack'])))
         self.range.set(str(opts.get('range',  DEFAULT_OPTS['range'])))
         self.nohit.set(str(opts.get('nohit',  DEFAULT_OPTS['nohit'])))
@@ -2077,6 +2288,17 @@ class App:
         self.healpct.set(str(opts.get('heal_pct', DEFAULT_OPTS['heal_pct'])))
         self.berpct.set(str(opts.get('ber_pct',   DEFAULT_OPTS['ber_pct'])))
         self.immunen.set(str(opts.get('immune_n', DEFAULT_OPTS['immune_n'])))
+        attacks = (opts.get('attacks') or defaultattacks())[:ATTACK_MAX]
+        d0 = defaultattacks()[0]
+        self.atkn = max(1, len(attacks))
+        for i in range(ATTACK_MAX):
+            a = attacks[i] if i < len(attacks) else {}
+            key = a.get('key')
+            self.atkkey[i].set(key.upper() if key in FKEYS else KEY_NONE)
+            delay = a.get('delay', d0['delay'])
+            self.atkdelay[i].set(str(int(delay)) if float(delay) == int(delay) else str(delay))
+            self.atkdist[i].set(str(a.get('dist', d0['dist'])))
+        self.showatk()
         self.refreshrows()
 
     #위젯에서 값을 읽는다. 주기가 숫자가 아니면 (None, None, None) 을 돌려준다
@@ -2103,11 +2325,28 @@ class App:
 
         roles = {}
         for rid, label in ROLES:
-            roles[rid] = None
-            for key in FKEYS:
-                if self.role[(key, rid)].get():
-                    roles[rid] = key
-                    break
+            v = self.rolekey[rid].get()
+            roles[rid] = v.lower() if v in KEY_CHOICES and v != KEY_NONE else None
+            if roles[rid] != None and rid in self.rolesec:
+                #변신 주기 / 재사용 간격은 그 키의 주기 칸(seconds) 에 들어간다 (applyconfig 가 거기서 읽는다)
+                raw = self.rolesec[rid].get().strip() or '0'
+                if not raw.isdigit():
+                    log(label + ' 주기는 0 이상 정수만 : ' + raw)
+                    return None, None, None
+                seconds[roles[rid]] = int(raw)
+
+        attacks = []
+        for i in range(self.atkn):
+            rawd = self.atkdelay[i].get().strip()
+            try:
+                delay = float(rawd) if rawd != '' else 0.0
+                if delay < 0:
+                    raise ValueError
+            except ValueError:
+                log('공격 키 ' + str(i + 1) + ' 딜레이는 0 이상 숫자만 : ' + rawd)
+                return None, None, None
+            attacks.append({'key': self.atkkeyof(i), 'delay': delay, 'dist': int(self.atkdist[i].get())})
+
         opts = {'attack': self.attack.get(),
                 'range':  self.range.get(),
                 'nohit':  int(raw),
@@ -2116,7 +2355,8 @@ class App:
                 'detect': self.detect.get(),
                 'heal_pct': int(self.healpct.get()),
                 'ber_pct':  int(self.berpct.get()),
-                'immune_n': int(self.immunen.get())}
+                'immune_n': int(self.immunen.get()),
+                'attacks':  attacks}
         return seconds, roles, opts
 
     def onsave(self):
@@ -2136,39 +2376,24 @@ class App:
         self.setform(dict(DEFAULT_SECONDS), dict(DEFAULT_ROLES), dict(DEFAULT_OPTS))
         log('기본 셋팅으로 되돌림 (저장하려면 설정 저장)')
 
-    #체크박스 하나가 켜지면 같은 역할의 다른 키, 같은 키의 다른 역할을 끈다
-    def onrole(self, key, rid):
-        if self.role[(key, rid)].get():
-            for other in FKEYS:
-                if other != key:
-                    self.role[(other, rid)].set(False)
-            for orid, label in ROLES:
-                if orid != rid:
-                    self.role[(key, orid)].set(False)
-        self.refreshrows()
-
+    #key 를 쓰는 역할 또는 None
     def roleof(self, key):
         for rid, label in ROLES:
-            if self.role[(key, rid)].get():
+            if self.rolekey[rid].get().lower() == key:
                 return rid
         return None
 
-    #귀환/새로고침으로 잡힌 키는 주기 입력을 막는다. 변신은 주기를, 공격스킬은 쿨타임을 쓴다
+    #귀환/새로고침으로 잡힌 키는 주기 입력을 막는다. 변신은 주기를 쓴다. 공격 키는 공격 탭에서 정한다
     def refreshrows(self):
         for key in FKEYS:
             rid = self.roleof(key)
-            if rid == 'transform':
-                self.entry[key].configure(state='normal')
-                self.note[key].configure(text='변신 주기')
-            elif rid == 'skill':
-                self.entry[key].configure(state='normal')
-                self.note[key].configure(text='스킬 쿨타임 (공격 중만)')
-            elif rid in GAP_DEFAULT:
-                self.entry[key].configure(state='normal')
-                self.note[key].configure(text='재사용 간격 (0 = %d초)' % GAP_DEFAULT[rid])
+            arow = self.atkrowof(key)
+            if arow != None:
+                self.entry[key].configure(state='disabled')
+                self.note[key].configure(text='공격 키 %d (공격 탭)' % arow)
             elif rid != None:
                 self.entry[key].configure(state='disabled')
-                self.note[key].configure(text='주기 없음')
+                self.note[key].configure(text=dict(ROLES)[rid] + ' (공격 탭)')
             else:
                 self.entry[key].configure(state='normal')
                 self.note[key].configure(text='버프 주기')
@@ -2176,23 +2401,31 @@ class App:
     def lockui(self):
         for key in FKEYS:
             self.entry[key].configure(state='disabled')
-            for rid, label in ROLES:
-                self.check[(key, rid)].configure(state='disabled')
         for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.nhent, self.dsent, self.dtchk) + tuple(self.rngbtn):
             b.configure(state='disabled')
-        for b in (self.healbox, self.berbox, self.immbox):
-            b.configure(state='disabled')
+        for rid, wids in self.rolewid.items():
+            for w in wids:
+                w.configure(state='disabled')
+        for kb, de, sb in self.atkwid:
+            kb.configure(state='disabled')
+            de.configure(state='disabled')
+            sb.configure(state='disabled')
+        self.atkadd.configure(state='disabled')
+        self.atkdel.configure(state='disabled')
         self.btn.configure(state='disabled', text='동작 중  (tab = 정지)')
 
     #정지하면 설정을 다시 만질 수 있게 열어준다
     def unlockui(self):
-        for key in FKEYS:
-            for rid, label in ROLES:
-                self.check[(key, rid)].configure(state='normal')
         for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.nhent, self.dsent, self.dtchk) + tuple(self.rngbtn):
             b.configure(state='normal')
-        for b in (self.healbox, self.berbox, self.immbox):
-            b.configure(state='readonly')
+        for rid, wids in self.rolewid.items():
+            for w in wids:
+                w.configure(state='readonly' if isinstance(w, ttk.Combobox) else 'normal')
+        for kb, de, sb in self.atkwid:
+            kb.configure(state='readonly')
+            de.configure(state='normal')
+            sb.configure(state='readonly')
+        self.showatk()          #추가 / 제거 버튼은 줄 수에 따라
         self.btn.configure(state='normal', text='시작하기')
         self.refreshrows()      #주기 입력칸은 역할에 따라 다시 결정
         self.started = False
@@ -2219,6 +2452,10 @@ class App:
         log('  이뮨 : ' + ((roles['immune'].upper() + '  주위 몹 ' + str(opts['immune_n']) + '마리 이상') if roles.get('immune') else '미지정'))
         for rid, label in ROLES:
             log('  ' + label + ' : ' + (roles[rid].upper() if roles[rid] else '미지정'))
+        for i, a in enumerate(opts.get('attacks') or []):
+            log('  공격 키 ' + str(i + 1) + ' : '
+                + ((a['key'].upper() + '  딜레이 ' + str(a['delay']) + '초  거리 ' + str(a['dist']) + '타일 이하')
+                   if a.get('key') else '미지정'))
         act = [(n, key, s) for n, key, s in BUFFS if s > 0]
         if act:
             for n, key, s in act:
