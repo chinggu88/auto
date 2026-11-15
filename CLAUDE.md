@@ -111,6 +111,9 @@ To stop a running script: `pyautogui.FAILSAFE` is disabled in `oman.py`/`tell.py
   cells in place → Enter; `memchat.put` refuses to write more cells than are already there.
   `0x9BF98` is the "focused edit" pointer and is 0 when the input is empty — do not use it.
   `python memchat.py ".버프" --auto` runs the same sequence standalone.
+- **Unreachable mobs (walls).** Map collision is not read from memory. Instead, a target farther
+  than `STUCK_REACH` tiles with no progress (own position unchanged, distance not shrinking) for
+  `STUCK_SEC` is skipped for `SKIP_SEC`; if nothing else remains the loop teleports.
 - **Heal / Ber / Immune** — three more F-key roles (`heal`, `ber`, `immune`). Each hunt-loop tick
   reads HP (`readhp()`: secure holder first, then `chains.hp`) and the live-mob count from
   `scanents()`: HP% ≤ `heal_pct` / `ber_pct` presses that key, mobs ≥ `immune_n` presses immune.

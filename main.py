@@ -105,7 +105,7 @@ SCAN_OFFSET_Y = -43   # 스캔 중심의 y 보정(px). 음수면 위, 양수면 
 
 BUFF_GAP    = 1    #버프 키 누른 뒤 대기(초)
 CHAT_CMD      = '.버프'   #채팅창에 넣는 매크로 명령어
-CHAT_INTERVAL = 1200      #채팅버프 주기(초). 20분
+CHAT_INTERVAL = 900       #채팅버프 주기(초). 15분
 CHAT_GAP      = 0.3       #엔터 -> 입력 -> 엔터 사이 대기(초)
 LOOP_LIMIT  = 50   #공격 루프 최대 횟수. 채우면 새로고침
                    #칼질을 계속 해도 안 줄고, 새로고침될 때만 초기화된다
@@ -277,6 +277,12 @@ DETECT_ONLY        = DEFAULT_OPTS['detect'] #감지만 (클릭/귀환 안 함)
 #  scarecrow_calib.json (postracker.py 의 허수아비 보정) > calib.json (turnundead_mem.py 의 보정)
 HUNT_POLL      = 0.1    #사냥 루프 한 바퀴 간격(초)
 RECLICK_SEC    = 1.0    #클릭 간격(초). 클릭할 때마다 가장 가까운 몹을 다시 고른다
+#벽 너머 몹 걸러내기 : 지형(벽) 자체는 메모리에서 못 읽는다. 대신 '다가가지 못하는 몹' 을 본다.
+#대상이 STUCK_REACH 타일보다 먼데 STUCK_SEC 동안 내 좌표도 안 바뀌고 거리도 안 줄면
+#막힌 것으로 보고 SKIP_SEC 동안 그 몹을 대상에서 뺀다. 남은 몹이 없으면 평소처럼 텔한다
+STUCK_REACH    = 2      #이 거리(타일) 안이면 붙어서 싸우는 중으로 보고 막힘 판정을 안 한다
+STUCK_SEC      = 4.0    #이만큼 진전이 없으면 막힌 것으로 본다
+SKIP_SEC       = 20.0   #막힌 몹을 대상에서 빼 두는 시간
 TELE_GAP       = 1.5    #텔(새로고침 키)을 누른 뒤 다음 텔까지 최소 간격(초). 이동 뒤 주변이 다시 읽힐 시간
 MEM_FAIL_LIMIT = 10     #엔티티 테이블을 연속으로 이만큼 못 읽으면 멈춘다 (화면으로 넘어가지 않는다)
 CALIB_FILES    = ['scarecrow_calib.json', 'calib.json']   #앞엣것 우선
@@ -1329,6 +1335,8 @@ def huntloop(p=None, atkvalue=None):
     fail    = 0        #테이블을 연속으로 못 읽은 횟수
     teled   = 0.0      #마지막으로 텔(새로고침 키)을 누른 시각
     pressed = {'heal': 0.0, 'ber': 0.0, 'immune': 0.0}   #힐 / 베르 / 이뮨을 마지막으로 누른 시각
+    skip    = {}       #id -> 다시 대상으로 삼아도 되는 시각 (다가가지 못한 몹)
+    stuck   = {'id': None, 'best': 0, 'pos': None, 't': 0.0}   #지금 대상에게 다가가고 있는지
     hpfail  = 0        #HP 를 연속으로 못 읽은 횟수
 
     skillon  = ATTACK_ON and (not DETECT_ONLY) and KEY_SKILL != None and SKILL_COOL > 0
@@ -1401,6 +1409,8 @@ def huntloop(p=None, atkvalue=None):
         #감지만 모드에서는 보정이 없을 수 있으므로 거르지 않는다
         mobs = []
         for dist, o, pos in found['mobs']:
+            if skip.get(o['id'], 0) > now:
+                continue      #다가가지 못해서 잠깐 빼 둔 몹 (벽 너머 등)
             xy = toscreen(pos[0] - found['pos'][0], pos[1] - found['pos'][1])
             if DETECT_ONLY or (xy != None and 0 <= xy[0] < screen[0] and 0 <= xy[1] < screen[1]):
                 mobs.append((dist, o, pos, xy))
@@ -1445,6 +1455,22 @@ def huntloop(p=None, atkvalue=None):
 
         if DETECT_ONLY:
             time.sleep(HUNT_POLL)
+            continue
+
+        #다가가고 있는지 본다. 내 좌표가 바뀌거나 거리가 줄면 진전이 있는 것
+        if stuck['id'] != o['id']:
+            stuck = {'id': o['id'], 'best': dist, 'pos': found['pos'], 't': now}
+        elif dist < stuck['best'] or found['pos'] != stuck['pos']:
+            stuck['best'] = min(stuck['best'], dist)
+            stuck['pos']  = found['pos']
+            stuck['t']    = now
+        elif dist > STUCK_REACH and now - stuck['t'] >= STUCK_SEC:
+            log('막힘 : ' + tname + '  거리 ' + str(dist) + ' 에서 ' + str(int(STUCK_SEC))
+                + '초 동안 못 다가감 - ' + str(int(SKIP_SEC)) + '초 동안 제외')
+            skip[o['id']] = now + SKIP_SEC
+            target  = None
+            tname   = ''
+            clicked = 0.0
             continue
 
         skillsec += now - tick
