@@ -618,13 +618,20 @@ def requeststop():
         request('stop')
 
 #귀환 : 귀환 키만 누르고 정지한다 (프로그램은 안 죽는다)
+#귀환 역할은 뺐으므로 베르 키(공격 페이지 F1) 로 대신한다. 둘 다 없으면 정지만 한다
+def returnkey():
+    if KEY_RETURN != None:
+        return KEY_RETURN
+    return KEY_BER
+
 def doreturn():
-    if KEY_RETURN == None:
-        log('귀환 키 없음 (역할에서 뺐다) - 정지만 한다')
+    key = returnkey()
+    if key == None:
+        log('귀환 / 베르 키 없음 - 정지만 한다')
         dostop()
         return
-    log('귀환 : ' + str(KEY_RETURN))
-    gu.press(KEY_RETURN, presses=1)
+    log('귀환 (베르) : ' + str(key).upper())
+    gu.press(key, presses=1)
     dostop()
 
 #대기 중인 트리거를 꺼내 실행. 실행했으면 True
@@ -643,6 +650,8 @@ def runpending():
             dostop()
             return True           #사냥 트리거 복구 안 함. ALIVE=False 로 루프가 끝난다
         if name == 'return':
+            if onbuff:            #베르 키는 공격 페이지(F1) 에 있다
+                setpage(PAGE_ATTACK)
             doreturn()            #안에서 dostop() 을 부른다
             return True
         if name == 'chatbuff':
@@ -1021,7 +1030,7 @@ def _checkrHp():
         if len(others) > 0:
             names = ', '.join(str(o.get('name')) + '(거리 ' + str(d) + ')' for d, o, pos in others)
             if not DETECT_ONLY:
-                log('다른 캐릭터 발견 : ' + names + ' 귀환!')
+                log('다른 캐릭터 발견 : ' + names + ' 베르 귀환!')
                 request('return')
                 return
             ids = set(o['id'] for d, o, pos in others)
@@ -1905,13 +1914,19 @@ def runmacro():
         log('채팅버프(' + CHAT_CMD + ') ' + str(CHAT_INTERVAL) + '초 주기')
         chatbufftimer()
 
-        #귀환 역할은 뺐다 (KEY_RETURN 은 항상 None). 주변 캐릭터 감시는 감지만 모드에서 로그만 찍는다
-        if KEY_RETURN != None or DETECT_ONLY:
+        #귀환 역할은 뺐다 (KEY_RETURN 은 항상 None). 대신 베르 키가 있으면 다른 캐릭터 발견 시 베르 후 정지,
+        #베르 키도 없으면 감지만 모드에서 로그만 찍는다
+        if returnkey() != None or DETECT_ONLY:
             if 'player' not in kinds:
                 log('mem.json ent.rules 에 player 규칙이 없어 주변 캐릭터를 가릴 수 없다 - 시작 안 함')
                 return
-            log('피 / 주변 캐릭터 감시 시작 (로그만)')
+            if DETECT_ONLY:
+                log('피 / 주변 캐릭터 감시 시작 (로그만)')
+            else:
+                log('피 / 주변 캐릭터 감시 시작 - 발견 시 베르(' + returnkey().upper() + ') 후 정지')
             checkrHp()
+        else:
+            log('베르 키 미지정 - 주변 캐릭터 감시 끔')
 
         if KEY_REFRESH == None:
             log('새로고침키 미지정 - 새로고침 끔')

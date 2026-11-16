@@ -142,8 +142,10 @@ To stop a running script: `pyautogui.FAILSAFE` is disabled in `oman.py`/`tell.py
     `runpending()`; `delay` 0 disables the row. Attack keys and page roles must not share a
     key; the same F key may be used on both pages. An old `roles.skill` config is migrated to
     attack key 1 on load.
-  - The 귀환 role is removed: `KEY_RETURN` is always `None`, `doreturn` only stops, and
-    `_checkrHp` runs only in detect-only mode (log only). `KEY_SKILL` / `SKILL_COOL` remain as
+  - The 귀환 role is removed: `KEY_RETURN` is always `None`, and the ber key stands in for it
+    (`returnkey()`, since 2026-11-16). With a ber key set, `_checkrHp` runs during hunting and
+    another player (or `checkhp.PNG`) → `doreturn` presses ber on the F1 page and stops. With no
+    ber key it runs only in detect-only mode (log only). `KEY_SKILL` / `SKILL_COOL` remain as
     a compatibility mirror of attack key 1 for `pit.py`.
 - **Character panel** — `App.pollinfo()` shows name / LV / HP / MP / exp / AC / position / nearby
   counts every `INFO_POLL` ms through its own read-only `Mem` (`self.imem`), separate from the
