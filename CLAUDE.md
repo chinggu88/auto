@@ -145,7 +145,9 @@ To stop a running script: `pyautogui.FAILSAFE` is disabled in `oman.py`/`tell.py
   - The 귀환 role is removed: `KEY_RETURN` is always `None`, and the ber key stands in for it
     (`returnkey()`, since 2026-11-16). With a ber key set, `_checkrHp` runs during hunting and
     another player (or `checkhp.PNG`) → `doreturn` presses ber on the F1 page and stops. With no
-    ber key it runs only in detect-only mode (log only). `KEY_SKILL` / `SKILL_COOL` remain as
+    ber key it runs only in detect-only mode (log only). `huntloop` also checks
+    `scanents()['players']` every tick (replacing the clan-mark check): any other player →
+    press ber (if set) and `dostop()`, without waiting for the 2 s timer. `KEY_SKILL` / `SKILL_COOL` remain as
     a compatibility mirror of attack key 1 for `pit.py`.
 - **Character panel** — `App.pollinfo()` shows name / LV / HP / MP / exp / AC / position / nearby
   counts every `INFO_POLL` ms through its own read-only `Mem` (`self.imem`), separate from the

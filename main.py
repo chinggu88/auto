@@ -1481,6 +1481,21 @@ def huntloop(p=None, atkvalue=None):
 
         now  = time.perf_counter()
 
+        #다른 플레이어(mem.json ent.rules 의 player : id 1,000,000~1,999,999) 가 보이면 베르 후 정지
+        #혈맹마크 이미지 확인을 대신한다. 사냥 루프가 매 틱 읽는 테이블로 바로 본다 (타이머 2초를 안 기다린다)
+        #감지만 모드는 _checkrHp 가 로그만 찍는다
+        if not DETECT_ONLY and found['players']:
+            names = ', '.join(str(o.get('name')) + '(id ' + str(o.get('id')) + ', 거리 ' + str(d) + ')'
+                              for d, o, pos in found['players'])
+            log('다른 플레이어 발견 : ' + names)
+            if KEY_BER != None:
+                log('베르 ' + KEY_BER.upper() + ' - 정지')
+                gu.press(KEY_BER, presses=1)
+            else:
+                log('베르 키 미지정 - 정지만 한다')
+            dostop()
+            break
+
         #힐 / 베르 : HP 가 정한 % 이하면 그 키를 누른다. 이뮨 : 주위 몹이 정한 수 이상이면 누른다
         #공격을 꺼 둬도 돈다. 감지만 모드에서는 키를 누르지 않는다
         if not DETECT_ONLY:
