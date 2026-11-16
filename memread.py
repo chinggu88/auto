@@ -490,6 +490,18 @@ def _unpack(kind, raw, off, enc):
 DEFAULT_PATH = 'mem.json'
 
 
+#지형 통행 판정표. 클라이언트 이동 판정 함수(0x43e130)의 표를 옮긴 것이다 (주소가 아니라 클라이언트 논리라 코드에 둔다)
+#TERRAIN_STEP[d] = 방향 d(0~7) 의 (dX, dY)
+#T38~T98[d] = 내 타일 칸(x' = 2*X-32768, Y) 기준으로 볼 칸의 (dx', dY)
+#  짝수 d : 막힘 = bit(T38)
+#  홀수 d : (bit(T38) or bit(T58)) and (bit(T78) or bit(T98))
+TERRAIN_STEP = [(0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1)]
+TERRAIN_T38  = [(0, 0), (0, 0), (1, 0), (1, 0), (0, 1), (0, 1), (-1, 0), (-1, 0)]
+TERRAIN_T58  = [(0, 0), (1, -1), (0, 0), (2, 1), (0, 0), (-1, 1), (0, 0), (-2, 0)]
+TERRAIN_T78  = [(0, 0), (1, 0), (0, 0), (0, 1), (0, 0), (-1, 0), (0, 0), (-1, -1)]
+TERRAIN_T98  = [(0, 0), (2, 0), (0, 0), (1, 1), (0, 0), (-2, 1), (0, 0), (0, 0)]
+
+
 def _decode_name(raw):
     #이름 문자열 디코드 (CP949 우선 — 몹 이름 테이블이 CP949, UTF-16LE 폴백)
     #널 종결자 안에서 끝나고 1~32자, 제어 문자 없음. 아니면 None
@@ -1441,6 +1453,78 @@ class Mem(object):
                         s['ident'], s['ptr'],
                         s['name'] if s['name'] != None else '(이름 못 읽음)'))
         return out
+
+    #지형(통행) 격자를 통째로 읽는다. 못 읽으면 None
+    #격자 주소 = mem.json chains.terrain_grid (offsets [0] 으로 한 번 거른다),
+    #원점 = chains.terrain_ox (x' 단위) / terrain_oy (Y). 칸 크기·속성 위치·x' 변환은 mem.json terrain 블록.
+    #돌려주는 것 : {'map','grid','ox','oy','cols','rows','scale','bias','attr'}
+    #  attr = 칸 번호 순서의 속성 u16 (rows*cols 개). map 은 못 읽거나 0xFFFFFFFF 면 None (그래도 실패로 보지 않는다)
+    #정적 분석으로 찾은 값. 실기 확인 전
+    #주의: lock 안에서 value() 를 부르면 데드락이 나므로 map 은 lock 밖에서 읽고,
+    #원점과 격자는 lock 안에서 resolve + readmem 으로 같이 읽는다
+    def terrain(self):
+        if self.h == None or self.cfg == None:
+            return None
+        tcfg   = self.cfg.get('terrain')
+        chains = self.cfg.get('chains') or {}
+        gspec  = chains.get('terrain_grid')
+        xspec  = chains.get('terrain_ox')
+        yspec  = chains.get('terrain_oy')
+        if tcfg == None or gspec == None or xspec == None or yspec == None:
+            return None
+        cols  = num(tcfg.get('cols'))
+        rows  = num(tcfg.get('rows'))
+        csize = num(tcfg.get('cell_size'))
+        aoff  = num(tcfg.get('attr_off'))
+        scale = num(tcfg.get('x_scale'))
+        bias  = num(tcfg.get('x_bias'))
+        if cols == None or rows == None or csize == None or aoff == None or scale == None or bias == None:
+            return None
+        if cols <= 0 or rows <= 0 or scale <= 0 or aoff < 0 or aoff + 2 > csize:
+            return None
+        mp = self.value('map_id')
+        if not isinstance(mp, int) or mp == 0xFFFFFFFF:
+            mp = None
+        with self.lock:
+            grid = self.resolve(gspec)
+            xa   = self.resolve(xspec)
+            ya   = self.resolve(yspec)
+            if grid == None or xa == None or ya == None:
+                return None
+            rx = readmem(self.h, xa, 4)
+            ry = readmem(self.h, ya, 4)
+            if rx == None or ry == None:
+                return None
+            #격자 전체 (기본 256*128*0x10 = 0x80000 바이트) 를 한 번에 읽는다. 일부만 읽혀도 실패로 본다
+            blob = readmem(self.h, grid, rows * cols * csize)
+            if blob == None:
+                return None
+        ox   = struct.unpack('<I', rx)[0]
+        oy   = struct.unpack('<I', ry)[0]
+        attr = [struct.unpack_from('<H', blob, i * csize + aoff)[0] for i in range(rows * cols)]
+        return {'map': mp, 'grid': grid, 'ox': ox, 'oy': oy,
+                'cols': cols, 'rows': rows, 'scale': scale, 'bias': bias,
+                'attr': attr}
+
+    #게임 좌표 (x, y) 에서 방향 d(0~7) 로 한 칸 가는 게 막혔는지. terrain() 이 돌려준 t 로만 계산한다 (메모리를 안 읽는다)
+    #True = 막힘, False = 갈 수 있음, None = 볼 칸이 격자 밖이라 모름
+    def terrain_blocked(self, t, x, y, d):
+        xp = x * t['scale'] - t['bias']
+        if d % 2 == 0:
+            tabs = (TERRAIN_T38,)
+        else:
+            tabs = (TERRAIN_T38, TERRAIN_T58, TERRAIN_T78, TERRAIN_T98)
+        bits = []
+        for tab in tabs:
+            cx = xp + tab[d][0] - t['ox']
+            cy = y + tab[d][1] - t['oy']
+            if cx < 0 or cx >= t['cols'] or cy < 0 or cy >= t['rows']:
+                return None
+            bits.append(t['attr'][cy * t['cols'] + cx] & 1)
+        if len(bits) == 1:
+            return bits[0] == 1
+        a, dd, b, c = bits
+        return bool((a or dd) and (b or c))
 
     #좌표 일치 객체 전부. (객체 dict 리스트).
     #객체 안의 x/y 는 raw 좌표임이 --table 실측으로 확인됐으므로, 게임 좌표와
