@@ -22,6 +22,7 @@
 #   python memprobe.py --spells                   스킬(마법) 창 순회 - 배운 스킬의 슬롯/id/아이콘/메모리 주소/이름
 #   python memprobe.py --char                     캐릭터 정보 - 레벨/경험치%/HP/MP/AC/성향/스탯/포만도/무게/저항
 #   python memprobe.py --items                   인벤토리 창 순회 - 소지품의 id/종류/아이콘/축복/수량/확인/이름
+#   python memprobe.py --terrain                 지형(통행) 격자 - 내 주변 반경 20 타일을 그림으로 (--terrain 30 처럼 반경 1~64)
 #   python memprobe.py --buffs                   켜져 있는 버프(상태효과) 순회 - 아이콘/이름 + 위젯·칸 원본 바이트
 #   python memprobe.py --peek 0x1B0D1C 0xA0      그 RVA 를 16진수+CP949 로 떠 본다 (버프 영역 확인)
 #   python memprobe.py --gsnap                   모듈 전역 영역 스냅샷 (버프 끈 상태에서)
@@ -1549,6 +1550,92 @@ def dumpitems(pid):
         m.detach()
 
 
+#지형(통행) 격자를 읽어 내 주변을 그림으로 찍는다. 읽기 전용
+#  python memprobe.py --terrain        반경 20 타일
+#  python memprobe.py --terrain 30     반경 30 타일 (1~64)
+def dumpterrain(pid):
+    try:
+        rad = int(arg('--terrain', '20'))
+    except ValueError:
+        rad = 20
+    rad = max(1, min(64, rad))
+    m = mr.Mem(MEM_PATH, say)
+    if not m.attach(pid):
+        say('붙기 실패 : ' + str(m.err))
+        return
+    try:
+        say()
+        t  = m.terrain()
+        me = m.selfpos()
+        if t == None:
+            say('지형 격자를 못 읽었다 - 캐릭터로 월드에 들어간 뒤에 다시 읽는다 (mem.json chains.terrain_grid / terrain_ox / terrain_oy, terrain 블록 확인)')
+            return
+        if me == None:
+            say('내 좌표를 못 읽었다 - 격자와 맞춰 볼 수 없다 (mem.json chains.self_x / self_y 확인, 격자는 chains.terrain_grid)')
+            return
+        mx, my = me
+        #격자가 덮는 타일 범위 (타일 하나 = x' 칸 2개)
+        x0 = (t['ox'] + t['bias']) // t['scale']
+        x1 = x0 + t['cols'] // t['scale'] - 1
+        y0 = t['oy']
+        y1 = y0 + t['rows'] - 1
+
+        #그 타일의 자기 칸(x' 짝수 칸)이 격자 안인가
+        def inside(x, y):
+            cx = x * t['scale'] - t['bias'] - t['ox']
+            cy = y - t['oy']
+            return 0 <= cx < t['cols'] and 0 <= cy < t['rows']
+
+        say('맵 %s   내 좌표 (%d, %d)   격자 0x%X   원점 x\' %d, Y %d   덮는 범위 X %d~%d, Y %d~%d'
+            % ('?' if t['map'] == None else str(t['map']), mx, my, t['grid'],
+               t['ox'], t['oy'], x0, x1, y0, y1))
+        if not inside(mx, my):
+            say('  내 위치가 격자 밖이다 - 원점(terrain_ox/oy)이나 좌표 인코딩이 틀렸을 수 있다')
+        say()
+        say('내 자리에서 한 칸 가기 :')
+        for d in range(8):
+            dx, dy = mr.TERRAIN_STEP[d]
+            b = m.terrain_blocked(t, mx, my, d)
+            say('  방향 %d (X%+d, Y%+d) : %s' % (d, dx, dy, '모름' if b == None else ('막힘' if b else '갈 수 있음')))
+
+        #내 타일에서 걸어서 닿는 타일 (격자 전체를 8방향으로 채운다)
+        seen  = set([(mx, my)])
+        queue = [(mx, my)]
+        i = 0
+        while i < len(queue):
+            x, y = queue[i]
+            i += 1
+            for d in range(8):
+                if m.terrain_blocked(t, x, y, d) != False:
+                    continue
+                dx, dy = mr.TERRAIN_STEP[d]
+                nb = (x + dx, y + dy)
+                if nb in seen or not inside(nb[0], nb[1]):
+                    continue
+                seen.add(nb)
+                queue.append(nb)
+
+        say()
+        say('그림 (게임 좌표 그대로 : 오른쪽 = X 증가, 아래 = Y 증가)   @ = 나, . = 걸어서 닿음, # = 못 닿음, ? = 격자 밖')
+        say('  X %d~%d, Y %d~%d (반경 %d)   닿는 타일 %d개' % (mx - rad, mx + rad, my - rad, my + rad, rad, len(seen)))
+        for y in range(my - rad, my + rad + 1):
+            row = []
+            for x in range(mx - rad, mx + rad + 1):
+                if (x, y) == (mx, my):
+                    row.append('@')
+                elif not inside(x, y):
+                    row.append('?')
+                elif (x, y) in seen:
+                    row.append('.')
+                else:
+                    row.append('#')
+            say('  ' + ''.join(row))
+        say()
+        say('  게임 화면의 벽/물/건물 모양과 # 모양이 맞으면 격자 주소와 판정이 맞다')
+    finally:
+        m.detach()
+
+
 def dopeek(pid):
     #RVA 한 곳을 16진수 + CP949 로 떠서 본다 (버프 영역 구조 확인용). 읽기 전용.
     #  python memprobe.py --peek 0x1B0D1C 0xA0     (RVA, 길이. 길이 생략하면 0x80)
@@ -2512,6 +2599,10 @@ def main():
 
     if has('--items'):
         dumpitems(pid)
+        return
+
+    if has('--terrain'):
+        dumpterrain(pid)
         return
 
     if has('--buffs'):
