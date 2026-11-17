@@ -1322,9 +1322,84 @@ def toscreen(dx, dy):
 #  'me'      : 내 엔티티,  'pos' : 내 게임 좌표
 #  'mobs'    : [(거리, 엔티티, 게임좌표)] 살아 있는 사냥 대상. 가까운 순. HUNT_DIST 안만
 #  'players' : [(거리, 엔티티, 게임좌표)] 나 말고 다른 캐릭터. player 규칙이 없으면 None
-#거리는 타일 수 (가로세로 중 큰 쪽)
+#거리는 타일 수
+#  players : 직선 거리 (가로세로 중 큰 쪽)
+#  mobs    : 지형 격자로 구한 '걸어서 가는 걸음 수' (벽을 돌아가는 거리). 걸어서 못 닿는 몹은 뺀다
+#            격자를 못 읽으면 직선 거리로 돌아간다 (지도는 순서를 정하는 보조라 멈추지 않는다)
+#            몹 엔티티의 'line' 에 직선 거리를 따로 넣어 둔다 (공격 키 사거리는 직선으로 본다)
 #사냥 대상 : mem.json ent.rules 에 monster 규칙이 있으면 그 종류만,
 #            없으면 '캐릭터가 아닌 것 전부' 를 대상으로 삼는다 (이름 없는 것은 뺀다)
+
+TERRAIN_SEC = 1.0    #지형 격자를 다시 읽는 간격(초). 격자는 512KB 라 매 틱 읽지 않는다
+PATH_MARGIN = 4      #경로 탐색 반경 = HUNT_DIST + 이만큼 (벽을 돌아가는 여유)
+TERRAIN     = {'t': None, 'at': 0.0, 'ok': None}   #마지막으로 읽은 격자, 읽은 시각, 직전 상태(로그를 바뀔 때만 찍는다)
+PATHCACHE   = {'key': None, 'steps': None}         #(내 좌표, 격자 주소, 원점, 읽은 시각) -> {타일: 걸음 수}
+TERRAIN_LOCK = threading.Lock()   #scanents 는 사냥 루프와 감시 타이머 두 스레드가 부른다
+
+#새로 시작할 때 지난 판의 격자를 버린다 (runmacro)
+def resetterrain():
+    with TERRAIN_LOCK:
+        TERRAIN.update({'t': None, 'at': 0.0, 'ok': None})
+        PATHCACHE.update({'key': None, 'steps': None})
+
+#격자 t 가 (x, y) 를 중심으로 반경 r 을 덮는가 (경로 탐색이 격자 밖을 볼 일이 없게)
+def _tcovers(t, x, y, r):
+    cx0 = (x - r) * t['scale'] - t['bias'] - t['ox']
+    cx1 = (x + r) * t['scale'] - t['bias'] - t['ox'] + 2     #동쪽 변 칸(+1) 과 대각선 표(+2) 여유
+    cy0 = y - r - 1 - t['oy']
+    cy1 = y + r + 1 - t['oy']
+    return cx0 - 2 >= 0 and cx1 < t['cols'] and cy0 >= 0 and cy1 < t['rows']
+
+#지금 쓸 지형 격자. 못 읽으면 None
+#TERRAIN_SEC 마다, 또는 내 주변을 덮지 못하면(텔로 멀리 감) 바로 다시 읽는다
+def terraingrid(mpos, r):
+    now = time.perf_counter()
+    t   = TERRAIN['t']
+    if t == None or now - TERRAIN['at'] >= TERRAIN_SEC or not _tcovers(t, mpos[0], mpos[1], r):
+        try:
+            t = MEM.terrain()
+        except Exception as e:
+            log('지형 격자 읽기 오류 : ' + str(e))
+            t = None
+        TERRAIN['t']  = t
+        TERRAIN['at'] = now
+    ok = t != None and _tcovers(t, mpos[0], mpos[1], r)
+    if ok != TERRAIN['ok']:
+        if ok:
+            log('지형 격자 사용 - 몹 거리를 걸어서 가는 걸음 수로 잰다 (벽 너머 몹은 뺀다)')
+        else:
+            log('지형 격자를 못 읽었다 (또는 내 주변을 덮지 않는다) - 직선 거리로 잰다')
+        TERRAIN['ok'] = ok
+    return t if ok else None
+
+#내 타일에서 8방향으로 걸어서 각 타일까지 몇 걸음인지 (BFS, 반경 r 안만)
+#대각선 한 걸음도 1 이라 벽이 없으면 직선 거리와 같다. 판정은 클라이언트 이동 판정과 같은 memread.terrain_blocked
+#막힘 / 모름(격자 밖) 은 못 가는 것으로 본다
+def pathsteps(t, mpos, r):
+    key = (mpos, t['grid'], t['ox'], t['oy'], TERRAIN['at'])
+    if PATHCACHE['key'] == key:
+        return PATHCACHE['steps']
+    mx, my = mpos
+    steps  = {mpos: 0}
+    queue  = [mpos]
+    i = 0
+    while i < len(queue):
+        x, y = queue[i]
+        i += 1
+        n = steps[(x, y)] + 1
+        for d in range(8):
+            dx, dy = mr.TERRAIN_STEP[d]
+            nb = (x + dx, y + dy)
+            if nb in steps or abs(nb[0] - mx) > r or abs(nb[1] - my) > r:
+                continue
+            if MEM.terrain_blocked(t, x, y, d) != False:
+                continue
+            steps[nb] = n
+            queue.append(nb)
+    PATHCACHE['key']   = key
+    PATHCACHE['steps'] = steps
+    return steps
+
 def scanents():
     if MEM == None:
         return None
@@ -1338,6 +1413,10 @@ def scanents():
     kinds  = MEM.entkinds()
     mobs   = []
     people = [] if 'player' in kinds else None
+    rad    = HUNT_DIST + PATH_MARGIN
+    with TERRAIN_LOCK:
+        t     = terraingrid(mpos, rad)
+        steps = pathsteps(t, mpos, rad) if t != None else None
     for o in ents:
         if o['ptr'] == me['ptr']:
             continue
@@ -1347,6 +1426,14 @@ def scanents():
         if kind == 'player':
             people.append((dist, o, pos))
             continue
+        o['line'] = dist             #직선 거리 (공격 키 사거리용)
+        if steps != None:
+            if dist > rad:
+                continue
+            walk = steps.get(pos)
+            if walk == None:
+                continue             #걸어서 못 닿는다 (벽 너머 / 막힌 곳)
+            dist = walk
         if o['dead'] or dist > HUNT_DIST:
             continue
         if not o.get('name'):
@@ -1638,10 +1725,12 @@ def huntloop(p=None, atkvalue=None):
 
         #공격 키 : 대상과의 거리가 정한 값 이하이고 딜레이가 지났으면 누른다
         #한 바퀴에 하나만 누른다 (앞 번호가 먼저). 버프 / 변신 / 귀환은 바퀴 머리의 runpending 이 먼저 처리한다
-        now = time.perf_counter()
+        #사거리는 직선 거리로 본다 (dist 는 걸음 수라 벽을 돌아가면 사거리보다 크게 나온다)
+        now  = time.perf_counter()
+        line = o.get('line', dist)
         for i, (akey, adelay, adist) in enumerate(atks):
-            if dist <= adist and now - apress[i] >= adelay:
-                log('공격 키 ' + akey.upper() + '  (거리 ' + str(dist) + ' <= ' + str(adist) + ')')
+            if line <= adist and now - apress[i] >= adelay:
+                log('공격 키 ' + akey.upper() + '  (거리 ' + str(line) + ' <= ' + str(adist) + ')')
                 gu.press(akey, presses=1)
                 apress[i] = time.perf_counter()
                 break
@@ -1886,6 +1975,7 @@ def runmacro():
         WATCH_SEEN = set()
         path, okay, tried = mr.findfile('mem.json')
         MEM = mr.Mem(path, log)
+        resetterrain()
         if not MEM.attach():
             log('메모리 붙기 실패 : ' + str(MEM.err))
             return

@@ -1597,7 +1597,11 @@ class Mem(object):
                 return None
         ox   = struct.unpack('<I', rx)[0]
         oy   = struct.unpack('<I', ry)[0]
-        attr = [struct.unpack_from('<H', blob, i * csize + aoff)[0] for i in range(rows * cols)]
+        if csize % 2 == 0 and aoff % 2 == 0:
+            #칸마다 struct 를 부르면 3만 번이라 느리다 (사냥 루프가 1초마다 읽는다). u16 배열로 보고 한 번에 잘라낸다
+            attr = memoryview(blob).cast('H')[aoff // 2::csize // 2].tolist()
+        else:
+            attr = [struct.unpack_from('<H', blob, i * csize + aoff)[0] for i in range(rows * cols)]
         return {'map': mp, 'grid': grid, 'ox': ox, 'oy': oy,
                 'cols': cols, 'rows': rows, 'scale': scale, 'bias': bias,
                 'attr': attr}

@@ -111,9 +111,19 @@ To stop a running script: `pyautogui.FAILSAFE` is disabled in `oman.py`/`tell.py
   cells in place → Enter; `memchat.put` refuses to write more cells than are already there.
   `0x9BF98` is the "focused edit" pointer and is 0 when the input is empty — do not use it.
   `python memchat.py ".버프" --auto` runs the same sequence standalone.
-- **Unreachable mobs (walls).** Map collision is not read from memory. Instead, a target farther
-  than `STUCK_REACH` tiles with no progress (own position unchanged, distance not shrinking) for
-  `STUCK_SEC` is skipped for `SKIP_SEC`; if nothing else remains the loop teleports.
+- **Walking distance (terrain grid, since 2026-11-17).** `scanents()` measures mob distance as
+  BFS walking steps over the terrain grid (`memread.terrain()` / `terrain_blocked()`, merged from
+  `feat/spell-table`; the `memprobe --terrain` map was confirmed against the screen on
+  2026-11-17). The search radius is `HUNT_DIST + PATH_MARGIN`, the grid is re-read every
+  `TERRAIN_SEC` or when it no longer covers that radius around me, and the BFS is cached per
+  position. Mobs with no path are dropped. With no open space, the step count equals Chebyshev
+  distance. The straight-line distance is kept in `o['line']` and attack-key range (`dist`) uses
+  it. Players stay straight-line. An unreadable grid falls back to straight-line distance (logged
+  on change) rather than stopping, because terrain only orders targets.
+- **Unreachable mobs (fallback).** For obstacles not in the grid (other mobs, doors), a target
+  farther than `STUCK_REACH` tiles with no progress (own position unchanged, distance not
+  shrinking) for `STUCK_SEC` is skipped for `SKIP_SEC`; if nothing else remains the loop
+  teleports.
 - **Idle watchdog.** Holding the same target for `IDLE_TELE_SEC` (20 s) with no target change
   or teleport forces the refresh key, whatever the distance.
 - **Heal / Ber / Immune** — three more F-key roles (`heal`, `ber`, `immune`). Each hunt-loop tick
