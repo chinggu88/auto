@@ -276,6 +276,7 @@ STUCK_REACH    = 2      #이 거리(타일) 안이면 붙어서 싸우는 중으
 STUCK_SEC      = 4.0    #이만큼 진전이 없으면 막힌 것으로 본다
 SKIP_SEC       = 20.0   #막힌 몹을 대상에서 빼 두는 시간
 TELE_DELAY     = 0.5    #몹이 없다고 판단한 뒤 텔 키를 누르기까지 두는 시간(초)
+NEXT_DELAY     = 0.1    #잡던 몹이 끝난 뒤 다음 몹을 찾기 전에 두는 시간(초)
 TELE_GAP       = 1.5    #텔(새로고침 키)을 누른 뒤 다음 텔까지 최소 간격(초). 이동 뒤 주변이 다시 읽힐 시간
 MEM_FAIL_LIMIT = 10     #엔티티 테이블을 연속으로 이만큼 못 읽으면 멈춘다 (화면으로 넘어가지 않는다)
 CALIB_FILES    = ['scarecrow_calib.json', 'calib.json']   #앞엣것 우선
@@ -1393,6 +1394,11 @@ def huntloop(p=None, atkvalue=None):
         if cur == None:
             if target != None:
                 log('대상 끝 : ' + tname)
+                #몹이 죽자마자 다음 몹을 고르지 않고 잠깐 둔 뒤 목록을 새로 읽어서 고른다
+                target  = None
+                clicked = 0.0
+                time.sleep(NEXT_DELAY)
+                continue
             target  = None
             clicked = 0.0
             if len(mobs) > 0:
