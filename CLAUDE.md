@@ -120,6 +120,10 @@ To stop a running script: `pyautogui.FAILSAFE` is disabled in `oman.py`/`tell.py
   distance. The straight-line distance is kept in `o['line']` and attack-key range (`dist`) uses
   it. Players stay straight-line. An unreadable grid falls back to straight-line distance (logged
   on change) rather than stopping, because terrain only orders targets.
+- **Crowd refresh (`opts['crowd']`, since 2026-11-17).** The 메인 tab row 몹 몰림 새로고침 (under
+  탐지 거리) sets `CROWD_N`: when `scanents()['mobs']` (live mobs within `HUNT_DIST` walking steps,
+  off-screen included) reaches that count, the loop presses the refresh key at once (respecting
+  `TELE_GAP`) and drops the target. 0 = off; needs the refresh key; detect-only logs only.
 - **Unreachable mobs (fallback).** For obstacles not in the grid (other mobs, doors), a target
   farther than `STUCK_REACH` tiles with no progress (own position unchanged, distance not
   shrinking) for `STUCK_SEC` is skipped for `SKIP_SEC`; if nothing else remains the loop
@@ -163,8 +167,10 @@ To stop a running script: `pyautogui.FAILSAFE` is disabled in `oman.py`/`tell.py
   counts every `INFO_POLL` ms through its own read-only `Mem` (`self.imem`), separate from the
   macro's `MEM`, so it works before Start.
 - **`감지만` (detect-only)** logs the chosen target and nearby players without clicking or recalling.
-- The old code is kept, unused by `main.py`: `huntloop_sweep`, `_checkmarks`, `soundwatch`.
-  `pit.py`, `memcalib.py`, `collect.py`, `sweep.py` and `sound_record.py` import main's helpers
+- The old code is kept, unused by `main.py`: `huntloop_sweep`, `_checkmarks`. The sound
+  ("소리로 칼질 감지") option, `soundwatch` / `FightGate` and `sound_record.py` were deleted on
+  2026-11-17 at the user's request.
+  `pit.py`, `memcalib.py`, `collect.py` and `sweep.py` import main's helpers
   and globals by name — do not rename them.
 
 The "Architecture" section below describes the older forks (`oman.py`, `tell.py`, `turn.py`) and
@@ -174,7 +180,7 @@ The "Architecture" section below describes the older forks (`oman.py`, `tell.py`
 
 `pit.py` is the one file that is **not** a copy-paste fork. It does `import main` and reuses
 everything that did not change (log queue, `_arm`/PENDING timers, mouse movement,
-`setattckinfo`, buff/transform/return actions, `FightGate` sound detection, mark-template
+`setattckinfo`, buff/transform/return actions, mark-template
 image fallback, config load/save, the `App` GUI via subclassing). It redefines only
 `_checkrHp`, `huntloop`, `runmacro`, and `App`. **`main.py` is unmodified** — a change there
 propagates to `pit.py` automatically, and `pit.py` reads/writes main's module globals

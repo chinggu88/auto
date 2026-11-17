@@ -5,7 +5,7 @@
 #
 #  main.py 에서 그대로 가져다 쓰는 것 :
 #    로그/타이머/PENDING 큐, 마우스 이동, 커서 캘리브레이션, 버프/변신/귀환 동작,
-#    소리 감지(FightGate), 이미지 폴백(마크 템플릿), 설정 저장/불러오기, GUI 틀
+#    이미지 폴백(마크 템플릿), 설정 저장/불러오기, GUI 틀
 #
 #  이 파일이 새로 쓰는 것 :
 #    _checkrHp  - 피/마크 감시를 HP 숫자 + 혈맹명 비교로
@@ -416,13 +416,6 @@ def huntloop(p, atkvalue):
         skillsec += now - tick
         tick      = now
 
-        #칼질 소리가 들리면 이미 잡고 있는 것이므로 커서를 안 건드린다
-        if main.FIGHT_READY and main.FIGHTING:
-            if useskill('칼질 중'):
-                skillsec = 0.0
-            time.sleep(main.FIGHT_POLL)
-            continue
-
         #--- 메모리 경로 : 몹 목록에서 좌표를 집어 바로 찍는다 ---
         if screenready():
             targets = picktargets(cool)
@@ -443,7 +436,7 @@ def huntloop(p, atkvalue):
                         main.gu.press(main.KEY_REFRESH, presses=1)
                         cnt     = 0
                         loopcnt = 0
-                time.sleep(main.FIGHT_POLL)
+                time.sleep(main.HUNT_POLL)
                 continue
 
             hit = False
@@ -511,8 +504,7 @@ def huntloop(p, atkvalue):
             if useskill('공격 후'):
                 skillsec = 0.0
             cnt = 0
-            if not main.FIGHT_READY:
-                idx = 0
+            idx = 0
 
 
 #=====================================================================
@@ -578,13 +570,6 @@ def runmacro():
 
         if main.KEY_REFRESH == None:
             log('새로고침키 미지정 - 새로고침 끔')
-
-        if main.SOUND_ON:
-            t = threading.Thread(target=main.soundwatch)
-            t.daemon = True
-            t.start()
-        else:
-            log('소리 감지 끔 - 서치를 계속 돕니다')
 
         main.HUNT_START = time.time()
         log('사냥 시작')
@@ -762,7 +747,6 @@ class App(main.App):
             + ' (반지름 ' + str(main.SCAN_START) + '~'
             + str(main.SCAN_START * main.SCAN_ROUND) + 'px)')
         log('  새로고침 트리거 : ' + str(opts['nohit']) + '회 헛돌면')
-        log('  소리 감지 : ' + ('사용' if opts.get('sound') else '끔'))
         for rid, label in main.ROLES:
             log('  ' + label + ' : ' + (roles[rid].upper() if roles[rid] else '미지정'))
         act = [(n, key, s) for n, key, s in main.BUFFS if s > 0]

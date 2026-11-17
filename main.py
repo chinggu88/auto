@@ -154,43 +154,6 @@ MARK_SELF_RADIUS = 90          #이 거리(px) 안이면 내 마크로 본다. 0
 MARK_BOTTOM_CUT = 0.88         #화면 높이의 이 비율 아래쪽은 마크 탐지 제외 (하단 HP바/채팅 UI 오탐 방지). 1.0 이면 끔
 
 #=====================================================================
-# 소리 감지 : 스피커로 나가는 소리를 루프백으로 받아 '내가 칼질 중'인지만 본다
-#  - 칼질 소리가 들리면 이미 몹을 잡고 있는 것이므로 마우스 서치를 멈춘다
-#  - 소리가 끊기면 그 자리(스캔점 번호)에서 서치를 이어 돈다
-#
-# 실측 (KakaoTalk 영상 36~56초 = 칼질이 0.44초 간격으로 반복되는 구간) :
-#   칼질중           RMS 약  -6dB,  200Hz 이하가 전체의 18~20%
-#   다른 게임 효과음   RMS -13~-25dB, 200Hz 이하가  2~11%
-#   무음             RMS 약 -98dB
-# 예전 버전은 음량만 봐서 BGM 이나 다른 프로그램 소리에 속았다
-# 칼질음은 저음이 유난히 두꺼우므로 음량과 저음 비중을 같이 봐야 갈린다
-#=====================================================================
-SND_RATE   = 48000     #루프백 장치가 다른 값을 주면 그 값을 쓴다. 여기는 폴백
-SND_FRAME  = 1024      #프레임 크기(48kHz 에서 약 21ms)
-
-SND_LOWHZ  = 200.0     #'저음' 의 경계. 이 아래 에너지 비중을 본다
-SND_TOPHZ  = 11000.0   #비중을 계산할 때 분모로 쓸 상한
-                       #실측은 11kHz 까지만 있는 영상으로 냈다. 분모를 24kHz 까지 벌리면
-                       #같은 소리인데도 비중이 낮게 나와서 임계가 안 맞는다
-
-SND_FIGHT_DB  = -9.0   #이 음량을 넘어야 칼질 후보
-                       #처음엔 -12 로 뒀는데 몹이 나를 때리는 소리까지 칼질로 잡혔다
-                       #몹 공격도 결국 저음이 두꺼운 타격음이라 저음 비중으로는 안 갈린다
-                       #실측 : 몹만 나를 때림 -23~-17dB / 내 칼질 -7dB -> 그 사이를 -9 로 잡는다
-                       #내 칼질(-7)에 2dB 밖에 여유가 없으니, 칼질을 놓치면 -10~-11 로 내린다
-SND_FIGHT_LOW = 15.0   #동시에 저음 비중이 이 %를 넘어야 칼질로 본다
-                       #칼질 18~20 / 다른 효과음 2~11 사이라 15 면 양쪽에 여유가 있다
-SND_FIGHT_AVG = 0.5    #판정에 쓸 이동평균 창(초)
-                       #프레임(21ms) 하나로 재면 타격 스파이크 하나에 놀아난다
-SND_FIGHT_ON  = 0.2    #이만큼 연속으로 조건을 만족하면 칼질 시작(초)
-SND_FIGHT_OFF = 1.5    #이만큼 연속으로 조건을 못 채워야 칼질 끝(초)
-                       #타격 사이 0.44초 공백에 게이트가 덜덜 떨지 않게 시작보다 길게 준다
-SND_FIGHT_MAX = 30.0   #칼질중이 이만큼 이어지면 강제 해제(초)
-                       #BGM 이나 다른 프로그램 소리가 계속 나면 영영 멈춰 있게 되므로
-SND_LOG_SEC   = 5      #측정값 로그 주기(초). 임계를 실기에서 맞출 때 이 값을 보고 조정한다
-FIGHT_POLL    = 0.1    #칼질중일 때 사냥 루프가 쉬는 간격(초)
-
-#=====================================================================
 # 로그 : 매크로 스레드에서 찍고 GUI 스레드가 꺼내 뿌린다
 # tkinter 는 스레드 안전하지 않아서 위젯을 직접 건드리지 않는다
 #=====================================================================
@@ -262,8 +225,8 @@ DEFAULT_OPTS = {
     'attack': True,     #공격(마우스 서치 + 칼질) 사용 여부
     'range':  'near',   #칼 탐지 거리 : 'near'(근거리) / 'far'(원거리)
     'nohit':  2,        #이 횟수만큼 헛돌면 새로고침
-    'sound':  False,    #소리로 칼질을 감지해 서치를 멈출지 (추가 패키지가 필요해서 기본 꺼짐)
     'dist':   8,        #사냥 탐지 거리(타일). 이 안의 몹만 대상으로 삼는다
+    'crowd':  0,        #탐지 거리 안의 살아 있는 몹이 이 수 이상이면 새로고침(텔) 키. 0 이면 안 씀
     'detect': False,    #감지만 : 몹/캐릭터를 로그에만 찍고 클릭도 귀환도 안 한다 (확인용)
     'heal_pct': 50,     #HP 가 이 % 이하면 힐 키
     'ber_pct':  50,     #HP 가 이 % 이하면 베르 키
@@ -296,8 +259,8 @@ MANUAL_POLL        = 0.03   #수동 사냥 : 커서 모양을 보는 간격(초)
 MANUAL_CLICK_GAP   = 0.2    #수동 사냥 : 휠 클릭 한 번 누르고 다음 클릭까지 최소 간격(초). 연타 방지
 SCAN_ROUND         = SCAN_NEAR              #현재 탐지 거리의 바퀴 수
 NOHIT_LIMIT        = DEFAULT_OPTS['nohit']  #헛돌 때 새로고침까지의 횟수
-SOUND_ON           = DEFAULT_OPTS['sound']  #소리 감지 사용 여부
 HUNT_DIST          = DEFAULT_OPTS['dist']   #사냥 탐지 거리(타일)
+CROWD_N            = DEFAULT_OPTS['crowd']  #몹이 이 수 이상 몰리면 새로고침. 0 이면 끔
 DETECT_ONLY        = DEFAULT_OPTS['detect'] #감지만 (클릭/귀환 안 함)
 
 #--- 메모리 사냥 ---
@@ -345,12 +308,6 @@ ALIVE  = False
 HOTKEY = None     #tab 핫키 핸들. 정지할 때 떼어낸다
 HUNT_START = None #사냥 루프에 들어간 시각(time.time()). 종료 때 사냥 시간을 찍는 데 쓴다
                   #카운트다운/캘리브레이션은 사냥이 아니므로 huntloop 직전에 잡는다
-
-#소리로 판단한 칼질 상태. 소리 스레드가 쓰고 사냥 루프가 읽는다
-#bool 하나만 주고받으므로 락은 두지 않는다 (한 박자 늦게 읽어도 다음 프레임에 맞춰진다)
-FIGHTING    = False   #True 면 마우스 서치를 멈춘다
-FIGHT_READY = False   #소리 감시가 실제로 도는 중인지
-                      #루프백을 못 열면 False 라서 게이트가 통째로 꺼지고 예전처럼 계속 서치한다
 
 TRIGGER ={'hunt': False, 'stop': False, 'transform': False, 'return': False, 'chatbuff': False}
 ORDER   = ['stop', 'return', 'transform', 'chatbuff']   #처리 우선순위 : 정지 > 귀환 > 버프 > 변신 > 채팅버프 (채팅버프는 맨 뒤. 채팅 뒤에 누른 키는 채팅칸에 먹혀 안 들어간다)
@@ -706,111 +663,6 @@ def chatbufftimer():
     request('chatbuff')
     _arm(CHAT_INTERVAL, chatbufftimer)
 
-#=====================================================================
-# 소리 분석 (DSP) : 오디오 장치와 분리해서 순수 계산만 한다
-#  - numpy 는 opencv-python 이 이미 끌고 오므로 추가 설치가 없다
-#  - 여기 있는 것들은 장치 없이도 돌아간다 (합성 신호로 검증 가능)
-#=====================================================================
-try:
-    import numpy as _np
-    NUMPY_OK = True
-except ImportError:
-    NUMPY_OK = False
-
-#float 배열 -> dBFS. 무음이면 -120 으로 바닥을 깐다
-def _rms_db(buf):
-    if len(buf) == 0:
-        return -120.0
-    r = float(_np.sqrt(_np.mean(_np.square(buf))))
-    if r <= 1e-9:
-        return -120.0
-    return float(20.0 * _np.log10(r))
-
-#int16 바이트 -> 모노 float 배열 (-1.0 ~ 1.0)
-def _tomono(raw, channels):
-    a = _np.frombuffer(raw, dtype=_np.int16).astype(_np.float32) / 32768.0
-    if channels > 1:
-        n = (len(a) // channels) * channels
-        a = a[:n].reshape(-1, channels).mean(axis=1)
-    return a
-
-#저음 비중(%) : SND_TOPHZ 까지의 에너지 중 SND_LOWHZ 아래가 차지하는 비율
-#분모를 상한으로 자르는 이유는 SND_TOPHZ 주석에 적어둔 그대로다
-#0 번 빈(DC)은 뺀다. 사운드카드에 DC 가 실려 있으면 저음이 부풀려져서 오탐이 된다
-def _lowratio(mag, rate):
-    n     = len(mag)
-    binhz = (rate * 0.5) / max(1, n - 1)
-    lo    = max(1, int(SND_LOWHZ / binhz) + 1)
-    hi    = min(n, int(SND_TOPHZ / binhz) + 1)
-    total = float(_np.sum(mag[1:hi]))
-    if total <= 1e-12:
-        return 0.0
-    return 100.0 * float(_np.sum(mag[1:lo])) / total
-
-#한 프레임의 (음량, 저음비중) 을 받아 칼질중인지 판정한다
-#판정을 이 클래스에 몰아두면 장치 없이도 값만 밀어 넣어 확인할 수 있다
-#  - 시작은 짧게(ON), 끝은 길게(OFF) 잡는 히스테리시스
-#    타격 사이 0.44초 공백에 게이트가 덜덜 떨면 서치가 들락날락해서 오히려 손해다
-#  - MAX 를 넘기면 강제로 풀고, 한 번 조용해지기 전까지 다시 안 들어간다
-#    BGM 을 켜 뒀을 때 영영 멈춰 있는 것을 막는 안전장치다
-class FightGate:
-    def __init__(self, framesec, db=None, low=None, avg=None,
-                 on=None, off=None, maxsec=None):
-        self.framesec = framesec
-        self.db       = SND_FIGHT_DB  if db     == None else db
-        self.low      = SND_FIGHT_LOW if low    == None else low
-        self.on       = SND_FIGHT_ON  if on     == None else on
-        self.off      = SND_FIGHT_OFF if off    == None else off
-        self.maxsec   = SND_FIGHT_MAX if maxsec == None else maxsec
-        self.win      = max(1, int((SND_FIGHT_AVG if avg == None else avg) / framesec))
-        self.dbbuf    = []
-        self.lowbuf   = []
-        self.fight    = False
-        self.forced   = False    #MAX 초과로 강제 해제된 상태인가
-        self.hotsec   = 0.0      #연속으로 조건을 만족한 시간
-        self.coldsec  = 0.0      #연속으로 조건을 못 채운 시간
-        self.fightsec = 0.0      #칼질중으로 본 지 얼마나 됐나
-        self.avgdb    = -120.0   #마지막 이동평균 (로그용)
-        self.avglow   = 0.0
-        self.event    = None     #이번 프레임에 상태가 바뀌었으면 'on'/'off'/'forced'
-
-    def push(self, db, low):
-        self.event = None
-        self.dbbuf.append(db)
-        self.lowbuf.append(low)
-        if len(self.dbbuf) > self.win:
-            self.dbbuf.pop(0)
-            self.lowbuf.pop(0)
-        self.avgdb  = sum(self.dbbuf)  / len(self.dbbuf)
-        self.avglow = sum(self.lowbuf) / len(self.lowbuf)
-
-        #음량과 저음 비중을 둘 다 넘겨야 칼질로 본다
-        if self.avgdb > self.db and self.avglow > self.low:
-            self.hotsec += self.framesec
-            self.coldsec = 0.0
-        else:
-            self.coldsec += self.framesec
-            self.hotsec   = 0.0
-
-        if not self.fight:
-            if self.forced:
-                if self.coldsec >= self.off:
-                    self.forced = False
-            elif self.hotsec >= self.on:
-                self.fight    = True
-                self.fightsec = 0.0
-                self.event    = 'on'
-        else:
-            self.fightsec += self.framesec
-            if self.coldsec >= self.off:
-                self.fight = False
-                self.event = 'off'
-            elif self.fightsec >= self.maxsec:
-                self.fight  = False
-                self.forced = True
-                self.event  = 'forced'
-        return self.fight
-
 #image 폴더에 들어있는 마크 이미지(png/bmp)를 긁어온다
 #  - MARK_MAX 까지만 본다. mark4.PNG 를 폴더에 둬도 MARK_MAX 가 3 이면 안 본다
 #  - 같은 번호의 png 와 bmp 가 둘 다 있으면 bmp(원본)를 우선한다
@@ -1066,118 +918,6 @@ def _checkmarks():
     _arm(HP_INTERVAL, checkrHp)
 
 #=====================================================================
-# 소리 감시 스레드
-#  - 키/마우스를 절대 안 건드린다. 숫자를 뽑아 FIGHTING 만 세운다
-#  - ALIVE 를 보고 스스로 끝난다. dostop() 은 손댈 필요 없다
-#  - 패키지가 없거나 장치를 못 열면 경고만 찍고 조용히 빠진다 (사냥은 계속 돈다)
-#=====================================================================
-
-#기본 스피커의 루프백 입력 장치를 찾는다. 못 찾으면 (None, 사유)
-def _findloopback(pa):
-    try:
-        return pa.get_default_wasapi_loopback(), None
-    except Exception:
-        pass
-    #구버전 PyAudioWPatch 폴백 : 루프백 장치를 직접 훑는다
-    try:
-        for dev in pa.get_loopback_device_info_generator():
-            return dev, None
-    except Exception as e:
-        return None, str(e)
-    return None, '루프백 장치를 못 찾음'
-
-def soundwatch():
-    global FIGHTING, FIGHT_READY
-    if not NUMPY_OK:
-        log('소리 : numpy 가 없어서 끕니다')
-        return
-    try:
-        import pyaudiowpatch as pa
-    except ImportError:
-        log('소리 : PyAudioWPatch 가 없어서 끕니다  (pip install PyAudioWPatch)')
-        return
-
-    p = st = None
-    try:
-        p        = pa.PyAudio()
-        dev, err = _findloopback(p)
-        if dev == None:
-            log('소리 : 루프백 장치를 못 엽니다 - ' + str(err))
-            return
-
-        rate = int(dev.get('defaultSampleRate', SND_RATE))
-        ch   = int(dev.get('maxInputChannels', 2)) or 2
-        st   = p.open(format=pa.paInt16, channels=ch, rate=rate, input=True,
-                      input_device_index=dev['index'], frames_per_buffer=SND_FRAME)
-        log('소리 : 루프백 = ' + str(dev.get('name')) + '  ' + str(rate) + 'Hz  ' + str(ch) + 'ch')
-        log('소리 : 칼질 판정 = %.0fdB 초과 이면서 저음 %.0f%% 초과가 %.1fs 이어지면 시작, '
-            '%.1fs 못 채우면 끝' % (SND_FIGHT_DB, SND_FIGHT_LOW, SND_FIGHT_ON, SND_FIGHT_OFF))
-
-        framesec = float(SND_FRAME) / rate
-        gate     = FightGate(framesec)
-        window   = _np.hanning(SND_FRAME)
-        nextlog  = time.time() + SND_LOG_SEC
-        peakdb   = -120.0     #로그 주기 동안의 최대값. 임계를 맞출 때 이게 제일 쓸모 있다
-        peaklow  = 0.0
-        fightsec = 0.0        #로그 주기 동안 칼질로 본 시간
-
-        FIGHT_READY = True      #여기서부터 사냥 루프가 FIGHTING 을 믿는다
-
-        while ALIVE:
-            raw = st.read(SND_FRAME, exception_on_overflow=False)
-            buf = _tomono(raw, ch)
-            if len(buf) != len(window):
-                window = _np.hanning(len(buf))
-            mag = _np.abs(_np.fft.rfft(buf * window))
-            db  = _rms_db(buf)
-            low = _lowratio(mag, rate)
-
-            FIGHTING = gate.push(db, low)
-
-            if gate.event == 'on':
-                log('소리 : 칼질 감지 (%.1fdB / 저음 %.0f%%) - 서치 멈춤' % (gate.avgdb, gate.avglow))
-            elif gate.event == 'off':
-                log('소리 : 칼질 끝 (%.1fs) - 멈춘 자리에서 서치 재개' % gate.fightsec)
-            elif gate.event == 'forced':
-                log('소리 : 칼질 %.0fs 초과 - 강제 해제하고 서치 재개 (BGM 확인)' % gate.fightsec)
-
-            if db > peakdb:
-                peakdb = db
-            if low > peaklow:
-                peaklow = low
-            if gate.fight:
-                fightsec += framesec
-
-            #임계를 실기에서 맞추라고 주기적으로 실측값을 찍는다
-            #칼질할 때 최대 dB / 저음% 를 보고 SND_FIGHT_DB, SND_FIGHT_LOW 를 조정하면 된다
-            now = time.time()
-            if now >= nextlog:
-                log('소리 : 최근 %ds  최대 %.1fdB  최대 저음 %.0f%%  칼질 %.1fs'
-                    % (SND_LOG_SEC, peakdb, peaklow, fightsec))
-                peakdb   = -120.0
-                peaklow  = 0.0
-                fightsec = 0.0
-                nextlog  = now + SND_LOG_SEC
-
-    except Exception as e:
-        log('소리 감시 오류 : ' + str(e))
-    finally:
-        try:
-            if st != None:
-                st.stop_stream()
-                st.close()
-        except Exception:
-            pass
-        try:
-            if p != None:
-                p.terminate()
-        except Exception:
-            pass
-        FIGHT_READY = False
-        FIGHTING    = False      #소리가 죽어도 사냥 루프가 멈춰 있으면 안 된다
-        log('소리 감시 종료')
-
-#=====================================================================
 # 사냥 루프 (매크로 스레드) - 용던
 #=====================================================================
 #예전 방식 : 커서로 캐릭터 주변을 훑다가 공격 커서가 뜨면 클릭. main.py 는 더 이상 부르지 않는다
@@ -1189,7 +929,7 @@ def huntloop_sweep(p, atkvalue):
     parkpos = (p[0], p[1] + SCAN_START * SCAN_FAR + PARK_GAP)
     cnt     = 0       #클릭 없이 헛돈 횟수 (칼질하면 초기화)
     loopcnt = 0       #공격 루프 누적 횟수 (새로고침될 때만 초기화)
-    idx     = 0       #지금 볼 스캔점 번호. 전투로 멈췄다 이어 돌려고 while 밖에 둔다
+    idx     = 0       #지금 볼 스캔점 번호
 
     #공격스킬 쿨타임. 실제 시계가 아니라 '공격 중이던 시간' 만 더한다
     #시작할 때는 꽉 채워둬서 첫 대상을 치자마자 한 번 쓴다
@@ -1197,7 +937,7 @@ def huntloop_sweep(p, atkvalue):
     skillsec = float(SKILL_COOL)
     tick     = time.perf_counter()   #마지막으로 쿨타임을 더한 시각
 
-    #쿨타임이 차 있으면 스킬을 누른다. 대상을 클릭한 직후와 칼질 중에만 부른다
+    #쿨타임이 차 있으면 스킬을 누른다. 대상을 클릭한 직후에만 부른다
     def useskill(why):
         if skillon and skillsec >= SKILL_COOL:
             log('스킬 ' + KEY_SKILL.upper() + ' (' + why + ')')
@@ -1236,14 +976,6 @@ def huntloop_sweep(p, atkvalue):
         skillsec += now - tick
         tick      = now
 
-        #칼질 소리가 들리면 이미 몹을 잡고 있는 것이므로 커서를 아예 안 건드린다
-        #idx 를 그대로 두므로 소리가 끊기면 멈춘 자리(중간)에서 이어서 돈다
-        if FIGHT_READY and FIGHTING:
-            if useskill('칼질 중'):      #몹을 잡는 중에 쿨이 차면 바로 쓴다
-                skillsec = 0.0
-            time.sleep(FIGHT_POLL)
-            continue
-
         # sc.run_pending()
 
         x, y = points[idx]
@@ -1278,9 +1010,7 @@ def huntloop_sweep(p, atkvalue):
             if useskill('공격 후'):      #대상을 치고 나서 쿨이 차 있으면 스킬
                 skillsec = 0.0
             cnt = 0
-            if not FIGHT_READY:
-                idx = 0         #소리 감시가 없으면 예전처럼 1바퀴 첫 방향부터 다시 스캔
-                                #(소리가 있으면 곧 칼질로 멈추고, 끝난 뒤 다음 점부터 이어 돈다)
+            idx = 0         #대상을 쳤으면 1바퀴 첫 방향부터 다시 스캔
 
 #=====================================================================
 # 메모리 사냥 : 엔티티 테이블에서 몹 위치를 읽어 가까운 순으로 클릭
@@ -1546,6 +1276,9 @@ def huntloop(p=None, atkvalue=None):
     apress  = [0.0] * len(atks)      #공격 키를 마지막으로 누른 시각
 
     log('사냥 : 탐지 거리 ' + str(HUNT_DIST) + '타일, 가까운 순')
+    if CROWD_N > 0:
+        log('몹 몰림 새로고침 : 탐지 거리 안 ' + str(CROWD_N) + '마리 이상'
+            + ('' if KEY_REFRESH != None else '  (새로고침 키 미지정 - 안 씀)'))
     for i, (akey, adelay, adist) in enumerate(atks):
         log('공격 키 ' + str(i + 1) + ' : ' + akey.upper() + '  딜레이 ' + str(adelay)
             + '초  거리 ' + str(adist) + '타일 이하')
@@ -1625,6 +1358,24 @@ def huntloop(p=None, atkvalue=None):
         if not ATTACK_ON and not DETECT_ONLY:
             time.sleep(HUNT_POLL)
             continue
+
+        #몹 몰림 : 탐지 거리 안의 살아 있는 몹이 CROWD_N 이상이면 바로 새로고침(텔) 키
+        #(이뮨과 같은 몹 수 - 걸어서 닿는 거리 기준, 화면 밖 몹도 센다)
+        #텔 직후에는 주변이 아직 안 바뀌었을 수 있으므로 TELE_GAP 동안은 다시 누르지 않는다
+        if (CROWD_N > 0 and KEY_REFRESH != None and len(found['mobs']) >= CROWD_N
+                and now - teled >= TELE_GAP):
+            if DETECT_ONLY:
+                log('[감지만] 몹 몰림 ' + str(len(found['mobs'])) + '마리 >= ' + str(CROWD_N))
+            else:
+                log('몹 몰림 ' + str(len(found['mobs'])) + '마리 >= ' + str(CROWD_N) + ' - 텔 : ' + KEY_REFRESH)
+                gu.press(KEY_REFRESH, presses=1)
+                teled   = time.perf_counter()
+                moved   = teled
+                target  = None
+                tname   = ''
+                clicked = 0.0
+                time.sleep(HUNT_POLL)
+                continue
 
         #화면 좌표를 미리 구해 화면 안에 있는 몹만 남긴다 (화면 밖은 클릭할 수 없다)
         #감지만 모드에서는 보정이 없을 수 있으므로 거르지 않는다
@@ -1819,14 +1570,18 @@ def loadconfig(path=None):
     #옵션은 아는 키만, 값이 이상하면 기본값을 유지한다
     if isinstance(data.get('attack'), bool):
         opts['attack'] = data['attack']
-    if isinstance(data.get('sound'), bool):
-        opts['sound'] = data['sound']
     if isinstance(data.get('detect'), bool):
         opts['detect'] = data['detect']
     try:
         v = int(data.get('dist', opts['dist']))
         if v >= 1:
             opts['dist'] = v
+    except (TypeError, ValueError):
+        pass
+    try:
+        v = int(data.get('crowd', opts['crowd']))
+        if v >= 0:
+            opts['crowd'] = v
     except (TypeError, ValueError):
         pass
     gaps   = defaultgaps()
@@ -1868,8 +1623,8 @@ def saveconfig(seconds, roles, opts, path=None):
             'attack':  bool(opts.get('attack', DEFAULT_OPTS['attack'])),
             'range':   str(opts.get('range',  DEFAULT_OPTS['range'])),
             'nohit':   int(opts.get('nohit',  DEFAULT_OPTS['nohit'])),
-            'sound':   bool(opts.get('sound',  DEFAULT_OPTS['sound'])),
             'dist':    int(opts.get('dist',    DEFAULT_OPTS['dist'])),
+            'crowd':   int(opts.get('crowd',   DEFAULT_OPTS['crowd'])),
             'detect':  bool(opts.get('detect', DEFAULT_OPTS['detect'])),
             'heal_pct': int(opts.get('heal_pct', DEFAULT_OPTS['heal_pct'])),
             'ber_pct':  int(opts.get('ber_pct',  DEFAULT_OPTS['ber_pct'])),
@@ -1893,10 +1648,10 @@ def saveconfig(seconds, roles, opts, path=None):
 #=====================================================================
 def applyconfig(seconds, roles, opts=None):
     #seconds : {키 -> 초},  roles : {'return'/'refresh'/'transform'/'heal'/'immune'/'ber' -> 키 or None}
-    #opts    : {'attack': bool, 'range': 'near'/'far', 'nohit': int, 'sound': bool, ..., 'attacks': [...]}
+    #opts    : {'attack': bool, 'range': 'near'/'far', 'nohit': int, 'dist': int, ..., 'attacks': [...]}
     global BUFFS, BUFFKEY, TRIGGER, ORDER, PENDING
     global KEY_RETURN, KEY_REFRESH, KEY_TRANSFORM, TRANSFORM_INTERVAL, KEY_SKILL, SKILL_COOL, ATTACKS
-    global ATTACK_ON, SCAN_ROUND, NOHIT_LIMIT, SOUND_ON, HUNT_DIST, DETECT_ONLY
+    global ATTACK_ON, SCAN_ROUND, NOHIT_LIMIT, HUNT_DIST, CROWD_N, DETECT_ONLY
     global KEY_HEAL, KEY_BER, KEY_IMMUNE, HEAL_PCT, BER_PCT, IMMUNE_N, HEAL_GAP, BER_GAP, IMMUNE_GAP
 
     if opts == None:
@@ -1904,8 +1659,8 @@ def applyconfig(seconds, roles, opts=None):
     ATTACK_ON     = bool(opts.get('attack', DEFAULT_OPTS['attack']))
     SCAN_ROUND    = SCAN_FAR if opts.get('range') == 'far' else SCAN_NEAR
     NOHIT_LIMIT   = max(1, int(opts.get('nohit', DEFAULT_OPTS['nohit'])))
-    SOUND_ON      = bool(opts.get('sound', DEFAULT_OPTS['sound']))
     HUNT_DIST     = max(1, int(opts.get('dist', DEFAULT_OPTS['dist'])))
+    CROWD_N       = max(0, int(opts.get('crowd', DEFAULT_OPTS['crowd'])))
     DETECT_ONLY   = bool(opts.get('detect', DEFAULT_OPTS['detect']))
     KEY_RETURN    = roles.get('return')
     KEY_REFRESH   = roles.get('refresh')
@@ -2035,12 +1790,6 @@ def runmacro():
 
         if KEY_REFRESH == None:
             log('새로고침키 미지정 - 새로고침 끔')
-
-        #소리 감시는 쓰지 않는다. 몹이 살아 있는지는 엔티티 테이블로 안다
-        # if SOUND_ON:
-        #     t = threading.Thread(target=soundwatch)
-        #     t.daemon = True
-        #     t.start()
 
         HUNT_START = time.time()
         expstart   = readexp()     #끝날 때 얼마나 올랐는지 찍으려고 잡아 둔다
@@ -2202,6 +1951,16 @@ class App:
         self.dsent = ttk.Entry(dsrow, textvariable=self.dist, width=6, justify='center')
         self.dsent.pack(side='left')
         ttk.Label(dsrow, foreground='#555', text='  타일 안의 몹만 대상으로 삼습니다').pack(side='left')
+
+        #--- 몹 몰림 새로고침 (탐지 거리 밑) ---
+        crrow = ttk.Frame(optbox)
+        crrow.pack(fill='x', padx=6, pady=(2, 0))
+        ttk.Label(crrow, text='몹 몰림 새로고침', width=12).pack(side='left')
+        self.crowd  = tk.StringVar(value=str(DEFAULT_OPTS['crowd']))
+        self.crent  = ttk.Entry(crrow, textvariable=self.crowd, width=6, justify='center')
+        self.crent.pack(side='left')
+        ttk.Label(crrow, foreground='#555',
+                  text='  마리 이상이 탐지 거리 안에 있으면 새로고침 키를 누릅니다 (0 = 안 씀)').pack(side='left')
         self.detect = tk.BooleanVar(value=DEFAULT_OPTS['detect'])
         self.dtchk  = ttk.Checkbutton(optbox, text='감지만 (클릭 / 귀환 없이 로그만 - 확인용)',
                                       variable=self.detect)
@@ -2232,18 +1991,6 @@ class App:
         ttk.Label(nhrow, foreground='#555',
                   text='  지금은 쓰지 않음 - 주변에 몹이 없으면 바로 새로고침(텔) 키를 누릅니다'
                   ).pack(side='left')
-
-        #--- 소리 감지 ---
-        self.sound  = tk.BooleanVar(value=DEFAULT_OPTS['sound'])
-        self.sndchk = ttk.Checkbutton(optbox, text='(예전) 소리로 칼질 감지 - 지금 사냥에서는 쓰지 않음',
-                                      variable=self.sound)
-        self.sndchk.pack(anchor='w', padx=6, pady=(6, 0))
-        ttk.Label(optbox, foreground='#555',
-                  text='스피커로 나가는 소리를 듣고 칼질중이면 마우스 서치를 멈췄다가, '
-                       '소리가 끊기면 멈춘 자리에서 이어서 돕니다.\n'
-                       'PyAudioWPatch 가 필요하고, 게임 BGM 을 끄면 판정이 정확해집니다. '
-                       '장치를 못 열면 자동으로 꺼지고 예전처럼 계속 서치합니다.'
-                  ).pack(anchor='w', padx=6, pady=(0, 4))
 
         #--- 저장 / 불러오기 / 기본값 (탭 아래, 모든 탭 공통) ---
         cfgbar = ttk.Frame(root)
@@ -2514,8 +2261,8 @@ class App:
         self.attack.set(bool(opts.get('attack', DEFAULT_OPTS['attack'])))
         self.range.set(str(opts.get('range',  DEFAULT_OPTS['range'])))
         self.nohit.set(str(opts.get('nohit',  DEFAULT_OPTS['nohit'])))
-        self.sound.set(bool(opts.get('sound',  DEFAULT_OPTS['sound'])))
         self.dist.set(str(opts.get('dist',     DEFAULT_OPTS['dist'])))
+        self.crowd.set(str(opts.get('crowd',   DEFAULT_OPTS['crowd'])))
         self.detect.set(bool(opts.get('detect', DEFAULT_OPTS['detect'])))
         self.healpct.set(str(opts.get('heal_pct', DEFAULT_OPTS['heal_pct'])))
         self.berpct.set(str(opts.get('ber_pct',   DEFAULT_OPTS['ber_pct'])))
@@ -2555,6 +2302,11 @@ class App:
             log('탐지 거리는 1 이상 정수만 : ' + rawdist)
             return None, None, None
 
+        rawcrowd = self.crowd.get().strip() or '0'
+        if not rawcrowd.isdigit():
+            log('몹 몰림 새로고침은 0 이상 정수만 : ' + rawcrowd)
+            return None, None, None
+
         roles = {}
         gaps  = defaultgaps()
         for rid, label in ROLES:
@@ -2585,8 +2337,8 @@ class App:
         opts = {'attack': self.attack.get(),
                 'range':  self.range.get(),
                 'nohit':  int(raw),
-                'sound':  self.sound.get(),
                 'dist':   int(rawdist),
+                'crowd':  int(rawcrowd),
                 'detect': self.detect.get(),
                 'heal_pct': int(self.healpct.get()),
                 'ber_pct':  int(self.berpct.get()),
@@ -2632,7 +2384,7 @@ class App:
     def lockui(self):
         for key in FKEYS:
             self.entry[key].configure(state='disabled')
-        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.nhent, self.dsent, self.dtchk) + tuple(self.rngbtn):
+        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.nhent, self.dsent, self.crent, self.dtchk) + tuple(self.rngbtn):
             b.configure(state='disabled')
         for rid, wids in self.rolewid.items():
             for w in wids:
@@ -2648,7 +2400,7 @@ class App:
 
     #정지하면 설정을 다시 만질 수 있게 열어준다
     def unlockui(self):
-        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.nhent, self.dsent, self.dtchk) + tuple(self.rngbtn):
+        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.nhent, self.dsent, self.crent, self.dtchk) + tuple(self.rngbtn):
             b.configure(state='normal')
         for rid, wids in self.rolewid.items():
             for w in wids:
@@ -2679,7 +2431,8 @@ class App:
         log('=== 설정 ===')
         log('  공격 : ' + ('사용' if opts['attack'] else '끔'))
         log('  탐지 거리 : ' + str(opts['dist']) + '타일' + ('  (감지만)' if opts.get('detect') else ''))
-        log('  새로고침(텔) : 주변에 몹이 없으면 바로')
+        log('  새로고침(텔) : 주변에 몹이 없으면 바로'
+            + (', 탐지 거리 안 몹 ' + str(opts['crowd']) + '마리 이상이면' if opts.get('crowd') else ''))
         log('  힐 : ' + ((roles['heal'].upper() + '  HP ' + str(opts['heal_pct']) + '% 이하') if roles.get('heal') else '미지정'))
         log('  베르 : ' + ((roles['ber'].upper() + '  HP ' + str(opts['ber_pct']) + '% 이하') if roles.get('ber') else '미지정'))
         log('  이뮨 : ' + ((roles['immune'].upper() + '  주위 몹 ' + str(opts['immune_n']) + '마리 이상') if roles.get('immune') else '미지정'))
