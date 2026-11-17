@@ -128,8 +128,8 @@ To stop a running script: `pyautogui.FAILSAFE` is disabled in `oman.py`/`tell.py
   farther than `STUCK_REACH` tiles with no progress (own position unchanged, distance not
   shrinking) for `STUCK_SEC` is skipped for `SKIP_SEC`; if nothing else remains the loop
   teleports.
-- **Idle watchdog.** Holding the same target for `IDLE_TELE_SEC` (20 s) with no target change
-  or teleport forces the refresh key, whatever the distance.
+- **Idle watchdog removed (2026-11-17).** The forced teleport after `IDLE_TELE_SEC` with no
+  target change was deleted at the user's request; the loop no longer stalls on one target.
 - **Heal / Ber / Immune** — three more F-key roles (`heal`, `ber`, `immune`). Each hunt-loop tick
   reads HP (`readhp()`: secure holder first, then `chains.hp`) and the live-mob count from
   `scanents()`: HP% ≤ `heal_pct` / `ber_pct` presses that key, mobs ≥ `immune_n` presses immune.
