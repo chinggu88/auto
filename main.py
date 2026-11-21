@@ -2020,31 +2020,11 @@ class App:
                                       variable=self.detect)
         self.dtchk.pack(anchor='w', padx=6, pady=(4, 0))
 
-        #--- 칼 탐지 거리 ---
-        rngrow = ttk.Frame(optbox)
-        rngrow.pack(fill='x', padx=6, pady=(6, 0))
-        ttk.Label(rngrow, text='(예전) 서치 거리', width=12).pack(side='left')
+        #(예전) 서치 거리 / 헛돔 횟수 칸은 화면에서 뺐다 (지금 사냥 루프는 쓰지 않는다, 2026-11-21 사용자 요청)
+        #값은 config.json 에 그대로 두고 저장할 때 다시 써 넣으려고 변수만 남긴다 (pit.py / huntloop_sweep 호환)
         self.range  = tk.StringVar(value=DEFAULT_OPTS['range'])
         self.rngbtn = []
-        for rid, label in RANGES:
-            n  = SCAN_FAR if rid == 'far' else SCAN_NEAR
-            rb = ttk.Radiobutton(rngrow,
-                                 text='%s (%d~%dpx, %d점)'
-                                      % (label, SCAN_START, SCAN_START * n, SCAN_DIRS * n),
-                                 value=rid, variable=self.range)
-            rb.pack(side='left', padx=(0, 12))
-            self.rngbtn.append(rb)
-
-        #--- 새로고침 트리거 ---
-        nhrow = ttk.Frame(optbox)
-        nhrow.pack(fill='x', padx=6, pady=(4, 6))
-        ttk.Label(nhrow, text='(예전) 헛돔 횟수', width=12).pack(side='left')
-        self.nohit = tk.StringVar(value=str(DEFAULT_OPTS['nohit']))
-        self.nhent = ttk.Entry(nhrow, textvariable=self.nohit, width=6, justify='center')
-        self.nhent.pack(side='left')
-        ttk.Label(nhrow, foreground='#555',
-                  text='  지금은 쓰지 않음 - 주변에 몹이 없으면 바로 새로고침(텔) 키를 누릅니다'
-                  ).pack(side='left')
+        self.nohit  = tk.StringVar(value=str(DEFAULT_OPTS['nohit']))
 
         #--- 저장 / 불러오기 / 기본값 (탭 아래, 모든 탭 공통) ---
         cfgbar = ttk.Frame(root)
@@ -2448,7 +2428,7 @@ class App:
     def lockui(self):
         for key in FKEYS:
             self.entry[key].configure(state='disabled')
-        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.nhent, self.dsent, self.crent, self.pcbox, self.pcent, self.dtchk) + tuple(self.rngbtn):
+        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.dsent, self.crent, self.pcbox, self.pcent, self.dtchk) + tuple(self.rngbtn):
             b.configure(state='disabled')
         for rid, wids in self.rolewid.items():
             for w in wids:
@@ -2464,7 +2444,7 @@ class App:
 
     #정지하면 설정을 다시 만질 수 있게 열어준다
     def unlockui(self):
-        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.nhent, self.dsent, self.crent, self.pcbox, self.pcent, self.dtchk) + tuple(self.rngbtn):
+        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.dsent, self.crent, self.pcbox, self.pcent, self.dtchk) + tuple(self.rngbtn):
             b.configure(state='normal')
         for rid, wids in self.rolewid.items():
             for w in wids:
