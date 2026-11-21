@@ -318,19 +318,6 @@ INFO_POLL   = 500     #내 캐릭터 정보 표시 갱신 간격(ms)
 MEM            = None   #memread.Mem. runmacro 가 붙이고 뗀다
 CASTER         = None   #memcast.Caster. 힐 / 이뮨을 내 캐릭터에게 걸 때 쓴다 (postracker.py 의 턴언데드와 같은 방식)
 CALIB          = None   #아핀 계수 (a,b,c,d,e,f). 화면 = (a*dx+b*dy+c, d*dx+e*dy+f)
-#--- 커서 아래 엔티티로 겨누기 (보정 파일 없이 클릭, 2026-11-21) ---
-#mem.json chains.hover_id = Lin.exe+0x1AB548 : 커서 아래 엔티티의 주소(ptr), 빈 땅이면 0. 읽기만 한다
-#커서를 옮겨 그 칸이 노리는 몹의 ptr 이 됐을 때만 클릭한다. 맞힌 자리를 모아 아핀을 그 자리에서 배운다(CALIB)
-HOVER_ON     = False   #hover_id 를 읽을 수 있으면 True. runmacro 가 정한다
-LEARN        = []      #[(dx, dy, 화면x, 화면y)] 이번 실행에서 커서로 확인한 몹 자리
-LEARN_MIN    = 4       #이만큼 모이면 아핀을 푼다 (그 전에는 창 가운데부터 훑는다)
-LEARN_MAX    = 40      #오래된 점은 버린다 (창을 옮기면 새 점으로 바뀐다)
-HOVER_SETTLE = 0.03    #커서를 옮긴 뒤 게임이 칸을 갱신할 때까지 기다리는 시간(초)
-HOVER_GRID   = 32      #훑을 때 칸 간격(px). 몹 그림보다 작아야 사이로 빠지지 않는다
-HOVER_NEAR   = [(0, 0), (0, -16), (0, 16), (-16, 0), (16, 0), (-16, -16), (16, -16), (-16, 16), (16, 16),
-                (0, -32), (0, 32), (-32, 0), (32, 0)]   #예상 자리 주변을 먼저 본다 (몹 그림은 발보다 위로 크다)
-HOVER_BUDGET = 3.0     #한 번 겨눌 때 훑는 최대 시간(초). 넘으면 이번엔 포기한다
-HOVER_SKIP   = 3.0     #못 겨눈 몹을 잠깐 빼 두는 시간(초)
 
 #=====================================================================
 # 트리거 : 한 순간에 하나만 True
@@ -1077,105 +1064,6 @@ def loadcalib():
         return coef, name + ' (' + str(len(pts)) + '점)'
     return None, why
 
-#커서 아래 엔티티 주소. 못 읽으면 None, 빈 땅이면 0
-def readhover():
-    if MEM == None:
-        return None
-    return MEM.value('hover_id')
-
-#게임 창 (왼, 위, 너비, 높이). 못 찾으면 모니터 전체
-def gamerect():
-    try:
-        wins = gu.getWindowsWithTitle('Lineage')
-        for w in wins:
-            if w.title == 'Lineage Windows Client':
-                return (w.left, w.top, w.width, w.height)
-        if wins:
-            w = wins[0]
-            return (w.left, w.top, w.width, w.height)
-    except Exception:
-        pass
-    sw, sh = gu.size()
-    return (0, 0, sw, sh)
-
-#커서로 확인한 자리를 모으고 LEARN_MIN 개가 넘으면 아핀을 다시 푼다
-def learnpoint(dx, dy, x, y):
-    global CALIB
-    import turnundead_mem as tm
-    LEARN.append((dx, dy, x, y))
-    if len(LEARN) > LEARN_MAX:
-        del LEARN[0]
-    if len(LEARN) >= LEARN_MIN:
-        coef = tm.fit_affine_nocheck(LEARN)
-        if coef != None:
-            if CALIB == None:
-                log('커서로 확인한 몹 ' + str(len(LEARN)) + '곳으로 화면 위치를 배웠다 - 이제 예상 자리부터 겨눈다')
-            CALIB = coef
-
-#가운데에서 바깥으로 HOVER_GRID 간격의 네모 둘레를 돈다 (창 안만)
-def _spiral(cx, cy, rect):
-    l, t, w, h = rect
-    rmax = max(w, h) // HOVER_GRID + 1
-    for r in range(0, rmax):
-        if r == 0:
-            pts = [(0, 0)]
-        else:
-            pts = []
-            for i in range(-r, r + 1):
-                pts += [(i, -r), (i, r)]
-            for j in range(-r + 1, r):
-                pts += [(-r, j), (r, j)]
-        for i, j in pts:
-            x, y = cx + i * HOVER_GRID, cy + j * HOVER_GRID
-            if l + 4 <= x < l + w - 4 and t + 4 <= y < t + h - 4:
-                yield x, y
-
-#몹 o 위에 커서를 올린다. 커서 아래 칸이 o 의 ptr 가 되면 그 화면 좌표, 못 하면 None
-#훑다가 다른 몹 위에 걸려도 그 자리를 배운다 (아핀이 빨리 잡힌다)
-def aimhover(found, o, pos):
-    want  = o.get('ptr')
-    if not want:
-        return None
-    me    = found['pos']
-    known = {}
-    for d, m, mpos in found['mobs']:
-        if m.get('ptr'):
-            known[m['ptr']] = (mpos[0] - me[0], mpos[1] - me[1])
-    dx, dy = pos[0] - me[0], pos[1] - me[1]
-    rect   = gamerect()
-
-    def probe(x, y):
-        _movefast(x, y)
-        time.sleep(HOVER_SETTLE)
-        h = readhover()
-        if h and h in known:
-            learnpoint(known[h][0], known[h][1], x, y)
-        return h == want
-
-    t0 = time.perf_counter()
-    if CALIB != None:
-        px, py = toscreen(dx, dy)
-        for ox, oy in HOVER_NEAR:
-            if probe(px + ox, py + oy):
-                return (px + ox, py + oy)
-        cx, cy = px, py            #예상이 빗나가면 예상 자리부터 훑는다
-    else:
-        cx, cy = rect[0] + rect[2] // 2, rect[1] + rect[3] // 2   #아직 못 배웠다 : 창 가운데(= 내 캐릭터)부터
-    had = CALIB != None
-    for x, y in _spiral(cx, cy, rect):
-        if not ALIVE or time.perf_counter() - t0 > HOVER_BUDGET:
-            break
-        if probe(x, y):
-            return (x, y)
-        if not had and CALIB != None:
-            #훑다가 화면 위치를 배웠다 -> 남은 칸을 다 돌지 않고 예상 자리 주변을 바로 본다
-            had = True
-            px, py = toscreen(dx, dy)
-            for ox, oy in HOVER_NEAR:
-                if probe(px + ox, py + oy):
-                    return (px + ox, py + oy)
-    return None
-
 #게임 좌표 차이 -> 화면 좌표. 보정이 없으면 None
 def toscreen(dx, dy):
     if CALIB == None:
@@ -1542,9 +1430,7 @@ def huntloop(p=None, atkvalue=None):
                     mobs.append((dist, o, pos, None))
                 continue
             xy = toscreen(pos[0] - found['pos'][0], pos[1] - found['pos'][1])
-            if HOVER_ON:
-                mobs.append((dist, o, pos, xy))   #커서로 직접 찾으므로 화면 안팎을 미리 거르지 않는다
-            elif DETECT_ONLY or (xy != None and 0 <= xy[0] < screen[0] and 0 <= xy[1] < screen[1]):
+            if DETECT_ONLY or (xy != None and 0 <= xy[0] < screen[0] and 0 <= xy[1] < screen[1]):
                 mobs.append((dist, o, pos, xy))
 
         #잡던 몹이 아직 살아 있는지. 목록에 없으면 죽었거나 사라졌거나 멀어진 것
@@ -1615,18 +1501,6 @@ def huntloop(p=None, atkvalue=None):
 
         if ATK_MODE == 'cast':
             pass                  #클릭하지 않는다. 아래 공격 키가 몹 id 를 대상으로 쏜다
-        elif HOVER_ON and now - clicked >= RECLICK_SEC:
-            #커서 아래 칸이 이 몹이 될 때까지 커서를 옮기고, 맞으면 그 자리에서 클릭한다 (보정 파일 없음)
-            at = aimhover(found, o, pos)
-            if at == None:
-                log('겨누기 실패 : ' + tname + ' - ' + str(HOVER_SKIP) + '초 동안 제외')
-                skip[o['id']] = time.perf_counter() + HOVER_SKIP
-                target  = None
-                tname   = ''
-                clicked = 0.0
-                continue
-            gu.click()
-            clicked = time.perf_counter()
         elif now - clicked >= RECLICK_SEC:
             #칼 모양 확인 없이 바로 클릭한다
             # _movefast(parkpos[0], parkpos[1])      #커서 모양 초기화
@@ -1899,7 +1773,7 @@ def applyconfig(seconds, roles, opts=None):
 #매크로 본체. GUI 스레드가 아니라 전용 스레드에서 돈다
 #끝나면(정지/오류) GUI 가 스레드 종료를 보고 시작 버튼을 다시 켠다
 def runmacro():
-    global ALIVE, HOTKEY, HUNT_START, MEM, CALIB, WATCH_FAIL, WATCH_SEEN, CASTER, HOVER_ON
+    global ALIVE, HOTKEY, HUNT_START, MEM, CALIB, WATCH_FAIL, WATCH_SEEN, CASTER
     expstart   = None    #사냥을 시작할 때의 (레벨, 경험치, %)
     adenastart = None    #사냥을 시작할 때의 아데나
     try:
@@ -1939,22 +1813,13 @@ def runmacro():
             log('감지만 - 클릭/귀환/새로고침을 하지 않고 로그만 찍습니다')
 
         atk = None
-        HOVER_ON = False          #아래에서 마우스 클릭 + hover_id 가 읽힐 때만 켠다 (지난 실행 값을 남기지 않는다)
         if ATTACK_ON and not DETECT_ONLY and ATK_MODE == 'cast':
             #대상 지정 방식 : 화면 보정이 필요 없다. 쏠 공격 키가 하나는 있어야 한다
             if not [a for a in ATTACKS if a[0] != None and a[1] > 0]:
                 log('대상 지정 방식인데 쓸 공격 키가 없다 (공격 탭에서 키와 딜레이를 정하세요) - 시작 안 함')
                 return
             log('공격 방식 : 대상 지정 (턴언데드 방식) - 클릭 없이 몹 id 를 대상으로 공격 키를 쏜다. 게임 창이 맨 앞이어야 한다')
-        elif ATTACK_ON and not DETECT_ONLY and readhover() != None:
-            #커서 아래 엔티티 칸(mem.json hover_id) 이 읽히면 보정 파일을 쓰지 않는다.
-            #커서를 옮겨 그 칸이 노리는 몹이 됐을 때만 클릭하고, 맞힌 자리로 화면 위치를 그 자리에서 배운다
-            HOVER_ON = True
-            CALIB    = None
-            del LEARN[:]
-            log('공격 방식 : 마우스 클릭 (커서 아래 몹 확인 - 보정 파일 안 씀). 처음 몇 마리는 창 가운데부터 훑어서 찾는다')
         elif ATTACK_ON and not DETECT_ONLY:
-            HOVER_ON = False
             CALIB, why = loadcalib()
             if CALIB == None:
                 log('화면 보정이 없어 몹을 클릭할 수 없다 : ' + why)
