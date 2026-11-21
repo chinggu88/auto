@@ -64,6 +64,15 @@ To stop a running script: `pyautogui.FAILSAFE` is disabled in `oman.py`/`tell.py
   start. **No cursor-shape check** (removed by the user on 2026-11-15): the computed position is
   clicked directly. The probe's miss cooldown made the loop see "no mobs" and teleport while mobs
   were present. Off-screen mobs and nameless entities are not candidates.
+- **Hover aiming (no calibration file, since 2026-11-21).** `mem.json` `chains.hover_id` =
+  `Lin.exe+0x1AB548` holds the **entity pointer** under the cursor (0 over empty ground; found with
+  `memprobe.py --hover`, confirmed in-game; it is the same `0x5AB548` once mistaken for a self
+  pointer). When it reads, click mode sets `HOVER_ON`, ignores `CALIB_FILES`, and `aimhover()`
+  moves the cursor until `hover == target['ptr']`, then clicks there. Every hit on any listed mob
+  is a `(dx, dy, x, y)` sample in `LEARN`; from `LEARN_MIN` samples `CALIB` is fitted in memory and
+  later aims try the prediction and `HOVER_NEAR` offsets first, otherwise a `HOVER_GRID` spiral
+  from the window centre within `HOVER_BUDGET`. A miss skips the mob for `HOVER_SKIP`. With
+  `hover_id` unset the old calibration-file path is unchanged.
 - **Recall (`_checkrHp`)** — any entity of kind `player` other than self → `request('return')`.
   "Could not read" is never treated as "nobody around": `MEM_FAIL_LIMIT` consecutive failures stop
   the macro. The HP check is still the `checkhp.PNG` image.
