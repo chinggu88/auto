@@ -227,6 +227,8 @@ DEFAULT_OPTS = {
     'nohit':  2,        #이 횟수만큼 헛돌면 새로고침
     'dist':   8,        #사냥 탐지 거리(타일). 이 안의 몹만 대상으로 삼는다
     'crowd':  0,        #탐지 거리 안의 살아 있는 몹이 이 수 이상이면 새로고침(텔) 키. 0 이면 안 씀
+    'pc_act':  'ber',   #다른 캐릭터를 만났을 때 : 'ber'(베르 후 정지) / 'refresh'(새로고침 키로 텔하고 사냥 계속)
+    'pc_dist': 0,       #다른 캐릭터가 이 타일(직선 거리) 안에 들어왔을 때만 위 동작. 0 = 보이기만 하면 바로
     'detect': False,    #감지만 : 몹/캐릭터를 로그에만 찍고 클릭도 귀환도 안 한다 (확인용)
     'heal_pct': 50,     #HP 가 이 % 이하면 힐 키
     'ber_pct':  50,     #HP 가 이 % 이하면 베르 키
@@ -240,6 +242,7 @@ def defaultgaps():
 PCT_CHOICES = [10, 20, 30, 40, 50, 60, 70, 80, 90]    #힐 / 베르 HP % 드롭다운
 MOB_CHOICES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]         #이뮨 몹 수 드롭다운
 RANGES = [('near', '근거리'), ('far', '원거리')]   #표시 순서
+PC_ACTS = [('ber', '베르 후 정지'), ('refresh', '새로고침(텔)')]   #사람 만났을 때 동작 (표시 순서)
 
 BUFFS   = []      # [(트리거명, 키, 주기(초))]  주기 0 = 비활성
 BUFFKEY = {}      # 트리거명 -> 키
@@ -262,6 +265,21 @@ NOHIT_LIMIT        = DEFAULT_OPTS['nohit']  #헛돌 때 새로고침까지의 �
 HUNT_DIST          = DEFAULT_OPTS['dist']   #사냥 탐지 거리(타일)
 CROWD_N            = DEFAULT_OPTS['crowd']  #몹이 이 수 이상 몰리면 새로고침. 0 이면 끔
 DETECT_ONLY        = DEFAULT_OPTS['detect'] #감지만 (클릭/귀환 안 함)
+PC_ACT             = DEFAULT_OPTS['pc_act']  #사람 만났을 때 : 'ber' / 'refresh'
+PC_DIST            = DEFAULT_OPTS['pc_dist'] #사람이 이 타일 안에 들어오면 동작. 0 = 보이면 바로
+
+#사람 만남 트리거 : 정한 칸(PC_DIST) 안에 들어온 다른 캐릭터만 남긴다 (공통 - 사냥 루프 / 피 감시가 같이 쓴다)
+#players 는 scanents()['players'] (직선 거리 순). None 이면 None 을 그대로 돌려 '못 읽음' 을 지킨다
+def nearpcs(players):
+    if players == None:
+        return None
+    if PC_DIST <= 0:
+        return list(players)
+    return [r for r in players if r[0] <= PC_DIST]
+
+#새로고침(텔) 으로 피할 수 있나 : 동작이 새로고침이고 새로고침 키가 있어야 한다. 아니면 베르 후 정지
+def pcrefresh():
+    return PC_ACT == 'refresh' and KEY_REFRESH != None
 
 #--- 메모리 사냥 ---
 #몹 위치와 주변 캐릭터는 엔티티 테이블(memread)에서 읽는다. 화면을 훑지 않는다
@@ -878,10 +896,12 @@ def _checkrHp():
             return
     else:
         WATCH_FAIL = 0
-        others = found['players']
+        others = nearpcs(found['players'])     #정한 칸 안에 들어온 캐릭터만
         if len(others) > 0:
             names = ', '.join(str(o.get('name')) + '(거리 ' + str(d) + ')' for d, o, pos in others)
-            if not DETECT_ONLY:
+            if not DETECT_ONLY and pcrefresh():
+                pass                   #새로고침(텔) 동작은 사냥 루프가 매 틱 처리한다 (정지하지 않는다)
+            elif not DETECT_ONLY:
                 log('다른 캐릭터 발견 : ' + names + ' 베르 귀환!')
                 request('return')
                 return
@@ -1300,13 +1320,28 @@ def huntloop(p=None, atkvalue=None):
 
         now  = time.perf_counter()
 
-        #다른 플레이어(mem.json ent.rules 의 player : id 1,000,000~1,999,999) 가 보이면 베르 후 정지
+        #다른 플레이어(mem.json ent.rules 의 player : id 1,000,000~1,999,999) 가 정한 칸(PC_DIST) 안에 들어오면
+        #  베르 후 정지 (PC_ACT 'ber') 또는 새로고침 키로 텔하고 사냥 계속 (PC_ACT 'refresh')
         #혈맹마크 이미지 확인을 대신한다. 사냥 루프가 매 틱 읽는 테이블로 바로 본다 (타이머 2초를 안 기다린다)
         #감지만 모드는 _checkrHp 가 로그만 찍는다
-        if not DETECT_ONLY and found['players']:
+        pcs = nearpcs(found['players'])
+        if not DETECT_ONLY and pcs:
             names = ', '.join(str(o.get('name')) + '(id ' + str(o.get('id')) + ', 거리 ' + str(d) + ')'
-                              for d, o, pos in found['players'])
+                              for d, o, pos in pcs)
+            if pcrefresh():
+                #텔 직후에는 주변이 아직 안 바뀌었을 수 있으므로 TELE_GAP 동안은 다시 누르지 않고, 그동안 공격도 안 한다
+                if now - teled >= TELE_GAP:
+                    log('다른 플레이어 발견 : ' + names + ' - 텔 : ' + KEY_REFRESH)
+                    gu.press(KEY_REFRESH, presses=1)
+                    teled   = time.perf_counter()
+                target  = None
+                tname   = ''
+                clicked = 0.0
+                time.sleep(HUNT_POLL)
+                continue
             log('다른 플레이어 발견 : ' + names)
+            if PC_ACT == 'refresh':
+                log('새로고침 키 미지정 - 베르 후 정지로 대신한다')
             if KEY_BER != None:
                 log('베르 ' + KEY_BER.upper() + ' - 정지')
                 gu.press(KEY_BER, presses=1)
@@ -1572,6 +1607,14 @@ def loadconfig(path=None):
             opts['crowd'] = v
     except (TypeError, ValueError):
         pass
+    if data.get('pc_act') in [a for a, label in PC_ACTS]:
+        opts['pc_act'] = data['pc_act']
+    try:
+        v = int(data.get('pc_dist', opts['pc_dist']))
+        if v >= 0:
+            opts['pc_dist'] = v
+    except (TypeError, ValueError):
+        pass
     gaps   = defaultgaps()
     rawgap = data.get('gaps')
     for rid in gaps:
@@ -1613,6 +1656,8 @@ def saveconfig(seconds, roles, opts, path=None):
             'nohit':   int(opts.get('nohit',  DEFAULT_OPTS['nohit'])),
             'dist':    int(opts.get('dist',    DEFAULT_OPTS['dist'])),
             'crowd':   int(opts.get('crowd',   DEFAULT_OPTS['crowd'])),
+            'pc_act':  str(opts.get('pc_act',  DEFAULT_OPTS['pc_act'])),
+            'pc_dist': int(opts.get('pc_dist', DEFAULT_OPTS['pc_dist'])),
             'detect':  bool(opts.get('detect', DEFAULT_OPTS['detect'])),
             'heal_pct': int(opts.get('heal_pct', DEFAULT_OPTS['heal_pct'])),
             'ber_pct':  int(opts.get('ber_pct',  DEFAULT_OPTS['ber_pct'])),
@@ -1639,7 +1684,7 @@ def applyconfig(seconds, roles, opts=None):
     #opts    : {'attack': bool, 'range': 'near'/'far', 'nohit': int, 'dist': int, ..., 'attacks': [...]}
     global BUFFS, BUFFKEY, TRIGGER, ORDER, PENDING
     global KEY_RETURN, KEY_REFRESH, KEY_TRANSFORM, TRANSFORM_INTERVAL, KEY_SKILL, SKILL_COOL, ATTACKS
-    global ATTACK_ON, SCAN_ROUND, NOHIT_LIMIT, HUNT_DIST, CROWD_N, DETECT_ONLY
+    global ATTACK_ON, SCAN_ROUND, NOHIT_LIMIT, HUNT_DIST, CROWD_N, DETECT_ONLY, PC_ACT, PC_DIST
     global KEY_HEAL, KEY_BER, KEY_IMMUNE, HEAL_PCT, BER_PCT, IMMUNE_N, HEAL_GAP, BER_GAP, IMMUNE_GAP
 
     if opts == None:
@@ -1649,6 +1694,8 @@ def applyconfig(seconds, roles, opts=None):
     NOHIT_LIMIT   = max(1, int(opts.get('nohit', DEFAULT_OPTS['nohit'])))
     HUNT_DIST     = max(1, int(opts.get('dist', DEFAULT_OPTS['dist'])))
     CROWD_N       = max(0, int(opts.get('crowd', DEFAULT_OPTS['crowd'])))
+    PC_ACT        = opts.get('pc_act') if opts.get('pc_act') in [a for a, label in PC_ACTS] else DEFAULT_OPTS['pc_act']
+    PC_DIST       = max(0, int(opts.get('pc_dist', DEFAULT_OPTS['pc_dist'])))
     DETECT_ONLY   = bool(opts.get('detect', DEFAULT_OPTS['detect']))
     KEY_RETURN    = roles.get('return')
     KEY_REFRESH   = roles.get('refresh')
@@ -1771,8 +1818,13 @@ def runmacro():
             if DETECT_ONLY:
                 log('피 / 주변 캐릭터 감시 시작 (로그만)')
             else:
-                log('피 / 주변 캐릭터 감시 시작 - 발견 시 베르(' + returnkey().upper() + ') 후 정지')
+                log('피 / 주변 캐릭터 감시 시작 - 발견 시 '
+                    + ('새로고침(' + KEY_REFRESH.upper() + ') 텔' if pcrefresh() else '베르(' + returnkey().upper() + ') 후 정지')
+                    + ('  (' + str(PC_DIST) + '타일 안)' if PC_DIST > 0 else ''))
             checkrHp()
+        elif pcrefresh():
+            log('주변 캐릭터 발견 시 새로고침(' + KEY_REFRESH.upper() + ') 텔'
+                + ('  (' + str(PC_DIST) + '타일 안)' if PC_DIST > 0 else '') + ' - 사냥 루프가 처리')
         else:
             log('베르 키 미지정 - 주변 캐릭터 감시 끔')
 
@@ -1949,6 +2001,20 @@ class App:
         self.crent.pack(side='left')
         ttk.Label(crrow, foreground='#555',
                   text='  마리 이상이 탐지 거리 안에 있으면 새로고침 키를 누릅니다 (0 = 안 씀)').pack(side='left')
+
+        #--- 사람 만남 : 동작(베르 후 정지 / 새로고침) + 트리거 칸 ---
+        pcrow = ttk.Frame(optbox)
+        pcrow.pack(fill='x', padx=6, pady=(2, 0))
+        ttk.Label(pcrow, text='사람 만남', width=12).pack(side='left')
+        self.pcact  = tk.StringVar(value=dict(PC_ACTS)[DEFAULT_OPTS['pc_act']])
+        self.pcbox  = ttk.Combobox(pcrow, textvariable=self.pcact, width=12, state='readonly',
+                                   values=[label for a, label in PC_ACTS])
+        self.pcbox.pack(side='left')
+        self.pcdist = tk.StringVar(value=str(DEFAULT_OPTS['pc_dist']))
+        self.pcent  = ttk.Entry(pcrow, textvariable=self.pcdist, width=6, justify='center')
+        self.pcent.pack(side='left', padx=(6, 0))
+        ttk.Label(pcrow, foreground='#555',
+                  text='  타일 안에 다른 캐릭터가 들어오면 (0 = 보이면 바로). 새로고침은 공격 탭의 새로고침 키').pack(side='left')
         self.detect = tk.BooleanVar(value=DEFAULT_OPTS['detect'])
         self.dtchk  = ttk.Checkbutton(optbox, text='감지만 (클릭 / 귀환 없이 로그만 - 확인용)',
                                       variable=self.detect)
@@ -2251,6 +2317,8 @@ class App:
         self.nohit.set(str(opts.get('nohit',  DEFAULT_OPTS['nohit'])))
         self.dist.set(str(opts.get('dist',     DEFAULT_OPTS['dist'])))
         self.crowd.set(str(opts.get('crowd',   DEFAULT_OPTS['crowd'])))
+        self.pcact.set(dict(PC_ACTS).get(opts.get('pc_act'), dict(PC_ACTS)[DEFAULT_OPTS['pc_act']]))
+        self.pcdist.set(str(opts.get('pc_dist', DEFAULT_OPTS['pc_dist'])))
         self.detect.set(bool(opts.get('detect', DEFAULT_OPTS['detect'])))
         self.healpct.set(str(opts.get('heal_pct', DEFAULT_OPTS['heal_pct'])))
         self.berpct.set(str(opts.get('ber_pct',   DEFAULT_OPTS['ber_pct'])))
@@ -2295,6 +2363,12 @@ class App:
             log('몹 몰림 새로고침은 0 이상 정수만 : ' + rawcrowd)
             return None, None, None
 
+        rawpcd = self.pcdist.get().strip() or '0'
+        if not rawpcd.isdigit():
+            log('사람 만남 거리는 0 이상 정수만 : ' + rawpcd)
+            return None, None, None
+        pcact = dict((label, a) for a, label in PC_ACTS).get(self.pcact.get(), DEFAULT_OPTS['pc_act'])
+
         roles = {}
         gaps  = defaultgaps()
         for rid, label in ROLES:
@@ -2327,6 +2401,8 @@ class App:
                 'nohit':  int(raw),
                 'dist':   int(rawdist),
                 'crowd':  int(rawcrowd),
+                'pc_act':  pcact,
+                'pc_dist': int(rawpcd),
                 'detect': self.detect.get(),
                 'heal_pct': int(self.healpct.get()),
                 'ber_pct':  int(self.berpct.get()),
@@ -2372,7 +2448,7 @@ class App:
     def lockui(self):
         for key in FKEYS:
             self.entry[key].configure(state='disabled')
-        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.nhent, self.dsent, self.crent, self.dtchk) + tuple(self.rngbtn):
+        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.nhent, self.dsent, self.crent, self.pcbox, self.pcent, self.dtchk) + tuple(self.rngbtn):
             b.configure(state='disabled')
         for rid, wids in self.rolewid.items():
             for w in wids:
@@ -2388,7 +2464,7 @@ class App:
 
     #정지하면 설정을 다시 만질 수 있게 열어준다
     def unlockui(self):
-        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.nhent, self.dsent, self.crent, self.dtchk) + tuple(self.rngbtn):
+        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.nhent, self.dsent, self.crent, self.pcbox, self.pcent, self.dtchk) + tuple(self.rngbtn):
             b.configure(state='normal')
         for rid, wids in self.rolewid.items():
             for w in wids:
@@ -2421,6 +2497,9 @@ class App:
         log('  탐지 거리 : ' + str(opts['dist']) + '타일' + ('  (감지만)' if opts.get('detect') else ''))
         log('  새로고침(텔) : 주변에 몹이 없으면 바로'
             + (', 탐지 거리 안 몹 ' + str(opts['crowd']) + '마리 이상이면' if opts.get('crowd') else ''))
+        log('  사람 만남 : ' + dict(PC_ACTS)[opts.get('pc_act', DEFAULT_OPTS['pc_act'])]
+            + ('  ' + str(opts['pc_dist']) + '타일 안' if opts.get('pc_dist') else '  보이면 바로')
+            + ('  (새로고침 키 미지정 - 베르 후 정지로 대신)' if opts.get('pc_act') == 'refresh' and not roles.get('refresh') else ''))
         log('  힐 : ' + ((roles['heal'].upper() + '  HP ' + str(opts['heal_pct']) + '% 이하') if roles.get('heal') else '미지정'))
         log('  베르 : ' + ((roles['ber'].upper() + '  HP ' + str(opts['ber_pct']) + '% 이하') if roles.get('ber') else '미지정'))
         log('  이뮨 : ' + ((roles['immune'].upper() + '  주위 몹 ' + str(opts['immune_n']) + '마리 이상') if roles.get('immune') else '미지정'))

@@ -124,6 +124,12 @@ To stop a running script: `pyautogui.FAILSAFE` is disabled in `oman.py`/`tell.py
   탐지 거리) sets `CROWD_N`: when `scanents()['mobs']` (live mobs within `HUNT_DIST` walking steps,
   off-screen included) reaches that count, the loop presses the refresh key at once (respecting
   `TELE_GAP`) and drops the target. 0 = off; needs the refresh key; detect-only logs only.
+- **Player encounter (`opts['pc_act']` / `opts['pc_dist']`, since 2026-11-21).** The 메인 tab row
+  사람 만남 picks the reaction — 베르 후 정지 (`'ber'`, the old behaviour) or 새로고침(텔) (`'refresh'`:
+  press the refresh key, drop the target, keep hunting; `TELE_GAP` between presses and no attacking
+  meanwhile) — and a trigger radius `PC_DIST` in straight-line tiles (0 = any visible player).
+  `nearpcs()` applies the radius for both `huntloop` and `_checkrHp`. `'refresh'` with no refresh key
+  falls back to ber + stop.
 - **Unreachable mobs (fallback).** For obstacles not in the grid (other mobs, doors), a target
   farther than `STUCK_REACH` tiles with no progress (own position unchanged, distance not
   shrinking) for `STUCK_SEC` is skipped for `SKIP_SEC`; if nothing else remains the loop
