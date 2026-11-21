@@ -331,9 +331,6 @@ HOVER_NEAR   = [(0, 0), (0, -16), (0, 16), (-16, 0), (16, 0), (-16, -16), (16, -
                 (0, -32), (0, 32), (-32, 0), (32, 0)]   #예상 자리 주변을 먼저 본다 (몹 그림은 발보다 위로 크다)
 HOVER_BUDGET = 3.0     #한 번 겨눌 때 훑는 최대 시간(초). 넘으면 이번엔 포기한다
 HOVER_SKIP   = 3.0     #못 겨눈 몹을 잠깐 빼 두는 시간(초)
-HOVER_LOCAL  = 4       #배운 뒤 예상이 빗나가면 예상 자리 둘레를 이만큼(칸 수)만 훑는다. 창 전체를 돌면 멀리 있는 몹에서 시간을 다 쓴다
-HOVER_OUTLIER = 40     #배운 점 중 아핀에서 이만큼(px) 넘게 벗어난 것은 잘못 읽은 점으로 보고 버린다
-HOVER_MARGIN = 10      #예상 자리가 게임 창 밖(이만큼 안쪽 여유)이면 겨누지 않는다
 
 #=====================================================================
 # 트리거 : 한 순간에 하나만 True
@@ -1102,8 +1099,6 @@ def gamerect():
     return (0, 0, sw, sh)
 
 #커서로 확인한 자리를 모으고 LEARN_MIN 개가 넘으면 아핀을 다시 푼다
-#잘못 읽은 점(커서를 옮긴 직후 이전 몹 값이 남았거나, 캐릭터가 걷는 중이라 화면이 밀린 경우)이 섞이면
-#가까운 곳은 맞아도 멀리 갈수록 크게 빗나간다. 그래서 풀 때마다 가장 많이 벗어난 점을 HOVER_OUTLIER 밖이면 버리고 다시 푼다
 def learnpoint(dx, dy, x, y):
     global CALIB
     import turnundead_mem as tm
@@ -1112,25 +1107,15 @@ def learnpoint(dx, dy, x, y):
         del LEARN[0]
     if len(LEARN) >= LEARN_MIN:
         coef = tm.fit_affine_nocheck(LEARN)
-        while coef != None and len(LEARN) > LEARN_MIN:
-            a, b, c, d, e, f = coef[:6]
-            errs = [math.hypot(a * p[0] + b * p[1] + c - p[2], d * p[0] + e * p[1] + f - p[3]) for p in LEARN]
-            worst = max(range(len(errs)), key=lambda i: errs[i])
-            if errs[worst] <= HOVER_OUTLIER:
-                break
-            del LEARN[worst]
-            coef = tm.fit_affine_nocheck(LEARN)
         if coef != None:
             if CALIB == None:
                 log('커서로 확인한 몹 ' + str(len(LEARN)) + '곳으로 화면 위치를 배웠다 - 이제 예상 자리부터 겨눈다')
             CALIB = coef
 
 #가운데에서 바깥으로 HOVER_GRID 간격의 네모 둘레를 돈다 (창 안만)
-def _spiral(cx, cy, rect, rings=None):
+def _spiral(cx, cy, rect):
     l, t, w, h = rect
     rmax = max(w, h) // HOVER_GRID + 1
-    if rings != None:
-        rmax = min(rmax, rings + 1)
     for r in range(0, rmax):
         if r == 0:
             pts = [(0, 0)]
@@ -1151,48 +1136,33 @@ def aimhover(found, o, pos):
     want  = o.get('ptr')
     if not want:
         return None
-    #화면은 내 캐릭터를 따라 움직인다. 클릭한 뒤 걸어가는 중이면 표를 읽은 때와 지금 내 좌표가 다르므로
-    #내 좌표는 겨누는 순간마다 다시 읽는다 (self_x / self_y 는 4바이트 두 개라 가볍다)
-    def mypos():
-        p = MEM.selfpos() if MEM != None else None
-        return p if p != None else found['pos']
+    me    = found['pos']
     known = {}
     for d, m, mpos in found['mobs']:
         if m.get('ptr'):
-            known[m['ptr']] = mpos
-    me     = mypos()
+            known[m['ptr']] = (mpos[0] - me[0], mpos[1] - me[1])
     dx, dy = pos[0] - me[0], pos[1] - me[1]
     rect   = gamerect()
 
-    #커서를 옮긴 직후에는 게임이 아직 칸을 안 바꿨을 수 있다 (이전 자리의 몹이 남아 있다).
-    #두 번 읽어 같을 때만 믿는다. 그래야 엉뚱한 자리를 배우지 않는다
     def probe(x, y):
         _movefast(x, y)
         time.sleep(HOVER_SETTLE)
         h = readhover()
-        if not h:
-            return False
-        time.sleep(HOVER_SETTLE)
-        if readhover() != h:
-            return False
-        if h in known:
-            now = mypos()
-            learnpoint(known[h][0] - now[0], known[h][1] - now[1], x, y)
+        if h and h in known:
+            learnpoint(known[h][0], known[h][1], x, y)
         return h == want
 
     t0 = time.perf_counter()
-    rings = None
     if CALIB != None:
         px, py = toscreen(dx, dy)
         for ox, oy in HOVER_NEAR:
             if probe(px + ox, py + oy):
                 return (px + ox, py + oy)
-        cx, cy = px, py            #예상이 빗나가면 예상 자리 둘레만 훑는다
-        rings  = HOVER_LOCAL
+        cx, cy = px, py            #예상이 빗나가면 예상 자리부터 훑는다
     else:
         cx, cy = rect[0] + rect[2] // 2, rect[1] + rect[3] // 2   #아직 못 배웠다 : 창 가운데(= 내 캐릭터)부터
     had = CALIB != None
-    for x, y in _spiral(cx, cy, rect, rings):
+    for x, y in _spiral(cx, cy, rect):
         if not ALIVE or time.perf_counter() - t0 > HOVER_BUDGET:
             break
         if probe(x, y):
@@ -1562,8 +1532,7 @@ def huntloop(p=None, atkvalue=None):
 
         #화면 좌표를 미리 구해 화면 안에 있는 몹만 남긴다 (화면 밖은 클릭할 수 없다)
         #감지만 모드에서는 보정이 없을 수 있으므로 거르지 않는다
-        mobs  = []
-        grect = gamerect() if HOVER_ON else None
+        mobs = []
         for dist, o, pos in found['mobs']:
             if skip.get(o['id'], 0) > now:
                 continue      #다가가지 못해서 잠깐 빼 둔 몹 (벽 너머 등)
@@ -1574,12 +1543,7 @@ def huntloop(p=None, atkvalue=None):
                 continue
             xy = toscreen(pos[0] - found['pos'][0], pos[1] - found['pos'][1])
             if HOVER_ON:
-                #커서로 직접 찾는다. 화면 위치를 배운 뒤에는 예상 자리가 게임 창 밖인 몹(멀리 있는 몹)을 뺀다
-                #(못 배웠을 때는 거르지 않는다 - 거를 근거가 없다)
-                if xy != None and not (grect[0] + HOVER_MARGIN <= xy[0] < grect[0] + grect[2] - HOVER_MARGIN
-                                       and grect[1] + HOVER_MARGIN <= xy[1] < grect[1] + grect[3] - HOVER_MARGIN):
-                    continue
-                mobs.append((dist, o, pos, xy))
+                mobs.append((dist, o, pos, xy))   #커서로 직접 찾으므로 화면 안팎을 미리 거르지 않는다
             elif DETECT_ONLY or (xy != None and 0 <= xy[0] < screen[0] and 0 <= xy[1] < screen[1]):
                 mobs.append((dist, o, pos, xy))
 
@@ -1655,9 +1619,7 @@ def huntloop(p=None, atkvalue=None):
             #커서 아래 칸이 이 몹이 될 때까지 커서를 옮기고, 맞으면 그 자리에서 클릭한다 (보정 파일 없음)
             at = aimhover(found, o, pos)
             if at == None:
-                log('겨누기 실패 : ' + tname + '  거리 ' + str(o.get('line', dist))
-                    + ('  (예상 ' + str(xy) + ')' if xy != None else '  (아직 화면 위치 못 배움)')
-                    + ' - ' + str(HOVER_SKIP) + '초 동안 제외')
+                log('겨누기 실패 : ' + tname + ' - ' + str(HOVER_SKIP) + '초 동안 제외')
                 skip[o['id']] = time.perf_counter() + HOVER_SKIP
                 target  = None
                 tname   = ''

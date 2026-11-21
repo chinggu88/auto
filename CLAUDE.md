@@ -71,11 +71,7 @@ To stop a running script: `pyautogui.FAILSAFE` is disabled in `oman.py`/`tell.py
   moves the cursor until `hover == target['ptr']`, then clicks there. Every hit on any listed mob
   is a `(dx, dy, x, y)` sample in `LEARN`; from `LEARN_MIN` samples `CALIB` is fitted in memory and
   later aims try the prediction and `HOVER_NEAR` offsets first, otherwise a `HOVER_GRID` spiral
-  from the window centre within `HOVER_BUDGET` (once learned, only `HOVER_LOCAL` rings around the
-  prediction). A hit counts only if two reads `HOVER_SETTLE` apart agree, samples use my position
-  re-read at that moment (`MEM.selfpos()`, the camera follows me), and each refit drops the worst
-  sample while it is more than `HOVER_OUTLIER` px off. Once learned, mobs predicted outside the game
-  window are not candidates. A miss skips the mob for `HOVER_SKIP`. With
+  from the window centre within `HOVER_BUDGET`. A miss skips the mob for `HOVER_SKIP`. With
   `hover_id` unset the old calibration-file path is unchanged.
 - **Recall (`_checkrHp`)** — any entity of kind `player` other than self → `request('return')`.
   "Could not read" is never treated as "nobody around": `MEM_FAIL_LIMIT` consecutive failures stop
