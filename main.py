@@ -227,6 +227,7 @@ DEFAULT_OPTS = {
     'nohit':  2,        #이 횟수만큼 헛돌면 새로고침
     'dist':   8,        #사냥 탐지 거리(타일). 이 안의 몹만 대상으로 삼는다
     'crowd':  0,        #탐지 거리 안의 살아 있는 몹이 이 수 이상이면 새로고침(텔) 키. 0 이면 안 씀
+    'atk_mode': 'click', #공격 방식 : 'click'(보정한 화면 좌표를 클릭) / 'cast'(몹 id 를 마법 대상 칸에 써넣고 공격 키 - postracker.py 턴언데드 방식)
     'pc_act':  'ber',   #다른 캐릭터를 만났을 때 : 'ber'(베르 후 정지) / 'refresh'(새로고침 키로 텔하고 사냥 계속)
     'pc_dist': 0,       #다른 캐릭터가 이 타일(직선 거리) 안에 들어왔을 때만 위 동작. 0 = 보이기만 하면 바로
     'detect': False,    #감지만 : 몹/캐릭터를 로그에만 찍고 클릭도 귀환도 안 한다 (확인용)
@@ -242,6 +243,7 @@ def defaultgaps():
 PCT_CHOICES = [10, 20, 30, 40, 50, 60, 70, 80, 90]    #힐 / 베르 HP % 드롭다운
 MOB_CHOICES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]         #이뮨 몹 수 드롭다운
 RANGES = [('near', '근거리'), ('far', '원거리')]   #표시 순서
+ATK_MODES = [('click', '마우스 클릭'), ('cast', '대상 지정 (턴언데드 방식)')]   #공격 방식 (표시 순서)
 PC_ACTS = [('ber', '베르 후 정지'), ('refresh', '새로고침(텔)')]   #사람 만났을 때 동작 (표시 순서)
 
 BUFFS   = []      # [(트리거명, 키, 주기(초))]  주기 0 = 비활성
@@ -265,6 +267,7 @@ NOHIT_LIMIT        = DEFAULT_OPTS['nohit']  #헛돌 때 새로고침까지의 �
 HUNT_DIST          = DEFAULT_OPTS['dist']   #사냥 탐지 거리(타일)
 CROWD_N            = DEFAULT_OPTS['crowd']  #몹이 이 수 이상 몰리면 새로고침. 0 이면 끔
 DETECT_ONLY        = DEFAULT_OPTS['detect'] #감지만 (클릭/귀환 안 함)
+ATK_MODE           = DEFAULT_OPTS['atk_mode'] #공격 방식 : 'click' / 'cast'
 PC_ACT             = DEFAULT_OPTS['pc_act']  #사람 만났을 때 : 'ber' / 'refresh'
 PC_DIST            = DEFAULT_OPTS['pc_dist'] #사람이 이 타일 안에 들어오면 동작. 0 = 보이면 바로
 
@@ -1295,6 +1298,11 @@ def huntloop(p=None, atkvalue=None):
     apress  = [0.0] * len(atks)      #공격 키를 마지막으로 누른 시각
 
     log('사냥 : 탐지 거리 ' + str(HUNT_DIST) + '타일, 가까운 순')
+    #대상 지정 방식 : 클릭을 안 하므로 캐릭터가 몹에게 걸어가지 않는다.
+    #공격 키 사거리(가장 긴 것) 안의 몹만 대상으로 삼고, 없으면 '몹 없음' 으로 보고 텔한다
+    castrange = max([a[2] for a in atks]) if atks else 0
+    if ATK_MODE == 'cast':
+        log('공격 방식 : 대상 지정 (클릭 없음) - 공격 키 사거리 ' + str(castrange) + '타일 안의 몹만')
     if CROWD_N > 0:
         log('몹 몰림 새로고침 : 탐지 거리 안 ' + str(CROWD_N) + '마리 이상'
             + ('' if KEY_REFRESH != None else '  (새로고침 키 미지정 - 안 씀)'))
@@ -1416,6 +1424,11 @@ def huntloop(p=None, atkvalue=None):
         for dist, o, pos in found['mobs']:
             if skip.get(o['id'], 0) > now:
                 continue      #다가가지 못해서 잠깐 빼 둔 몹 (벽 너머 등)
+            if ATK_MODE == 'cast':
+                #화면 좌표가 필요 없다 (화면 밖 몹도 된다). 대신 공격 키 사거리(직선 거리) 안이어야 한다
+                if DETECT_ONLY or o.get('line', dist) <= castrange:
+                    mobs.append((dist, o, pos, None))
+                continue
             xy = toscreen(pos[0] - found['pos'][0], pos[1] - found['pos'][1])
             if DETECT_ONLY or (xy != None and 0 <= xy[0] < screen[0] and 0 <= xy[1] < screen[1]):
                 mobs.append((dist, o, pos, xy))
@@ -1468,7 +1481,10 @@ def huntloop(p=None, atkvalue=None):
             continue
 
         #다가가고 있는지 본다. 내 좌표가 바뀌거나 거리가 줄면 진전이 있는 것
-        if stuck['id'] != o['id']:
+        #(대상 지정 방식은 걸어가지 않으므로 보지 않는다 - 이미 사거리 안의 몹만 고른다)
+        if ATK_MODE == 'cast':
+            pass
+        elif stuck['id'] != o['id']:
             stuck = {'id': o['id'], 'best': dist, 'pos': found['pos'], 't': now}
         elif dist < stuck['best'] or found['pos'] != stuck['pos']:
             stuck['best'] = min(stuck['best'], dist)
@@ -1483,7 +1499,9 @@ def huntloop(p=None, atkvalue=None):
             clicked = 0.0
             continue
 
-        if now - clicked >= RECLICK_SEC:
+        if ATK_MODE == 'cast':
+            pass                  #클릭하지 않는다. 아래 공격 키가 몹 id 를 대상으로 쏜다
+        elif now - clicked >= RECLICK_SEC:
             #칼 모양 확인 없이 바로 클릭한다
             # _movefast(parkpos[0], parkpos[1])      #커서 모양 초기화
             # if _probe(xy[0], xy[1], atkvalue):
@@ -1505,8 +1523,14 @@ def huntloop(p=None, atkvalue=None):
         for i, (akey, adelay, adist) in enumerate(atks):
             if line <= adist and now - apress[i] >= adelay:
                 log('공격 키 ' + akey.upper() + '  (거리 ' + str(line) + ' <= ' + str(adist) + ')')
-                gu.press(akey, presses=1)
-                apress[i] = time.perf_counter()
+                if ATK_MODE == 'cast':
+                    #postracker.py 가 턴언데드를 쓰는 것과 같다 : 몹 id 를 마법 대상 칸에 잠깐 써넣고 키를 누른 뒤 되돌린다
+                    res = CASTER.castkey(o['id'], o.get('ptr'), akey)
+                    if res['state'] != 'sent':
+                        log('  대상 지정 실패 : ' + str(res['msg']) + ' (' + str(res['state']) + ')')
+                else:
+                    gu.press(akey, presses=1)
+                apress[i] = time.perf_counter()     #실패해도 딜레이만큼 쉬고 다시 쏜다 (연타 방지)
                 break
         time.sleep(HUNT_POLL)
 
@@ -1607,6 +1631,8 @@ def loadconfig(path=None):
             opts['crowd'] = v
     except (TypeError, ValueError):
         pass
+    if data.get('atk_mode') in [a for a, label in ATK_MODES]:
+        opts['atk_mode'] = data['atk_mode']
     if data.get('pc_act') in [a for a, label in PC_ACTS]:
         opts['pc_act'] = data['pc_act']
     try:
@@ -1656,6 +1682,7 @@ def saveconfig(seconds, roles, opts, path=None):
             'nohit':   int(opts.get('nohit',  DEFAULT_OPTS['nohit'])),
             'dist':    int(opts.get('dist',    DEFAULT_OPTS['dist'])),
             'crowd':   int(opts.get('crowd',   DEFAULT_OPTS['crowd'])),
+            'atk_mode': str(opts.get('atk_mode', DEFAULT_OPTS['atk_mode'])),
             'pc_act':  str(opts.get('pc_act',  DEFAULT_OPTS['pc_act'])),
             'pc_dist': int(opts.get('pc_dist', DEFAULT_OPTS['pc_dist'])),
             'detect':  bool(opts.get('detect', DEFAULT_OPTS['detect'])),
@@ -1684,7 +1711,7 @@ def applyconfig(seconds, roles, opts=None):
     #opts    : {'attack': bool, 'range': 'near'/'far', 'nohit': int, 'dist': int, ..., 'attacks': [...]}
     global BUFFS, BUFFKEY, TRIGGER, ORDER, PENDING
     global KEY_RETURN, KEY_REFRESH, KEY_TRANSFORM, TRANSFORM_INTERVAL, KEY_SKILL, SKILL_COOL, ATTACKS
-    global ATTACK_ON, SCAN_ROUND, NOHIT_LIMIT, HUNT_DIST, CROWD_N, DETECT_ONLY, PC_ACT, PC_DIST
+    global ATTACK_ON, SCAN_ROUND, NOHIT_LIMIT, HUNT_DIST, CROWD_N, DETECT_ONLY, PC_ACT, PC_DIST, ATK_MODE
     global KEY_HEAL, KEY_BER, KEY_IMMUNE, HEAL_PCT, BER_PCT, IMMUNE_N, HEAL_GAP, BER_GAP, IMMUNE_GAP
 
     if opts == None:
@@ -1694,6 +1721,7 @@ def applyconfig(seconds, roles, opts=None):
     NOHIT_LIMIT   = max(1, int(opts.get('nohit', DEFAULT_OPTS['nohit'])))
     HUNT_DIST     = max(1, int(opts.get('dist', DEFAULT_OPTS['dist'])))
     CROWD_N       = max(0, int(opts.get('crowd', DEFAULT_OPTS['crowd'])))
+    ATK_MODE      = opts.get('atk_mode') if opts.get('atk_mode') in [a for a, label in ATK_MODES] else DEFAULT_OPTS['atk_mode']
     PC_ACT        = opts.get('pc_act') if opts.get('pc_act') in [a for a, label in PC_ACTS] else DEFAULT_OPTS['pc_act']
     PC_DIST       = max(0, int(opts.get('pc_dist', DEFAULT_OPTS['pc_dist'])))
     DETECT_ONLY   = bool(opts.get('detect', DEFAULT_OPTS['detect']))
@@ -1769,7 +1797,7 @@ def runmacro():
         if not MEM.attach():
             log('메모리 붙기 실패 : ' + str(MEM.err))
             return
-        if KEY_HEAL != None or KEY_IMMUNE != None:
+        if KEY_HEAL != None or KEY_IMMUNE != None or (ATK_MODE == 'cast' and ATTACK_ON and not DETECT_ONLY):
             import memcast                  #대상 id 쓰기 + 키 누르기 + 되돌리기
             CASTER = memcast.Caster(MEM)
         kinds = MEM.entkinds()
@@ -1785,7 +1813,13 @@ def runmacro():
             log('감지만 - 클릭/귀환/새로고침을 하지 않고 로그만 찍습니다')
 
         atk = None
-        if ATTACK_ON and not DETECT_ONLY:
+        if ATTACK_ON and not DETECT_ONLY and ATK_MODE == 'cast':
+            #대상 지정 방식 : 화면 보정이 필요 없다. 쏠 공격 키가 하나는 있어야 한다
+            if not [a for a in ATTACKS if a[0] != None and a[1] > 0]:
+                log('대상 지정 방식인데 쓸 공격 키가 없다 (공격 탭에서 키와 딜레이를 정하세요) - 시작 안 함')
+                return
+            log('공격 방식 : 대상 지정 (턴언데드 방식) - 클릭 없이 몹 id 를 대상으로 공격 키를 쏜다. 게임 창이 맨 앞이어야 한다')
+        elif ATTACK_ON and not DETECT_ONLY:
             CALIB, why = loadcalib()
             if CALIB == None:
                 log('화면 보정이 없어 몹을 클릭할 수 없다 : ' + why)
@@ -1978,6 +2012,16 @@ class App:
         self.atkchk = ttk.Checkbutton(optbox, text='공격 사용 (가까운 몹부터 클릭)',
                                       variable=self.attack)
         self.atkchk.pack(anchor='w', padx=6, pady=4)
+        amrow = ttk.Frame(optbox)
+        amrow.pack(fill='x', padx=6, pady=(0, 2))
+        ttk.Label(amrow, text='공격 방식', width=12).pack(side='left')
+        self.atkmode = tk.StringVar(value=dict(ATK_MODES)[DEFAULT_OPTS['atk_mode']])
+        self.ambox   = ttk.Combobox(amrow, textvariable=self.atkmode, width=22, state='readonly',
+                                    values=[label for a, label in ATK_MODES])
+        self.ambox.pack(side='left')
+        ttk.Label(amrow, foreground='#555',
+                  text='  대상 지정 : 클릭 없이 몹 id 를 마법 대상으로 써넣고 공격 키를 누릅니다 (사거리 안의 몹만, 보정 불필요)'
+                  ).pack(side='left')
         ttk.Label(optbox, foreground='#555',
                   text='몹 위치를 메모리에서 읽어 가장 가까운 몹을 클릭하고, 죽으면 다음으로 가까운 몹으로 넘어갑니다.\n'
                        '끄면 클릭하지 않고 버프 / 변신 / 피·주변 캐릭터 감시만 돕니다.'
@@ -2293,6 +2337,7 @@ class App:
         tkey = roles.get('transform')
         self.transkey.set(tkey.upper() if tkey in FKEYS else KEY_NONE)
         self.attack.set(bool(opts.get('attack', DEFAULT_OPTS['attack'])))
+        self.atkmode.set(dict(ATK_MODES).get(opts.get('atk_mode'), dict(ATK_MODES)[DEFAULT_OPTS['atk_mode']]))
         self.range.set(str(opts.get('range',  DEFAULT_OPTS['range'])))
         self.nohit.set(str(opts.get('nohit',  DEFAULT_OPTS['nohit'])))
         self.dist.set(str(opts.get('dist',     DEFAULT_OPTS['dist'])))
@@ -2377,6 +2422,7 @@ class App:
             attacks.append({'key': self.atkkeyof(i), 'delay': delay, 'dist': int(self.atkdist[i].get())})
 
         opts = {'attack': self.attack.get(),
+                'atk_mode': dict((label, a) for a, label in ATK_MODES).get(self.atkmode.get(), DEFAULT_OPTS['atk_mode']),
                 'range':  self.range.get(),
                 'nohit':  int(raw),
                 'dist':   int(rawdist),
@@ -2428,7 +2474,7 @@ class App:
     def lockui(self):
         for key in FKEYS:
             self.entry[key].configure(state='disabled')
-        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.dsent, self.crent, self.pcbox, self.pcent, self.dtchk) + tuple(self.rngbtn):
+        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.ambox, self.dsent, self.crent, self.pcbox, self.pcent, self.dtchk) + tuple(self.rngbtn):
             b.configure(state='disabled')
         for rid, wids in self.rolewid.items():
             for w in wids:
@@ -2444,7 +2490,7 @@ class App:
 
     #정지하면 설정을 다시 만질 수 있게 열어준다
     def unlockui(self):
-        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.dsent, self.crent, self.pcbox, self.pcent, self.dtchk) + tuple(self.rngbtn):
+        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.ambox, self.dsent, self.crent, self.pcbox, self.pcent, self.dtchk) + tuple(self.rngbtn):
             b.configure(state='normal')
         for rid, wids in self.rolewid.items():
             for w in wids:
@@ -2473,7 +2519,7 @@ class App:
         applyconfig(seconds, roles, opts)
 
         log('=== 설정 ===')
-        log('  공격 : ' + ('사용' if opts['attack'] else '끔'))
+        log('  공격 : ' + (('사용  ' + dict(ATK_MODES)[opts.get('atk_mode', DEFAULT_OPTS['atk_mode'])]) if opts['attack'] else '끔'))
         log('  탐지 거리 : ' + str(opts['dist']) + '타일' + ('  (감지만)' if opts.get('detect') else ''))
         log('  새로고침(텔) : 주변에 몹이 없으면 바로'
             + (', 탐지 거리 안 몹 ' + str(opts['crowd']) + '마리 이상이면' if opts.get('crowd') else ''))

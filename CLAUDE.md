@@ -57,6 +57,9 @@ top-level scripts predate them and are kept as they are.
    (entity table), but the attack is a real click at the mob's computed screen position, and
    buffs / transform / recall / refresh are still key presses. This exception covers `main.py`
    only; `iksun/` stays under rules 1–3.
+   Since 2026-11-21 `main.py` also offers 공격 방식 = 대상 지정 (`opts['atk_mode'] == 'cast'`), chosen
+   by the user: no click; each attack key is fired with `memcast.Caster.castkey(mob_id, ptr, key)`,
+   the same mechanism `postracker.py` uses for turn-undead. Click stays the default.
 
 ## Running
 
@@ -124,6 +127,12 @@ To stop a running script: `pyautogui.FAILSAFE` is disabled in `oman.py`/`tell.py
   탐지 거리) sets `CROWD_N`: when `scanents()['mobs']` (live mobs within `HUNT_DIST` walking steps,
   off-screen included) reaches that count, the loop presses the refresh key at once (respecting
   `TELE_GAP`) and drops the target. 0 = off; needs the refresh key; detect-only logs only.
+- **Attack mode (`opts['atk_mode']`, since 2026-11-21).** 메인 tab 동작 → 공격 방식: `'click'`
+  (default, calibrated click) or `'cast'` (대상 지정). In `'cast'` no calibration is loaded, mobs need
+  not be on screen, only mobs within the longest attack-key `dist` (straight line) are candidates
+  (the character does not walk, so the stuck check is skipped), and each attack key goes through
+  `CASTER.castkey(o['id'], o['ptr'], key)`. It refuses to start with no usable attack key, and
+  the game window must be in front (`memcast` checks).
 - **Player encounter (`opts['pc_act']` / `opts['pc_dist']`, since 2026-11-21).** The 메인 tab row
   사람 만남 picks the reaction — 베르 후 정지 (`'ber'`, the old behaviour) or 새로고침(텔) (`'refresh'`:
   press the refresh key, drop the target, keep hunting; `TELE_GAP` between presses and no attacking
