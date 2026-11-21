@@ -52,6 +52,11 @@ top-level scripts predate them and are kept as they are.
      unverified — establish a reliable main-thread execution path first.
    - Current code still violating rule 2 until this lands: `memcast.py` (`gu.press`) and
      `iksun/main.py` `Ctx.press` (`pyautogui`).
+4. **Exception — top-level `main.py` attacks by mouse left-click.** Decided by the user on
+   2026-11-15 after the function-call attack was dropped for `main.py`. Sensing is memory-only
+   (entity table), but the attack is a real click at the mob's computed screen position, and
+   buffs / transform / recall / refresh are still key presses. This exception covers `main.py`
+   only; `iksun/` stays under rules 1–3.
 
 ## Running
 
@@ -73,11 +78,109 @@ Dependencies (install manually): `pyautogui`, `pywin32`, `keyboard`, `schedule`.
 
 To stop a running script: `pyautogui.FAILSAFE` is disabled in `oman.py`/`tell.py`/`turn.py`, so the corner-of-screen escape hatch does **not** work there. The attack loops are `while True` with no keyboard interrupt handler.
 
+## `main.py` hunting and recall (memory-sensed, since 2026-11-15)
+
+`main.py` no longer sweeps the cursor or matches clan-mark images. Both features read
+`memread.Mem.entity_table()` (the same source `postracker.py` uses):
+
+- **Hunting (`huntloop`)** — `scanents()` lists live non-player entities within `dist` tiles
+  (Chebyshev), nearest first. The loop keeps one target id, clicks it, and moves to the next
+  nearest when the target is `dead` or gone from the table. Screen position comes from the
+  affine calibration file beside the script (`scarecrow_calib.json` from `postracker.py`'s F9
+  scarecrow calibration, else `calib.json` from `turnundead_mem.py`); without one it refuses to
+  start. **No cursor-shape check** (removed by the user on 2026-11-15): the computed position is
+  clicked directly. The probe's miss cooldown made the loop see "no mobs" and teleport while mobs
+  were present. Off-screen mobs and nameless entities are not candidates.
+- **Recall (`_checkrHp`)** — any entity of kind `player` other than self → `request('return')`.
+  "Could not read" is never treated as "nobody around": `MEM_FAIL_LIMIT` consecutive failures stop
+  the macro. The HP check is still the `checkhp.PNG` image.
+- **Entity kinds** come from `mem.json` `ent.rules` via `Mem.kind()`. `player` is "id in
+  1,000,000–1,999,999" (measured 2026-11-15 on seven characters; `+0x4C == 255` was dropped
+  because ground effects such as `마법진3` share it), preceded by a name-based `effect` rule.
+  With no `monster` rule, every named entity judged `other` is a candidate — NPCs included,
+  nothing filters them now. `python memprobe.py --entkind --mob … --npc … --pc …`
+  finds a discriminating offset.
+- **No mobs → teleport at once.** When no clickable mob is in range the loop presses the refresh
+  key immediately (`TELE_GAP` 1.5 s between presses); the old "N empty sweeps" counter is unused.
+  Click interval is `RECLICK_SEC` 1 s, and each click re-picks the nearest mob.
+- **Chat buff (`dochatbuff`) writes the text into the chat input buffer** via `memchat.py`
+  (verified in-game 2026-11-15). `mem.json` `chains.chat_str` = `[[Lin.exe+0xA3288]+0x28]+0` is a
+  string struct: `+0` buffer pointer, `+4` char count. Each char is one 2-byte cell — ASCII as is,
+  Hangul as `(CP949 lead << 8) | trail`, **not** UTF-16. An empty input has a null buffer and its
+  capacity is unknown, so the flow is Enter → type `1` × len (IME-independent) → overwrite those
+  cells in place → Enter; `memchat.put` refuses to write more cells than are already there.
+  `0x9BF98` is the "focused edit" pointer and is 0 when the input is empty — do not use it.
+  `python memchat.py ".버프" --auto` runs the same sequence standalone.
+- **Walking distance (terrain grid, since 2026-11-17).** `scanents()` measures mob distance as
+  BFS walking steps over the terrain grid (`memread.terrain()` / `terrain_blocked()`, merged from
+  `feat/spell-table`; the `memprobe --terrain` map was confirmed against the screen on
+  2026-11-17). The search radius is `HUNT_DIST + PATH_MARGIN`, the grid is re-read every
+  `TERRAIN_SEC` or when it no longer covers that radius around me, and the BFS is cached per
+  position. Mobs with no path are dropped. With no open space, the step count equals Chebyshev
+  distance. The straight-line distance is kept in `o['line']` and attack-key range (`dist`) uses
+  it. Players stay straight-line. An unreadable grid falls back to straight-line distance (logged
+  on change) rather than stopping, because terrain only orders targets.
+- **Crowd refresh (`opts['crowd']`, since 2026-11-17).** The 메인 tab row 몹 몰림 새로고침 (under
+  탐지 거리) sets `CROWD_N`: when `scanents()['mobs']` (live mobs within `HUNT_DIST` walking steps,
+  off-screen included) reaches that count, the loop presses the refresh key at once (respecting
+  `TELE_GAP`) and drops the target. 0 = off; needs the refresh key; detect-only logs only.
+- **Unreachable mobs (fallback).** For obstacles not in the grid (other mobs, doors), a target
+  farther than `STUCK_REACH` tiles with no progress (own position unchanged, distance not
+  shrinking) for `STUCK_SEC` is skipped for `SKIP_SEC`; if nothing else remains the loop
+  teleports.
+- **Idle watchdog removed (2026-11-17).** The forced teleport after `IDLE_TELE_SEC` with no
+  target change was deleted at the user's request; the loop no longer stalls on one target.
+- **Heal / Ber / Immune** — three more F-key roles (`heal`, `ber`, `immune`). Each hunt-loop tick
+  reads HP (`readhp()`: secure holder first, then `chains.hp`) and the live-mob count from
+  `scanents()`: HP% ≤ `heal_pct` / `ber_pct` presses that key, mobs ≥ `immune_n` presses immune.
+  Heal and immune need a target, so they go through `memcast.Caster.castkey(self_id, self_ptr, key)`
+  (same mechanism as `postracker.py`'s turn-undead: write the target id, press the key, restore);
+  ber is a plain key press.
+  The key's 주기 column is the re-press gap (0 → `GAP_DEFAULT`: 2 s / 2 s / 30 s). They run with
+  attack off too, never in detect-only, and `MEM_FAIL_LIMIT` unreadable HP reads stop the macro.
+- **Hotkey pages F1 / F2 and the tabs (since 2026-11-15)** — the game's F5–F12 bar has two
+  pages: F1 = attack page, F2 = buff page. The GUI is a three-tab notebook (메인 / 버프 / 공격)
+  with the save/start buttons and log below it.
+  - 버프 tab (F2 page): key + 주기 for F5–F12 plus a 변신 키 dropdown (its interval is that
+    key's 주기 cell; `dotransform` still clicks the lv80 / night menu). `BUFFS` is every key
+    except the transform key. `runpending()` batches all pending buff / transform requests
+    into one `setpage(PAGE_BUFF)` → presses → `setpage(PAGE_ATTACK)`; chat buff runs inside the
+    batch without caring about the page. At start the queued initial buffs go through the same
+    path, and `runmacro` presses F1 once before `huntloop` so hunting always begins on the
+    attack page.
+  - 공격 tab (F1 page): the attack-key table (up to `ATTACK_MAX` 4 rows, default one:
+    F6 / 4 s / 3 tiles, `opts['attacks']` = `[{key, delay, dist}]`) and the role keys
+    새로고침 / 힐 / 이뮨 / 베르 (`PAGE_ROLES`) with their conditions; a role's 재사용 간격 entry
+    is written into that key's `seconds` slot on read. Each hunt-loop tick presses at most one
+    attack key whose target distance ≤ `dist` and whose `delay` has elapsed, in row order, after
+    `runpending()`; `delay` 0 disables the row. Attack keys and page roles must not share a
+    key; the same F key may be used on both pages. An old `roles.skill` config is migrated to
+    attack key 1 on load.
+  - The 귀환 role is removed: `KEY_RETURN` is always `None`, and the ber key stands in for it
+    (`returnkey()`, since 2026-11-16). With a ber key set, `_checkrHp` runs during hunting and
+    another player (or `checkhp.PNG`) → `doreturn` presses ber on the F1 page and stops. With no
+    ber key it runs only in detect-only mode (log only). `huntloop` also checks
+    `scanents()['players']` every tick (replacing the clan-mark check): any other player →
+    press ber (if set) and `dostop()`, without waiting for the 2 s timer. `KEY_SKILL` / `SKILL_COOL` remain as
+    a compatibility mirror of attack key 1 for `pit.py`.
+- **Character panel** — `App.pollinfo()` shows name / LV / HP / MP / exp / AC / position / nearby
+  counts every `INFO_POLL` ms through its own read-only `Mem` (`self.imem`), separate from the
+  macro's `MEM`, so it works before Start.
+- **`감지만` (detect-only)** logs the chosen target and nearby players without clicking or recalling.
+- The old code is kept, unused by `main.py`: `huntloop_sweep`, `_checkmarks`. The sound
+  ("소리로 칼질 감지") option, `soundwatch` / `FightGate` and `sound_record.py` were deleted on
+  2026-11-17 at the user's request.
+  `pit.py`, `memcalib.py`, `collect.py` and `sweep.py` import main's helpers
+  and globals by name — do not rename them.
+
+The "Architecture" section below describes the older forks (`oman.py`, `tell.py`, `turn.py`) and
+`main.py` before this change (`attack1`, `isattack`, `checkrMp` no longer exist in `main.py`).
+
 ## The memory-based variant (`pit.py`)
 
 `pit.py` is the one file that is **not** a copy-paste fork. It does `import main` and reuses
 everything that did not change (log queue, `_arm`/PENDING timers, mouse movement,
-`setattckinfo`, buff/transform/return actions, `FightGate` sound detection, mark-template
+`setattckinfo`, buff/transform/return actions, mark-template
 image fallback, config load/save, the `App` GUI via subclassing). It redefines only
 `_checkrHp`, `huntloop`, `runmacro`, and `App`. **`main.py` is unmodified** — a change there
 propagates to `pit.py` automatically, and `pit.py` reads/writes main's module globals
@@ -150,7 +253,6 @@ Present in the committed source; be deliberate about whether a task wants them f
 - [oman.py:125](oman.py#L125) — `die()` re-schedules `transform` instead of itself, so death detection runs once.
 - [oman.py:150](oman.py#L150) and [tell.py:137](tell.py#L137) — `os.path.realpath('__file__')` passes the string literal, resolving `file_path` relative to the cwd rather than the script directory (the other functions in the same files use `__file__` correctly).
 - [turn.py:143](turn.py#L143) — `mark4[0] <= 600 & mark4[0] >= 650` is both bitwise-`&` and unsatisfiable, so that branch never fires.
-- [main.py:246](main.py#L246) — `checkrMp` assigns `ishunting` without a `global` declaration, so the state change is discarded.
 
 ## Conventions
 

@@ -13,9 +13,16 @@
 #   python memprobe.py --watch hp,mp --sec 0.5    감시 주기 바꾸기
 #   python memprobe.py --objs                     객체 목록 덤프
 #   python memprobe.py --table                    bsearch 엔티티 테이블 순회 (플레이어 객체 찾기)
+#   python memprobe.py --entkind                  엔티티 종류 보기 - 이름/거리/+0x4C/+0x44/행동 + 지금 규칙의 판정
+#   python memprobe.py --entkind --raw            위에 더해 엔티티마다 원본 바이트를 같이 찍는다
+#   python memprobe.py --entkind --mob "오크,늑대" --npc "판도라" --pc "다른캐릭"
+#                        이름으로 묶음을 알려주면 묶음을 가르는 오프셋 후보를 찾아준다 (mem.json ent.rules 채우기용)
+#   python memprobe.py --chatfind ".qjvm"         채팅 입력칸 찾기 - 채팅칸에 그 글자를 쳐 둔 채로(전송 X) 돌린다
+#                        글자 버퍼 -> 그걸 가리키는 칸 -> 모듈 고정 주소까지의 포인터 경로를 찾는다 (--depth 3 --span 0x400)
 #   python memprobe.py --spells                   스킬(마법) 창 순회 - 배운 스킬의 슬롯/id/아이콘/메모리 주소/이름
 #   python memprobe.py --char                     캐릭터 정보 - 레벨/경험치%/HP/MP/AC/성향/스탯/포만도/무게/저항
 #   python memprobe.py --items                   인벤토리 창 순회 - 소지품의 id/종류/아이콘/축복/수량/확인/이름
+#   python memprobe.py --terrain                 지형(통행) 격자 - 내 주변 반경 20 타일을 그림으로 (--terrain 30 처럼 반경 1~64)
 #   python memprobe.py --buffs                   켜져 있는 버프(상태효과) 순회 - 아이콘/이름 + 위젯·칸 원본 바이트
 #   python memprobe.py --peek 0x1B0D1C 0xA0      그 RVA 를 16진수+CP949 로 떠 본다 (버프 영역 확인)
 #   python memprobe.py --gsnap                   모듈 전역 영역 스냅샷 (버프 끈 상태에서)
@@ -1224,6 +1231,281 @@ def dumpenttable(pid):
         m.detach()
 
 
+#엔티티 종류(몬스터 / NPC / 캐릭터)를 가르는 값을 찾는 덤프.
+#  표 : 가까운 순으로 이름, 거리, +0x4C(type), +0x44(혈맹), 행동/자세, 지금 ent.rules 의 판정
+#  --raw : 엔티티마다 원본 바이트
+#  --mob / --npc / --pc "이름,이름" : 그 이름의 엔티티를 묶음으로 보고,
+#     '묶음 안에서는 전부 같고 묶음끼리는 다른' 오프셋을 찾는다. 나 자신은 pc 묶음에 자동으로 들어간다
+ENTKIND_SIZE = 0x200     #묶음 비교 때 엔티티마다 읽는 바이트 수
+
+def _entnames(text):
+    return [''.join(x.split()) for x in (text or '').split(',') if x.strip()]
+
+
+def dumpentkind(pid):
+    m = mr.Mem(MEM_PATH, say)
+    if not m.attach(pid):
+        say('붙기 실패 : ' + str(m.err))
+        return
+    try:
+        objs, head, count = m.entity_table()
+        say()
+        say('테이블 베이스 : ' + (hex(head) if head != None else '(못 읽음)')
+            + '   개수 : ' + str(count))
+        if len(objs) == 0:
+            say('  비었다. mem.json chains.ent_table / ent_count 를 확인한다')
+            return
+        me = m.selfent(objs)
+        if me == None:
+            say('  나 자신을 못 찾았다 (chains.char_id 와 내 좌표 둘 다 안 맞음). 거리는 비워 둔다')
+            mpos = None
+        else:
+            mpos = m.entpos(me)
+            say('나 : ' + str(me.get('name')) + '  id ' + str(me['id']) + '  좌표 ' + str(mpos))
+        kinds = m.entkinds()
+        say('지금 규칙이 있는 종류 : ' + (', '.join(sorted(kinds)) if kinds else '(없음)'))
+        say()
+
+        rows = []
+        for o in objs:
+            pos = m.entpos(o)
+            if mpos != None:
+                dist = max(abs(pos[0] - mpos[0]), abs(pos[1] - mpos[1]))
+            else:
+                dist = -1
+            rows.append((dist, o, pos))
+        rows.sort(key=lambda r: r[0])
+
+        say('  %-4s %-11s %-13s %-8s %-10s %-4s %-4s %-8s %s'
+            % ('거리', 'id', '좌표', '+0x4C', '+0x44', 'act', 'base', '판정', '이름'))
+        for dist, o, pos in rows:
+            mark = '  <-- 나' if me != None and o['ptr'] == me['ptr'] else ''
+            say('  %-4s %-11d %-13s %-8d %-10d %-4d %-4d %-8s %s%s'
+                % (str(dist) if dist >= 0 else '?', o['id'],
+                   '%d,%d' % pos, o['type'], o['clan'], o['act'], o['base'],
+                   str(m.kind(o)), str(o.get('name')), mark))
+
+        if has('--raw'):
+            say()
+            for dist, o, pos in rows:
+                raw = m.object_bytes(o['ptr'], 0x100)
+                say('--- ' + str(o.get('name')) + '  id ' + str(o['id'])
+                    + '  ptr ' + hex(o['ptr']))
+                if raw == None:
+                    say('  (못 읽음)')
+                else:
+                    say(hexdump(raw, o['ptr']))
+
+        #묶음 비교
+        groups = {'mob': _entnames(arg('--mob')), 'npc': _entnames(arg('--npc')),
+                  'pc': _entnames(arg('--pc'))}
+        if not (groups['mob'] or groups['npc'] or groups['pc']):
+            say()
+            say('  몹 / NPC / 다른 캐릭터가 같이 보이는 곳에서, 이름으로 묶음을 알려주면')
+            say('  묶음을 가르는 오프셋을 찾아준다 :')
+            say('    python memprobe.py --entkind --mob "몹이름,몹이름" --npc "NPC이름" --pc "캐릭이름"')
+            return
+        packs = {}
+        for label in ('mob', 'npc', 'pc'):
+            packs[label] = []
+        for dist, o, pos in rows:
+            nm = ''.join(str(o.get('name') or '').split())
+            label = None
+            if me != None and o['ptr'] == me['ptr']:
+                label = 'pc'
+            else:
+                for g in ('mob', 'npc', 'pc'):
+                    if nm != '' and nm in groups[g]:
+                        label = g
+            if label == None:
+                continue
+            raw = m.object_bytes(o['ptr'], ENTKIND_SIZE)
+            if raw != None:
+                packs[label].append((nm, raw))
+        say()
+        used = [g for g in ('mob', 'npc', 'pc') if len(packs[g]) > 0]
+        for g in ('mob', 'npc', 'pc'):
+            say('  묶음 %-3s : %d개  %s' % (g, len(packs[g]),
+                                          ', '.join(sorted(set(n for n, r in packs[g])))))
+        if len(used) < 2:
+            say('  묶음이 2개 이상 있어야 비교할 수 있다 (이름이 화면의 이름과 같은지 확인)')
+            return
+        say()
+        say('  묶음 안에서는 같고 묶음끼리는 다른 자리 (1바이트 / 4바이트) :')
+        hits = 0
+        for width, fmt in ((1, '<B'), (4, '<I')):
+            for off in range(0, ENTKIND_SIZE - width + 1, width):
+                vals = {}
+                okay = True
+                for g in used:
+                    seen = set(struct.unpack_from(fmt, raw, off)[0] for n, raw in packs[g])
+                    if len(seen) != 1:
+                        okay = False
+                        break
+                    vals[g] = seen.pop()
+                if not okay or len(set(vals.values())) < 2:
+                    continue
+                #포인터처럼 보이는 큰 값은 개체마다 우연히 같았을 뿐일 수 있어 표시만 해 둔다
+                note = ''
+                if width == 4 and any(v >= 0x10000 for v in vals.values()):
+                    note = '   (큰 값 - 포인터/좌표일 수 있음)'
+                say('    +0x%03X  u%-2d  %s%s'
+                    % (off, width * 8,
+                       '  '.join('%s=%d' % (g, vals[g]) for g in used), note))
+                hits += 1
+        if hits == 0:
+            say('    없다. 묶음에 다른 종류가 섞였거나, 구분 값이 0x%X 바이트 밖에 있다' % ENTKIND_SIZE)
+        else:
+            say()
+            say('  묶음마다 개체가 여럿일수록 믿을 만하다 (1개씩이면 우연히 다른 자리도 다 나온다)')
+            say('  고른 자리를 mem.json ent.rules 에 적는다. 예 :')
+            say('    {"kind": "monster", "off": "0x??", "type": "u8", "values": [값]}')
+    finally:
+        m.detach()
+
+
+#채팅 입력칸 찾기.
+#  채팅칸에 쳐 둔 글자(UTF-16)를 찾고, 그 글자 버퍼를 가리키는 포인터 칸을 찾은 뒤,
+#  그 칸에서 거꾸로 올라가 모듈 고정 주소(게임을 다시 켜도 안 바뀌는 자리)까지의 경로를 찾는다.
+#  경로는 mem.json chains 에 그대로 적을 수 있는 꼴(base RVA + offsets)로 찍는다.
+#  읽기 전용이다
+import re
+
+#값이 lo~hi 인 4바이트(리틀엔디언)를 찾는 정규식들. 64KB 경계를 넘으면 둘로 나눈다
+def _rangepats(lo, hi):
+    out = []
+    while lo <= hi:
+        top = min(hi, lo | 0xFFFF)
+        b1a, b1b = (lo >> 8) & 0xFF, (top >> 8) & 0xFF
+        out.append(re.compile(b'[\x00-\xff]'
+                              + b'[' + re.escape(bytes([b1a])) + b'-' + re.escape(bytes([b1b])) + b']'
+                              + re.escape(bytes([(lo >> 16) & 0xFF, (lo >> 24) & 0xFF])), re.S))
+        lo = top + 1
+    return out
+
+
+#target 을 (target-span ~ target) 범위로 가리키는 4바이트 정렬 칸들. [(칸 주소, 오프셋)]
+def _pointersto(h, regs, target, span):
+    lo = max(0x10000, target - span)
+    pats = _rangepats(lo, target)
+    out = []
+    for base, size in regs:
+        for cbase, craw in mr.readchunks(h, base, size):
+            for pat in pats:
+                for mt in pat.finditer(craw):
+                    i = mt.start()
+                    if (cbase + i) % 4 != 0:
+                        continue
+                    v = struct.unpack_from('<I', craw, i)[0]
+                    if lo <= v <= target:
+                        out.append((cbase + i, target - v))
+    out.sort(key=lambda r: r[1])
+    return out
+
+
+def dochatfind(pid, text):
+    if not text:
+        say('채팅칸에 쳐 둔 글자를 적는다 : python memprobe.py --chatfind ".qjvm"')
+        return
+    try:
+        depth = max(1, min(int(arg('--depth', '3'), 0), 5))
+        span  = max(0, min(int(arg('--span', '0x400'), 0), 0x4000))
+    except ValueError:
+        say('--depth / --span 은 숫자여야 한다')
+        return
+    m = mr.Mem(MEM_PATH, say)
+    if not m.attach(pid):
+        say('붙기 실패 : ' + str(m.err))
+        return
+    try:
+        h = m.h
+        msize = 0
+        want = str(m.cfg.get('module', '')).lower()
+        for name, mbase, sz in mr.modules(m.pid):
+            if name.lower() == want:
+                msize = sz
+        def static(a):
+            return m.base <= a < m.base + msize
+        regs = mr.regions(h, maxaddr=1 << 32)
+        pat  = text.encode('utf-16le')
+        say('찾는 글자 : ' + text + '  (UTF-16, %d 글자)   영역 %d개' % (len(text), len(regs)))
+
+        bufs = []
+        for base, size in regs:
+            for cbase, craw in mr.readchunks(h, base, size):
+                st = craw.find(pat)
+                while st >= 0:
+                    bufs.append(cbase + st)
+                    st = craw.find(pat, st + 1)
+        say('[1] 글자 버퍼 : %d곳' % len(bufs))
+        for a in bufs[:20]:
+            say('  0x%X%s' % (a, '  (모듈 고정 주소 RVA 0x%X)' % (a - m.base) if static(a) else ''))
+        if len(bufs) == 0:
+            say('  못 찾았다. 채팅칸에 글자가 그대로 떠 있는지 확인한다 (전송하면 사라진다)')
+            return
+        if len(bufs) > 8:
+            say('  너무 많다. 더 길고 흔치 않은 글자로 다시 한다')
+            return
+
+        for buf in bufs:
+            say()
+            say('=== 버퍼 0x%X ===' % buf)
+            slots = [r for r in _pointersto(h, regs, buf, 0)]
+            say('[2] 이 버퍼를 가리키는 칸 : %d곳' % len(slots))
+            for slot, off in slots[:8]:
+                say('  칸 0x%X%s' % (slot, '  (모듈 고정 주소 RVA 0x%X)' % (slot - m.base) if static(slot) else ''))
+                raw = mr.readmem(h, slot - 0x20, 0x60)
+                if raw != None:
+                    vals = struct.unpack('<24I', raw)
+                    for j, v in enumerate(vals):
+                        o = (j - 8) * 4
+                        note = ''
+                        if o == 0:
+                            note = '  <= 글자 버퍼 포인터'
+                        elif v == len(text):
+                            note = '  <= 글자 수와 같다 (길이 칸 후보)'
+                        elif v == len(text) * 2:
+                            note = '  <= 바이트 수와 같다 (길이 칸 후보)'
+                        say('      %+5d  0x%08X  %d%s' % (o, v, v, note))
+
+            #칸에서 거꾸로 올라가 고정 주소를 찾는다. 경로 = (지금 주소, [오프셋들])
+            say('[3] 고정 주소까지의 경로 (깊이 %d, 간격 0x%X)' % (depth, span))
+            level = [(slot, []) for slot, off in slots[:8]]
+            found = 0
+            for slot, offs in level:
+                if static(slot):
+                    say('  ★ base 0x%X  offsets []   -> 그 자리에 버퍼 포인터가 있다' % (slot - m.base))
+                    found += 1
+            for d in range(depth):
+                nxt = []
+                for target, offs in level:
+                    if static(target):
+                        continue
+                    refs = _pointersto(h, regs, target, span)
+                    for loc, off in refs[:40]:
+                        chain = [off] + offs
+                        if static(loc):
+                            say('  ★ base 0x%X  offsets [%s]'
+                                % (loc - m.base, ', '.join('0x%X' % x for x in chain)))
+                            found += 1
+                        else:
+                            nxt.append((loc, chain))
+                #가까운(오프셋이 작은) 것부터 조금만 다음 단계로 올린다
+                nxt.sort(key=lambda r: r[1][0])
+                level = nxt[:30]
+                say('  깊이 %d : 다음 단계 후보 %d개' % (d + 1, len(level)))
+                if len(level) == 0:
+                    break
+            if found == 0:
+                say('  고정 주소까지 못 올라갔다. --depth 4 또는 --span 0x1000 으로 다시 해 본다')
+        say()
+        say('★ 줄의 뜻 : [[모듈베이스 + base] + 오프셋...] 을 따라가면 "글자 버퍼 포인터가 든 칸" 이 나온다')
+        say('  (마지막 오프셋은 더하기만 한다 = mem.json chains 규약 그대로)')
+        say('게임을 껐다 켠 뒤 한 번 더 돌려서 두 번 다 나오는 ★ 줄이 진짜다. 두 출력을 같이 보낸다')
+    finally:
+        m.detach()
+
+
 def dumpspells(pid):
     m = mr.Mem(MEM_PATH, say)
     if not m.attach(pid):
@@ -1264,6 +1546,92 @@ def dumpitems(pid):
         if len(items) == 0:
             say()
             say('  소지품이 없거나 아직 아이템 패킷을 못 받았다. 게임에서 인벤토리 창을 한 번 열어본 뒤 다시 돌린다')
+    finally:
+        m.detach()
+
+
+#지형(통행) 격자를 읽어 내 주변을 그림으로 찍는다. 읽기 전용
+#  python memprobe.py --terrain        반경 20 타일
+#  python memprobe.py --terrain 30     반경 30 타일 (1~64)
+def dumpterrain(pid):
+    try:
+        rad = int(arg('--terrain', '20'))
+    except ValueError:
+        rad = 20
+    rad = max(1, min(64, rad))
+    m = mr.Mem(MEM_PATH, say)
+    if not m.attach(pid):
+        say('붙기 실패 : ' + str(m.err))
+        return
+    try:
+        say()
+        t  = m.terrain()
+        me = m.selfpos()
+        if t == None:
+            say('지형 격자를 못 읽었다 - 캐릭터로 월드에 들어간 뒤에 다시 읽는다 (mem.json chains.terrain_grid / terrain_ox / terrain_oy, terrain 블록 확인)')
+            return
+        if me == None:
+            say('내 좌표를 못 읽었다 - 격자와 맞춰 볼 수 없다 (mem.json chains.self_x / self_y 확인, 격자는 chains.terrain_grid)')
+            return
+        mx, my = me
+        #격자가 덮는 타일 범위 (타일 하나 = x' 칸 2개)
+        x0 = (t['ox'] + t['bias']) // t['scale']
+        x1 = x0 + t['cols'] // t['scale'] - 1
+        y0 = t['oy']
+        y1 = y0 + t['rows'] - 1
+
+        #그 타일의 자기 칸(x' 짝수 칸)이 격자 안인가
+        def inside(x, y):
+            cx = x * t['scale'] - t['bias'] - t['ox']
+            cy = y - t['oy']
+            return 0 <= cx < t['cols'] and 0 <= cy < t['rows']
+
+        say('맵 %s   내 좌표 (%d, %d)   격자 0x%X   원점 x\' %d, Y %d   덮는 범위 X %d~%d, Y %d~%d'
+            % ('?' if t['map'] == None else str(t['map']), mx, my, t['grid'],
+               t['ox'], t['oy'], x0, x1, y0, y1))
+        if not inside(mx, my):
+            say('  내 위치가 격자 밖이다 - 원점(terrain_ox/oy)이나 좌표 인코딩이 틀렸을 수 있다')
+        say()
+        say('내 자리에서 한 칸 가기 :')
+        for d in range(8):
+            dx, dy = mr.TERRAIN_STEP[d]
+            b = m.terrain_blocked(t, mx, my, d)
+            say('  방향 %d (X%+d, Y%+d) : %s' % (d, dx, dy, '모름' if b == None else ('막힘' if b else '갈 수 있음')))
+
+        #내 타일에서 걸어서 닿는 타일 (격자 전체를 8방향으로 채운다)
+        seen  = set([(mx, my)])
+        queue = [(mx, my)]
+        i = 0
+        while i < len(queue):
+            x, y = queue[i]
+            i += 1
+            for d in range(8):
+                if m.terrain_blocked(t, x, y, d) != False:
+                    continue
+                dx, dy = mr.TERRAIN_STEP[d]
+                nb = (x + dx, y + dy)
+                if nb in seen or not inside(nb[0], nb[1]):
+                    continue
+                seen.add(nb)
+                queue.append(nb)
+
+        say()
+        say('그림 (게임 좌표 그대로 : 오른쪽 = X 증가, 아래 = Y 증가)   @ = 나, . = 걸어서 닿음, # = 못 닿음, ? = 격자 밖')
+        say('  X %d~%d, Y %d~%d (반경 %d)   닿는 타일 %d개' % (mx - rad, mx + rad, my - rad, my + rad, rad, len(seen)))
+        for y in range(my - rad, my + rad + 1):
+            row = []
+            for x in range(mx - rad, mx + rad + 1):
+                if (x, y) == (mx, my):
+                    row.append('@')
+                elif not inside(x, y):
+                    row.append('?')
+                elif (x, y) in seen:
+                    row.append('.')
+                else:
+                    row.append('#')
+            say('  ' + ''.join(row))
+        say()
+        say('  게임 화면의 벽/물/건물 모양과 # 모양이 맞으면 격자 주소와 판정이 맞다')
     finally:
         m.detach()
 
@@ -2217,12 +2585,24 @@ def main():
         dumpenttable(pid)
         return
 
+    if has('--entkind'):
+        dumpentkind(pid)
+        return
+
+    if has('--chatfind'):
+        dochatfind(pid, arg('--chatfind'))
+        return
+
     if has('--spells'):
         dumpspells(pid)
         return
 
     if has('--items'):
         dumpitems(pid)
+        return
+
+    if has('--terrain'):
+        dumpterrain(pid)
         return
 
     if has('--buffs'):

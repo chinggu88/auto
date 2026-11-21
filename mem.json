@@ -149,6 +149,35 @@
       "offsets": [],
       "type": "u32"
     },
+    "_chat": "채팅 입력칸의 '글자 묶음' 주소 (memchat.py 가 읽고 쓴다). 묶음 +0 = 글자 버퍼 포인터(글자당 2바이트 칸. 영문은 코드 그대로, 한글은 CP949 두 바이트를 앞<<8|뒤 로 묶은 값 - '버' = 0xB9F6), +4 = 글자 수, +8 = 12(뜻 모름). 경로는 [[lin.exe+0xA3288]+0x28]+0 이고 게임을 껐다 켜도 그대로였다 (2026-11-15 실기, PID 12848 / 26572 / 28012 세 번). 같이 발견된 0x9BF98 은 '지금 입력 중인 칸' 포인터라 채팅칸에 글자가 없을 때 0 이 되어 쓰지 않는다. 글자가 한 자도 없으면 버퍼 포인터가 0 이다 - 그래서 main.py 는 숫자 키를 글자 수만큼 먼저 친 뒤 그 자리를 덮어쓴다. null 로 두면 main.py 채팅버프가 예전처럼 키로 친다",
+    "chat_str": {
+      "base": "0xA3288",
+      "offsets": ["0x28", 0],
+      "type": "u32"
+    },
+    "_terrain": "지형(통행) 격자. map_id 는 lin.exe+0x8CBE8 의 지금 맵 번호 u32 (0xFFFFFFFF = 없음). terrain_grid 는 [lin.exe+0x1AB614] 를 한 번 거른 격자 버퍼 주소 (칸 rows*cols 개, 칸당 0x10 바이트, 칸+0x04 u16 의 bit0 = 그 변이 막힘). terrain_ox 는 격자 원점 x' (x' = 2*X-32768, self_x 와 같은 인코딩), terrain_oy 는 원점 Y. 칸 번호 = (Y-oy)*cols + (x'-ox). 타일 하나가 칸 2개를 쓴다: x'(짝수) = 그 타일의 북쪽 변, x'+1 = 동쪽 변. 플레이어 주변 128x128 타일을 덮는다. 칸 크기 등은 아래 terrain 블록에 있다. 2026-11-16 Lin.exe 정적 분석(이동 판정 0x43e130)으로 찾은 값이고, 2026-11-17 memprobe --terrain 그림이 화면 벽과 맞는 것을 실기 확인했다. memprobe.py --terrain 이 읽는다",
+    "map_id": {
+      "base": "0x8CBE8",
+      "offsets": [],
+      "type": "u32"
+    },
+    "terrain_grid": {
+      "base": "0x1AB614",
+      "offsets": [
+        0
+      ],
+      "type": "u32"
+    },
+    "terrain_ox": {
+      "base": "0x1AB718",
+      "offsets": [],
+      "type": "u32"
+    },
+    "terrain_oy": {
+      "base": "0x1AB71C",
+      "offsets": [],
+      "type": "u32"
+    },
     "_buffwin": "버프(상태효과) 아이콘 바 위젯 - 아직 못 찾음, base 를 null 로 둬서 꺼 둔다. 2026-11-15 실기 확인 결과 [lin.exe+0x1FABB8](=DAT_005FABB8, vtable 0x47F738) 은 버프 바가 아니라 '아이템 아이콘 목록' 이었다 (칸 2개가 '강남스타일 미션 보상 아이템' 설명 오브젝트였다, vtable 0x47FE34). vtable 0x47F738 은 여러 곳이 쓰는 범용 아이콘 목록 클래스라 버프 전용이 아니다. 또한 버프 이름 문자열은 Lin.exe 안에 없다(서버가 문자열 테이블로 내려줌) - exe 문자열로는 못 찾는다. 다음 수: 버프를 켜고/끄며 메모리를 비교(diff)해 새로 생기는 구조를 찾는다",
     "buff_win": {
       "base": null,
@@ -170,6 +199,15 @@
     "name_sub_off": "0x0C",
     "sec_off": null,
     "max_count": 64
+  },
+  "_terrain": "지형 격자 읽기 설정 (chains.terrain_grid/terrain_ox/terrain_oy 와 같이 쓴다). cols x rows = 칸 개수 (256 x 128, 타일은 x 방향으로 칸 2개를 쓰므로 128 x 128 타일), cell_size = 칸 하나 크기, attr_off = 칸 안의 속성 u16 위치 (bit0 = 막힘). x_scale/x_bias 는 x' = X*x_scale - x_bias 변환값 (self_x 의 div/bias 와 같은 인코딩). 2026-11-16 정적 분석값, 실기 확인 전",
+  "terrain": {
+    "cols": 256,
+    "rows": 128,
+    "cell_size": "0x10",
+    "attr_off": "0x04",
+    "x_scale": 2,
+    "x_bias": 32768
   },
   "_secure": "보안 값 홀더 (2026-10-28, lin.exe+57C20). HP/MP를 평문으로 저장하지 않고 XOR + 랜덤 슬롯에 숨긴다. holder는 정적 주소(RVA), 배열 포인터·키·인덱스는 패킷마다 바뀌므로 매번 읽는다. 디코드: index=[holder] XOR xor; array=[holder+4]; key=[holder+8]; 값=([array+index*4] XOR key) & mask. 검증: MP 홀더 0x1FAA10 → 1658, HP 홀더 0x1FAA20 → 2170 (2026-10-28 실측)",
   "secure": {
@@ -194,6 +232,19 @@
   "names": {
     "12543": "냉혹한 샤벨타이거"
   },
+  "_ent": "엔티티 테이블(chains.ent_table) 항목의 종류 판별 규칙. main.py 의 사냥(몬스터만 공격)과 귀환(다른 캐릭터 감지)이 쓴다. rules 를 위에서부터 보고 처음 맞는 규칙의 kind 가 그 엔티티의 종류다. 규칙 꼴은 {kind, off, type, values} 로 '엔티티 +off 의 값이 values 안에 있으면 kind' 이고, {kind, any:true} 는 '앞 규칙에 안 걸린 나머지 전부' 다. kind 는 player / monster / npc 를 쓴다",
+  "_ent1": "player 규칙(+0x4C == 255)은 sweep_mem.py 가 쓰던 값으로 한 캐릭터에서만 본 것이다. monster 규칙은 아직 없다 - 없으면 main.py 가 사냥을 시작하지 않는다. python memprobe.py --entkind 로 몹/NPC/캐릭터의 값을 보고 채운다",
+  "_ent2": "2026-11-15 실기: 바닥 이펙트 '마법진3' 도 +0x4C == 255 라서 캐릭터로 잘못 잡혔다 (255 는 캐릭터 전용 값이 아니다). 임시로 이름에 '마법진' 이 든 것을 effect 로 먼저 걸러낸다 (name_has 규칙). 다른 이펙트가 또 잡히면 name_has 에 이름을 더하거나, memprobe.py --entkind --pc 캐릭명 --npc 이펙트명 으로 진짜 구분 값을 찾아 player 규칙을 바꾼다",
+  "_ent3": "2026-11-15 실기: 캐릭터 id 는 100만 번대였다 (다른 캐릭터 6명 1004408~1005692, 내 캐릭터 1010177). 그래서 player 규칙을 +0x4C == 255 에서 'id 가 1000000~1999999' 로 바꿨다 (field 는 entity_table 이 풀어 둔 값 이름, min/max 는 범위). 캐릭터가 늘어 200만을 넘기면 max 를 올린다",
+  "_ent4": "ignore 규칙 : 이름에 그 글자가 든 것은 사냥 대상에서 뺀다 (몹 수에도 안 센다). 2026-11-15 실기: '데스나이트' 가 몹으로 잡혀서 주위에 잡을 몹이 없는데도 텔을 안 했다. 더 뺄 이름이 생기면 name_has 목록에 더한다. player 규칙 뒤에 두어서 캐릭터 판별(id)이 먼저 걸리게 한다",
+  "ent": {
+    "rules": [
+      {"kind": "effect", "name_has": ["마법진"]},
+      {"kind": "player", "field": "id", "min": 1000000, "max": 1999999},
+      {"kind": "ignore", "name_has": ["데스나이트", "아데나", "할파스의 집념"]}
+    ]
+  },
+
   "_objlist": "주변 객체 배열. base 를 null 로 두면 혈맹 판별과 몹 타겟 집기가 꺼지고 마크 이미지로 폴백한다",
   "_objlist1": "kind=array 면 base 부터 stride 간격으로 count 개가 늘어서 있다고 본다. kind=linked 면 stride 오프셋에 있는 next 포인터를 따라간다",
   "_objlist2": "fields 의 off 는 원소 하나의 시작에서부터의 오프셋이다. id 가 0 인 칸은 빈 칸으로 보고 버리므로 id 오프셋이 틀리면 목록이 전부 비어 보인다",

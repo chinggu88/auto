@@ -27,8 +27,12 @@ echo [3/3] image 폴더를 dist 옆에 복사 (해상도 바뀌면 여기 PNG �
 if not exist dist\image mkdir dist\image
 xcopy /Y /E /I image dist\image > nul
 
+REM mem.json 은 exe 밖에 둔다 (클라이언트 패치마다 오프셋이 바뀐다). 이미 있으면 덮어쓰지 않는다
+if not exist dist\mem.json copy /Y mem.json dist\mem.json > nul
+
 echo.
 echo 완료 : dist\lin_auto.exe
+echo   - mem.json 과 보정 파일(scarecrow_calib.json 또는 calib.json)이 exe 옆에 있어야 한다
 echo   - config.json 은 exe 를 처음 실행하고 [설정 저장] 을 누르면 exe 옆에 생긴다
 echo   - 게임이 관리자 권한으로 돌면 exe 도 관리자 권한으로 실행해야 키 입력이 먹는다
 goto end

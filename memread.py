@@ -490,6 +490,18 @@ def _unpack(kind, raw, off, enc):
 DEFAULT_PATH = 'mem.json'
 
 
+#지형 통행 판정표. 클라이언트 이동 판정 함수(0x43e130)의 표를 옮긴 것이다 (주소가 아니라 클라이언트 논리라 코드에 둔다)
+#TERRAIN_STEP[d] = 방향 d(0~7) 의 (dX, dY)
+#T38~T98[d] = 내 타일 칸(x' = 2*X-32768, Y) 기준으로 볼 칸의 (dx', dY)
+#  짝수 d : 막힘 = bit(T38)
+#  홀수 d : (bit(T38) or bit(T58)) and (bit(T78) or bit(T98))
+TERRAIN_STEP = [(0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1)]
+TERRAIN_T38  = [(0, 0), (0, 0), (1, 0), (1, 0), (0, 1), (0, 1), (-1, 0), (-1, 0)]
+TERRAIN_T58  = [(0, 0), (1, -1), (0, 0), (2, 1), (0, 0), (-1, 1), (0, 0), (-2, 0)]
+TERRAIN_T78  = [(0, 0), (1, 0), (0, 0), (0, 1), (0, 0), (-1, 0), (0, 0), (-1, -1)]
+TERRAIN_T98  = [(0, 0), (2, 0), (0, 0), (1, 1), (0, 0), (-2, 1), (0, 0), (0, 0)]
+
+
 def _decode_name(raw):
     #이름 문자열 디코드 (CP949 우선 — 몹 이름 테이블이 CP949, UTF-16LE 폴백)
     #널 종결자 안에서 끝나고 1~32자, 제어 문자 없음. 아니면 None
@@ -1047,10 +1059,11 @@ class Mem(object):
                 return [], head, count
             ptrs = [struct.unpack_from('<I', blob, i * 4)[0] for i in range(count)]
             out = []
+            size = self._entsize()
             for p in ptrs:
                 if p < 0x10000:
                     continue
-                ob = readmem(self.h, p, 0x58)
+                ob = readmem(self.h, p, size)
                 if ob == None:
                     continue
                 try:
@@ -1060,6 +1073,7 @@ class Mem(object):
                     hp  = struct.unpack_from('<H', ob, 0x50)[0]
                     mx  = struct.unpack_from('<H', ob, 0x52)[0]
                     typ = struct.unpack_from('<I', ob, 0x4C)[0]
+                    clan = struct.unpack_from('<I', ob, 0x44)[0]
                     nptr = struct.unpack_from('<I', ob, 0x54)[0]
                     act  = ob[0x0C]
                     base = ob[0x14]
@@ -1074,9 +1088,103 @@ class Mem(object):
                         nm = _decode_name(raw)
                 out.append({'ptr': p, 'id': oid, 'x': x, 'y': y,
                             'hp': hp, 'hp_max': mx, 'type': typ,
-                            'name': nm, 'name_ptr': nptr,
-                            'act': act, 'base': base, 'dead': base == 8})
+                            'name': nm, 'name_ptr': nptr, 'clan': clan,
+                            'act': act, 'base': base, 'dead': base == 8,
+                            'raw': ob})
             return out, head, count
+
+    #엔티티 하나에서 읽을 바이트 수. 기본 0x58 이고, mem.json ent.rules 가 더 뒤쪽
+    #오프셋을 보면 거기까지 늘린다 (상한 0x400)
+    def _entsize(self):
+        size = 0x58
+        ent = (self.cfg or {}).get('ent') or {}
+        for r in ent.get('rules') or []:
+            off = num(r.get('off'))
+            fmt = FMT.get(str(r.get('type', 'u32')))
+            if off == None or fmt == None:
+                continue
+            size = max(size, off + fmt[1])
+        return min(size, 0x400)
+
+    #엔티티의 게임 좌표 (gx, gy). 테이블의 x 는 raw 값이라 self_x 와 같은 bias/div 로 푼다
+    #(기본 bias 32768, div 2 = turnundead_mem.raw_to_game 과 같은 식)
+    def entpos(self, o):
+        spec = ((self.cfg or {}).get('chains') or {}).get('self_x') or {}
+        bias = num(spec.get('bias'), 32768)
+        div  = num(spec.get('div'), 2) or 1
+        return (((o['x'] & 0xFFFF) + bias) // div, o['y'] & 0xFFFF)
+
+    #엔티티 목록에서 나 자신을 찾는다. 못 찾으면 None
+    #  1) 캐릭터 정보의 id (chains.char_id) 와 id 가 같은 엔티티
+    #  2) 없으면 내 raw 좌표와 좌표가 같은 엔티티가 딱 하나일 때 그것
+    #     (같은 칸에 여럿이면 누가 나인지 알 수 없으므로 None)
+    def selfent(self, ents):
+        cid = self.value('char_id')
+        if cid:
+            for o in ents:
+                if o['id'] == cid:
+                    return o
+        raw = self.selfraw()
+        if raw == None:
+            return None
+        same = [o for o in ents if (o['x'] & 0xFFFF, o['y'] & 0xFFFF) == raw]
+        if len(same) == 1:
+            return same[0]
+        return None
+
+    #mem.json ent.rules 에 규칙이 적힌 종류 이름들. 예: {'player', 'monster'}
+    #'monster' 가 없으면 몬스터를 가릴 수 없다는 뜻이므로 사냥을 시작하면 안 된다
+    def entkinds(self):
+        ent = (self.cfg or {}).get('ent') or {}
+        return set(str(r.get('kind')) for r in ent.get('rules') or [] if r.get('kind'))
+
+    #엔티티의 종류. mem.json ent.rules 를 위에서부터 보고 처음 맞는 규칙의 kind 를 돌려준다.
+    #  규칙 = {"kind": "player", "off": "0x4C", "type": "u32", "values": [255]}
+    #         {"kind": "monster", "any": true}   <- 앞 규칙에 안 걸린 나머지 전부
+    #         {"kind": "effect", "name_has": ["마법진"]}   <- 이름에 그 글자가 든 것
+    #         {"kind": "player", "field": "id", "min": 1000000, "max": 1999999}   <- id 범위
+    #아무 규칙에도 안 걸리면 'other', 규칙이 없거나 값을 못 읽으면 None (판정 불가)
+    def kind(self, o):
+        ent = (self.cfg or {}).get('ent') or {}
+        rules = ent.get('rules') or []
+        if len(rules) == 0:
+            return None
+        raw = o.get('raw')
+        if raw == None:
+            return None
+        name = ''.join(str(o.get('name') or '').split())
+        for r in rules:
+            if r.get('any'):
+                return str(r.get('kind'))
+            if r.get('name_has') != None:
+                #이름에 이 글자가 들어 있으면 그 종류 (공백은 무시). 값으로 못 가르는 것의 임시 구분용
+                if any(str(x) != '' and ''.join(str(x).split()) in name for x in r['name_has']):
+                    return str(r.get('kind'))
+                continue
+            if r.get('field') != None:
+                #entity_table 이 이미 풀어 둔 값으로 본다 (id, type, clan, act, base ...)
+                v = o.get(str(r['field']))
+                if not isinstance(v, int):
+                    return None
+            else:
+                off = num(r.get('off'))
+                fmt = FMT.get(str(r.get('type', 'u32')))
+                if off == None or fmt == None or off + fmt[1] > len(raw):
+                    return None
+                v = struct.unpack_from(fmt[0], raw, off)[0]
+            #values(목록) 와 min/max(범위) 중 적힌 조건을 전부 만족해야 한다
+            if r.get('values') != None and v not in r['values']:
+                continue
+            lo = num(r.get('min'))
+            hi = num(r.get('max'))
+            if lo != None and v < lo:
+                continue
+            if hi != None and v > hi:
+                continue
+            if r.get('values') == None and lo == None and hi == None:
+                continue      #조건이 하나도 없는 규칙은 무시한다
+            return str(r.get('kind'))
+        return 'other'
 
     #스킬(마법) 창 슬롯 순회. (스킬 목록, 창 주소, 슬롯 개수) 를 돌려준다.
     #창 주소 = [lin.exe+0x1FD884] (mem.json chains.spell_win, offsets [0] 으로 한 번 거른다. 월드 밖이면 0).
@@ -1441,6 +1549,82 @@ class Mem(object):
                         s['ident'], s['ptr'],
                         s['name'] if s['name'] != None else '(이름 못 읽음)'))
         return out
+
+    #지형(통행) 격자를 통째로 읽는다. 못 읽으면 None
+    #격자 주소 = mem.json chains.terrain_grid (offsets [0] 으로 한 번 거른다),
+    #원점 = chains.terrain_ox (x' 단위) / terrain_oy (Y). 칸 크기·속성 위치·x' 변환은 mem.json terrain 블록.
+    #돌려주는 것 : {'map','grid','ox','oy','cols','rows','scale','bias','attr'}
+    #  attr = 칸 번호 순서의 속성 u16 (rows*cols 개). map 은 못 읽거나 0xFFFFFFFF 면 None (그래도 실패로 보지 않는다)
+    #정적 분석으로 찾은 값. 실기 확인 전
+    #주의: lock 안에서 value() 를 부르면 데드락이 나므로 map 은 lock 밖에서 읽고,
+    #원점과 격자는 lock 안에서 resolve + readmem 으로 같이 읽는다
+    def terrain(self):
+        if self.h == None or self.cfg == None:
+            return None
+        tcfg   = self.cfg.get('terrain')
+        chains = self.cfg.get('chains') or {}
+        gspec  = chains.get('terrain_grid')
+        xspec  = chains.get('terrain_ox')
+        yspec  = chains.get('terrain_oy')
+        if tcfg == None or gspec == None or xspec == None or yspec == None:
+            return None
+        cols  = num(tcfg.get('cols'))
+        rows  = num(tcfg.get('rows'))
+        csize = num(tcfg.get('cell_size'))
+        aoff  = num(tcfg.get('attr_off'))
+        scale = num(tcfg.get('x_scale'))
+        bias  = num(tcfg.get('x_bias'))
+        if cols == None or rows == None or csize == None or aoff == None or scale == None or bias == None:
+            return None
+        if cols <= 0 or rows <= 0 or scale <= 0 or aoff < 0 or aoff + 2 > csize:
+            return None
+        mp = self.value('map_id')
+        if not isinstance(mp, int) or mp == 0xFFFFFFFF:
+            mp = None
+        with self.lock:
+            grid = self.resolve(gspec)
+            xa   = self.resolve(xspec)
+            ya   = self.resolve(yspec)
+            if grid == None or xa == None or ya == None:
+                return None
+            rx = readmem(self.h, xa, 4)
+            ry = readmem(self.h, ya, 4)
+            if rx == None or ry == None:
+                return None
+            #격자 전체 (기본 256*128*0x10 = 0x80000 바이트) 를 한 번에 읽는다. 일부만 읽혀도 실패로 본다
+            blob = readmem(self.h, grid, rows * cols * csize)
+            if blob == None:
+                return None
+        ox   = struct.unpack('<I', rx)[0]
+        oy   = struct.unpack('<I', ry)[0]
+        if csize % 2 == 0 and aoff % 2 == 0:
+            #칸마다 struct 를 부르면 3만 번이라 느리다 (사냥 루프가 1초마다 읽는다). u16 배열로 보고 한 번에 잘라낸다
+            attr = memoryview(blob).cast('H')[aoff // 2::csize // 2].tolist()
+        else:
+            attr = [struct.unpack_from('<H', blob, i * csize + aoff)[0] for i in range(rows * cols)]
+        return {'map': mp, 'grid': grid, 'ox': ox, 'oy': oy,
+                'cols': cols, 'rows': rows, 'scale': scale, 'bias': bias,
+                'attr': attr}
+
+    #게임 좌표 (x, y) 에서 방향 d(0~7) 로 한 칸 가는 게 막혔는지. terrain() 이 돌려준 t 로만 계산한다 (메모리를 안 읽는다)
+    #True = 막힘, False = 갈 수 있음, None = 볼 칸이 격자 밖이라 모름
+    def terrain_blocked(self, t, x, y, d):
+        xp = x * t['scale'] - t['bias']
+        if d % 2 == 0:
+            tabs = (TERRAIN_T38,)
+        else:
+            tabs = (TERRAIN_T38, TERRAIN_T58, TERRAIN_T78, TERRAIN_T98)
+        bits = []
+        for tab in tabs:
+            cx = xp + tab[d][0] - t['ox']
+            cy = y + tab[d][1] - t['oy']
+            if cx < 0 or cx >= t['cols'] or cy < 0 or cy >= t['rows']:
+                return None
+            bits.append(t['attr'][cy * t['cols'] + cx] & 1)
+        if len(bits) == 1:
+            return bits[0] == 1
+        a, dd, b, c = bits
+        return bool((a or dd) and (b or c))
 
     #좌표 일치 객체 전부. (객체 dict 리스트).
     #객체 안의 x/y 는 raw 좌표임이 --table 실측으로 확인됐으므로, 게임 좌표와
