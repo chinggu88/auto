@@ -13,6 +13,7 @@
 #   python memprobe.py --watch hp,mp --sec 0.5    감시 주기 바꾸기
 #   python memprobe.py --objs                     객체 목록 덤프
 #   python memprobe.py --table                    bsearch 엔티티 테이블 순회 (플레이어 객체 찾기)
+#   python memprobe.py --hover                    커서 아래 엔티티 칸 찾기 (몹 위 / 빈 땅 번갈아 엔터, 보정 없는 클릭용)
 #   python memprobe.py --entkind                  엔티티 종류 보기 - 이름/거리/+0x4C/+0x44/행동 + 지금 규칙의 판정
 #   python memprobe.py --entkind --raw            위에 더해 엔티티마다 원본 바이트를 같이 찍는다
 #   python memprobe.py --entkind --mob "오크,늑대" --npc "판도라" --pc "다른캐릭"
@@ -2516,6 +2517,172 @@ def dofindname(pid, name, typenum):
         mr.closeproc(h)
 
 
+#=====================================================================
+# --hover : '커서 아래 엔티티' 칸 찾기 (보정 없이 클릭하려고. 읽기만 한다)
+#=====================================================================
+#게임은 커서가 몹 위에 올라가면 커서 모양을 바꾼다 -> 어딘가에 '지금 커서 아래 엔티티' 를 적어 두는 칸이 있다.
+#그 칸은 게임 전체에 하나뿐이라 몹 몇 마리로 한 번만 찾으면 된다 (패치로 주소가 옮겨지면 다시).
+#칸에 든 값이 엔티티 id 인지 엔티티 주소(ptr) 인지 모르므로 둘 다 찾는다.
+#  1. 커서를 몹 위에  -> 값이 지금 테이블의 id / ptr 중 하나인 자리를 전부 찾는다
+#  2. 커서를 빈 땅에  -> 아직 id / ptr 값이 남아 있는 자리는 뺀다
+#  3. 다른 몹 위에    -> 값이 id / ptr 이면서 직전 몹과 '다른' 자리만 남긴다
+#  2~3 을 되풀이하면 하나가 남는다. 콘솔에서 엔터를 친 뒤 HOVER_WAIT 초 안에 커서를 옮긴다
+HOVER_WAIT = 3       #엔터 후 커서를 옮길 시간(초)
+HOVER_SHOW = 20      #후보를 이만큼만 찍는다
+
+def _hoverents(m):
+    ents, head, count = m.entity_table()
+    if len(ents) == 0:
+        return None, None, None
+    me = m.selfent(ents)
+    byid  = {}
+    byptr = {}
+    for o in ents:
+        if me != None and o['ptr'] == me['ptr']:
+            continue           #내 캐릭터 위에 커서를 둘 수도 있으니 나는 뺀다
+        if o.get('id'):
+            byid[o['id']] = o
+        if o.get('ptr'):
+            byptr[o['ptr']] = o
+    return byid, byptr, me
+
+def _hoverwait(msg):
+    say()
+    say(msg)
+    try:
+        got = input('  준비되면 엔터 (끝내려면 q 엔터) : ')
+    except EOFError:
+        return False
+    if got.strip().lower() == 'q':
+        return False
+    for i in range(HOVER_WAIT, 0, -1):
+        say('  ' + str(i) + '초 안에 커서를 옮기세요 (클릭은 하지 마세요)')
+        time.sleep(1)
+    return True
+
+#후보 하나의 지금 값 -> ('id' / 'ptr', 엔티티) 또는 (None, None)
+def _hoverhit(m, a, byid, byptr):
+    raw = mr.readmem(m.h, a, 4)
+    if raw == None:
+        return None, None, None
+    v = struct.unpack('<I', raw)[0]
+    if v in byid:
+        return v, 'id', byid[v]
+    if v in byptr:
+        return v, 'ptr', byptr[v]
+    return v, None, None
+
+def _hoverwhere(m, a):
+    if m.base and m.base <= a < m.base + 0x2000000:
+        return 'Lin.exe+0x%X (정적)' % (a - m.base)
+    return '0x%X (힙 - 재접속하면 바뀔 수 있다)' % a
+
+def _hovershow(m, cands, byid, byptr):
+    say('  후보 ' + str(len(cands)) + '개')
+    for a in cands[:HOVER_SHOW]:
+        v, how, o = _hoverhit(m, a, byid, byptr)
+        say('    %s  값 %s%s' % (_hoverwhere(m, a), str(v),
+            ('  = ' + how + ' ' + str(o.get('name')) + ' (id ' + str(o.get('id')) + ')') if o else ''))
+    if len(cands) > HOVER_SHOW:
+        say('    ... (' + str(len(cands) - HOVER_SHOW) + '개 더)')
+
+def dohover(pid):
+    m = mr.Mem(MEM_PATH, say)
+    if not m.attach(pid):
+        say('붙기 실패 : ' + str(m.err))
+        return
+    try:
+        say('커서 아래 엔티티 칸 찾기 (읽기만 한다. 게임에는 아무것도 쓰지 않는다)')
+        say('콘솔에서 엔터를 친 뒤 ' + str(HOVER_WAIT) + '초 안에 커서를 게임 화면의 몹 위 / 빈 땅으로 옮기면 된다')
+
+        if not _hoverwait('[1] 커서를 몹 하나 위에 올려 둔다'):
+            return
+        byid, byptr, me = _hoverents(m)
+        if byid == None:
+            say('엔티티 테이블을 못 읽었다 - mem.json 의 ent_table 을 먼저 확인 (python memprobe.py --table)')
+            return
+        want  = set(byid) | set(byptr)
+        regs  = mr.regions(m.h, writable=True, maxaddr=(1 << 32) if m.ptrsz == 4 else None)
+        say('  주변 엔티티 ' + str(len(byid)) + '개의 id / 주소로 ' + str(len(regs)) + '개 영역을 훑는다...')
+        cands = []
+        last  = {}           #주소 -> 직전 몹 위에서 읽은 값
+        try:
+            import numpy     #수백 MB 를 파이썬 루프로 훑으면 몇 분 걸린다. 있으면 쓴다
+            wantarr = numpy.array(sorted(want), dtype='<u4')
+        except ImportError:
+            numpy = None
+            say('  (numpy 가 없어 느리게 훑는다. pip install numpy 하면 빨라진다)')
+        for base, size in regs:
+            for at, raw in mr.readchunks(m.h, base, size):
+                n = len(raw) - len(raw) % 4
+                if numpy != None:
+                    arr = numpy.frombuffer(raw[:n], dtype='<u4')
+                    for off in numpy.nonzero(numpy.isin(arr, wantarr))[0]:
+                        a = at + int(off) * 4
+                        cands.append(a)
+                        last[a] = int(arr[off])
+                    continue
+                for off, v in enumerate(struct.unpack('<%dI' % (n // 4), raw[:n])):
+                    if v in want:
+                        a = at + off * 4
+                        cands.append(a)
+                        last[a] = v
+            if len(cands) > 2000000:
+                say('후보가 200만 개가 넘는다 - 몹이 적은 곳에서 다시')
+                return
+        _hovershow(m, cands, byid, byptr)
+
+        step = 2
+        hover = False        #다음 단계 : False = 빈 땅, True = 다른 몹
+        while len(cands) > 1:
+            if hover:
+                ok = _hoverwait('[' + str(step) + '] 커서를 아까와 [다른] 몹 위에 올려 둔다')
+            else:
+                ok = _hoverwait('[' + str(step) + '] 커서를 몹도 캐릭터도 없는 빈 땅에 둔다')
+            if not ok:
+                break
+            byid, byptr, me = _hoverents(m)
+            if byid == None:
+                say('  엔티티 테이블을 못 읽었다 - 이번 단계는 건너뛴다')
+                continue
+            keep = []
+            for a in cands:
+                v, how, o = _hoverhit(m, a, byid, byptr)
+                if v == None:
+                    continue
+                if hover:
+                    if how != None and v != last.get(a):
+                        keep.append(a)
+                        last[a] = v
+                else:
+                    if how == None:
+                        keep.append(a)
+            if len(keep) == 0:
+                say('  후보가 전부 빠졌다. 커서가 제자리에 없었을 수 있다 - 이번 단계는 무시하고 다시 한다')
+                continue
+            cands = keep
+            _hovershow(m, cands, byid, byptr)
+            hover = not hover
+            step += 1
+
+        say()
+        if len(cands) == 0:
+            say('못 찾았다')
+            return
+        say('=== 결과 ===')
+        _hovershow(m, cands, byid or {}, byptr or {})
+        a = cands[0]
+        if m.base and m.base <= a < m.base + 0x2000000:
+            say()
+            say('mem.json 의 chains 에 이렇게 넣는다 (값이 ptr 로 나왔으면 "_hover" 설명에 ptr 라고 적어 둔다) :')
+            say('    "hover_id": {"base": "0x%X", "offsets": [], "type": "u32"}' % (a - m.base))
+        else:
+            say('정적 주소가 아니라 힙이다. 이 주소를 가리키는 포인터 체인을 따로 찾아야 한다 (재접속하면 바뀐다)')
+        say('확인 : 커서를 몹 위아래로 움직이며  python memprobe.py --watch hover_id')
+    finally:
+        m.detach()
+
+
 def main():
     #--where 는 경로만 찍으므로 Windows 체크보다 먼저 둔다 (어디서든 쓸 수 있게)
     if has('--where'):
@@ -2547,6 +2714,10 @@ def main():
     if kind != 'any' and kind not in mr.FMT:
         say('--type 은 any 또는 ' + ', '.join(sorted(mr.FMT))
             + ' 중 하나여야 한다 : ' + kind)
+        return
+
+    if has('--hover'):
+        dohover(pid)
         return
 
     f = arg('--find')
