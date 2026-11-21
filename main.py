@@ -1103,44 +1103,24 @@ def gamerect():
 
 #커서로 확인한 자리를 모으고 LEARN_MIN 개가 넘으면 아핀을 다시 푼다
 #잘못 읽은 점(커서를 옮긴 직후 이전 몹 값이 남았거나, 캐릭터가 걷는 중이라 화면이 밀린 경우)이 섞이면
-#가까운 곳은 맞아도 멀리 갈수록 크게 빗나간다. 최소제곱 한 번으로는 나쁜 점이 좋은 점까지 끌고 가므로
-#세 점씩 골라 풀어 보고(RANSAC) HOVER_OUTLIER 안에 드는 점이 가장 많은 답을 고른 뒤, 그 점들로만 다시 푼다.
-#빠진 점은 LEARN 에서도 지운다
-def _fitrobust(pts):
-    import turnundead_mem as tm
-    def err(coef, p):
-        a, b, c, d, e, f = coef[:6]
-        return math.hypot(a * p[0] + b * p[1] + c - p[2], d * p[0] + e * p[1] + f - p[3])
-    n = len(pts)
-    best = None
-    if n <= 12:
-        import itertools
-        trios = itertools.combinations(range(n), 3)
-    else:
-        trios = (random.sample(range(n), 3) for _ in range(300))
-    for tri in trios:
-        coef = tm.fit_affine_nocheck([pts[i] for i in tri])
-        if coef == None:
-            continue
-        ins = [p for p in pts if err(coef, p) <= HOVER_OUTLIER]
-        if best == None or len(ins) > len(best):
-            best = ins
-    if best == None or len(best) < LEARN_MIN:
-        return None, pts
-    coef = tm.fit_affine_nocheck(best)
-    if coef == None:
-        return None, pts
-    return coef, [p for p in pts if err(coef, p) <= HOVER_OUTLIER]
-
+#가까운 곳은 맞아도 멀리 갈수록 크게 빗나간다. 그래서 풀 때마다 가장 많이 벗어난 점을 HOVER_OUTLIER 밖이면 버리고 다시 푼다
 def learnpoint(dx, dy, x, y):
     global CALIB
+    import turnundead_mem as tm
     LEARN.append((dx, dy, x, y))
     if len(LEARN) > LEARN_MAX:
         del LEARN[0]
     if len(LEARN) >= LEARN_MIN:
-        coef, keep = _fitrobust(LEARN)
+        coef = tm.fit_affine_nocheck(LEARN)
+        while coef != None and len(LEARN) > LEARN_MIN:
+            a, b, c, d, e, f = coef[:6]
+            errs = [math.hypot(a * p[0] + b * p[1] + c - p[2], d * p[0] + e * p[1] + f - p[3]) for p in LEARN]
+            worst = max(range(len(errs)), key=lambda i: errs[i])
+            if errs[worst] <= HOVER_OUTLIER:
+                break
+            del LEARN[worst]
+            coef = tm.fit_affine_nocheck(LEARN)
         if coef != None:
-            LEARN[:] = keep
             if CALIB == None:
                 log('커서로 확인한 몹 ' + str(len(LEARN)) + '곳으로 화면 위치를 배웠다 - 이제 예상 자리부터 겨눈다')
             CALIB = coef
