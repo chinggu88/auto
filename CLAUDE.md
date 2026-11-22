@@ -129,7 +129,9 @@ To stop a running script: `pyautogui.FAILSAFE` is disabled in `oman.py`/`tell.py
   press the refresh key, drop the target, keep hunting; `TELE_GAP` between presses and no attacking
   meanwhile) — and a trigger radius `PC_DIST` in straight-line tiles (0 = any visible player).
   `nearpcs()` applies the radius for both `huntloop` and `_checkrHp`. `'refresh'` with no refresh key
-  falls back to ber + stop.
+  falls back to ber + stop. In `'refresh'`, the row below (강제 베르, `opts['pc_ber']` / `PC_BER`, since
+  2026-11-22) forces ber + stop once the player-triggered teleports this run (`pcmeet` in `huntloop`)
+  reach that count; 0 = off, and the entry is disabled while 베르 후 정지 is selected.
 - **Unreachable mobs (fallback).** For obstacles not in the grid (other mobs, doors), a target
   farther than `STUCK_REACH` tiles with no progress (own position unchanged, distance not
   shrinking) for `STUCK_SEC` is skipped for `SKIP_SEC`; if nothing else remains the loop

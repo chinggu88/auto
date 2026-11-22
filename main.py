@@ -228,6 +228,7 @@ DEFAULT_OPTS = {
     'dist':   8,        #사냥 탐지 거리(타일). 이 안의 몹만 대상으로 삼는다
     'crowd':  0,        #탐지 거리 안의 살아 있는 몹이 이 수 이상이면 새로고침(텔) 키. 0 이면 안 씀
     'pc_act':  'ber',   #다른 캐릭터를 만났을 때 : 'ber'(베르 후 정지) / 'refresh'(새로고침 키로 텔하고 사냥 계속)
+    'pc_ber':  0,       #새로고침(텔) 동작일 때 사람을 이 횟수만큼 만나면(텔 횟수) 강제로 베르 후 정지. 0 = 안 씀
     'pc_dist': 0,       #다른 캐릭터가 이 타일(직선 거리) 안에 들어왔을 때만 위 동작. 0 = 보이기만 하면 바로
     'detect': False,    #감지만 : 몹/캐릭터를 로그에만 찍고 클릭도 귀환도 안 한다 (확인용)
     'heal_pct': 50,     #HP 가 이 % 이하면 힐 키
@@ -266,6 +267,7 @@ HUNT_DIST          = DEFAULT_OPTS['dist']   #사냥 탐지 거리(타일)
 CROWD_N            = DEFAULT_OPTS['crowd']  #몹이 이 수 이상 몰리면 새로고침. 0 이면 끔
 DETECT_ONLY        = DEFAULT_OPTS['detect'] #감지만 (클릭/귀환 안 함)
 PC_ACT             = DEFAULT_OPTS['pc_act']  #사람 만났을 때 : 'ber' / 'refresh'
+PC_BER             = DEFAULT_OPTS['pc_ber']  #새로고침 동작에서 사람을 이만큼 만나면 강제 베르. 0 = 안 씀
 PC_DIST            = DEFAULT_OPTS['pc_dist'] #사람이 이 타일 안에 들어오면 동작. 0 = 보이면 바로
 
 #사람 만남 트리거 : 정한 칸(PC_DIST) 안에 들어온 다른 캐릭터만 남긴다 (공통 - 사냥 루프 / 피 감시가 같이 쓴다)
@@ -1287,6 +1289,7 @@ def huntloop(p=None, atkvalue=None):
     clicked = 0.0      #마지막으로 클릭한 시각
     fail    = 0        #테이블을 연속으로 못 읽은 횟수
     teled   = 0.0      #마지막으로 텔(새로고침 키)을 누른 시각
+    pcmeet  = 0        #이번 실행에서 사람을 만나 텔한 횟수 (PC_BER 강제 베르용)
     pressed = {'heal': 0.0, 'ber': 0.0, 'immune': 0.0}   #힐 / 베르 / 이뮨을 마지막으로 누른 시각
     skip    = {}       #id -> 다시 대상으로 삼아도 되는 시각 (다가가지 못한 몹)
     stuck   = {'id': None, 'best': 0, 'pos': None, 't': 0.0}   #지금 대상에게 다가가고 있는지
@@ -1328,10 +1331,14 @@ def huntloop(p=None, atkvalue=None):
         if not DETECT_ONLY and pcs:
             names = ', '.join(str(o.get('name')) + '(id ' + str(o.get('id')) + ', 거리 ' + str(d) + ')'
                               for d, o, pos in pcs)
-            if pcrefresh():
+            #새로고침 동작이라도 사람을 PC_BER 번 만났으면(그만큼 텔했으면) 이번에는 베르 후 정지로 넘어간다
+            forceber = pcrefresh() and PC_BER > 0 and pcmeet >= PC_BER
+            if pcrefresh() and not forceber:
                 #텔 직후에는 주변이 아직 안 바뀌었을 수 있으므로 TELE_GAP 동안은 다시 누르지 않고, 그동안 공격도 안 한다
                 if now - teled >= TELE_GAP:
-                    log('다른 플레이어 발견 : ' + names + ' - 텔 : ' + KEY_REFRESH)
+                    pcmeet += 1
+                    log('다른 플레이어 발견 : ' + names + ' - 텔 : ' + KEY_REFRESH
+                        + ('  (' + str(pcmeet) + ' / ' + str(PC_BER) + '번)' if PC_BER > 0 else ''))
                     gu.press(KEY_REFRESH, presses=1)
                     teled   = time.perf_counter()
                 target  = None
@@ -1340,7 +1347,9 @@ def huntloop(p=None, atkvalue=None):
                 time.sleep(HUNT_POLL)
                 continue
             log('다른 플레이어 발견 : ' + names)
-            if PC_ACT == 'refresh':
+            if forceber:
+                log('사람을 ' + str(pcmeet) + '번 만나 텔했다 - 강제 베르 후 정지')
+            elif PC_ACT == 'refresh':
                 log('새로고침 키 미지정 - 베르 후 정지로 대신한다')
             if KEY_BER != None:
                 log('베르 ' + KEY_BER.upper() + ' - 정지')
@@ -1610,6 +1619,12 @@ def loadconfig(path=None):
     if data.get('pc_act') in [a for a, label in PC_ACTS]:
         opts['pc_act'] = data['pc_act']
     try:
+        v = int(data.get('pc_ber', opts['pc_ber']))
+        if v >= 0:
+            opts['pc_ber'] = v
+    except (TypeError, ValueError):
+        pass
+    try:
         v = int(data.get('pc_dist', opts['pc_dist']))
         if v >= 0:
             opts['pc_dist'] = v
@@ -1658,6 +1673,7 @@ def saveconfig(seconds, roles, opts, path=None):
             'crowd':   int(opts.get('crowd',   DEFAULT_OPTS['crowd'])),
             'pc_act':  str(opts.get('pc_act',  DEFAULT_OPTS['pc_act'])),
             'pc_dist': int(opts.get('pc_dist', DEFAULT_OPTS['pc_dist'])),
+            'pc_ber':  int(opts.get('pc_ber',  DEFAULT_OPTS['pc_ber'])),
             'detect':  bool(opts.get('detect', DEFAULT_OPTS['detect'])),
             'heal_pct': int(opts.get('heal_pct', DEFAULT_OPTS['heal_pct'])),
             'ber_pct':  int(opts.get('ber_pct',  DEFAULT_OPTS['ber_pct'])),
@@ -1684,7 +1700,7 @@ def applyconfig(seconds, roles, opts=None):
     #opts    : {'attack': bool, 'range': 'near'/'far', 'nohit': int, 'dist': int, ..., 'attacks': [...]}
     global BUFFS, BUFFKEY, TRIGGER, ORDER, PENDING
     global KEY_RETURN, KEY_REFRESH, KEY_TRANSFORM, TRANSFORM_INTERVAL, KEY_SKILL, SKILL_COOL, ATTACKS
-    global ATTACK_ON, SCAN_ROUND, NOHIT_LIMIT, HUNT_DIST, CROWD_N, DETECT_ONLY, PC_ACT, PC_DIST
+    global ATTACK_ON, SCAN_ROUND, NOHIT_LIMIT, HUNT_DIST, CROWD_N, DETECT_ONLY, PC_ACT, PC_DIST, PC_BER
     global KEY_HEAL, KEY_BER, KEY_IMMUNE, HEAL_PCT, BER_PCT, IMMUNE_N, HEAL_GAP, BER_GAP, IMMUNE_GAP
 
     if opts == None:
@@ -1696,6 +1712,7 @@ def applyconfig(seconds, roles, opts=None):
     CROWD_N       = max(0, int(opts.get('crowd', DEFAULT_OPTS['crowd'])))
     PC_ACT        = opts.get('pc_act') if opts.get('pc_act') in [a for a, label in PC_ACTS] else DEFAULT_OPTS['pc_act']
     PC_DIST       = max(0, int(opts.get('pc_dist', DEFAULT_OPTS['pc_dist'])))
+    PC_BER        = max(0, int(opts.get('pc_ber', DEFAULT_OPTS['pc_ber'])))
     DETECT_ONLY   = bool(opts.get('detect', DEFAULT_OPTS['detect']))
     KEY_RETURN    = roles.get('return')
     KEY_REFRESH   = roles.get('refresh')
@@ -2015,6 +2032,17 @@ class App:
         self.pcent.pack(side='left', padx=(6, 0))
         ttk.Label(pcrow, foreground='#555',
                   text='  타일 안에 다른 캐릭터가 들어오면 (0 = 보이면 바로). 새로고침은 공격 탭의 새로고침 키').pack(side='left')
+        #--- 사람 만남 강제 베르 : 새로고침(텔) 동작일 때만 쓴다. 베르 후 정지면 꺼 둔다 ---
+        pcrow2 = ttk.Frame(optbox)
+        pcrow2.pack(fill='x', padx=6, pady=(2, 0))
+        ttk.Label(pcrow2, text='', width=12).pack(side='left')
+        ttk.Label(pcrow2, text='강제 베르').pack(side='left')
+        self.pcber   = tk.StringVar(value=str(DEFAULT_OPTS['pc_ber']))
+        self.pcberent = ttk.Entry(pcrow2, textvariable=self.pcber, width=6, justify='center')
+        self.pcberent.pack(side='left', padx=(6, 0))
+        ttk.Label(pcrow2, foreground='#555',
+                  text='  번 만나면(텔한 횟수) 베르 후 정지 (새로고침일 때만, 0 = 안 씀)').pack(side='left')
+        self.pcbox.bind('<<ComboboxSelected>>', lambda e: self.pcberstate())
         self.detect = tk.BooleanVar(value=DEFAULT_OPTS['detect'])
         self.dtchk  = ttk.Checkbutton(optbox, text='감지만 (클릭 / 귀환 없이 로그만 - 확인용)',
                                       variable=self.detect)
@@ -2319,6 +2347,8 @@ class App:
         self.crowd.set(str(opts.get('crowd',   DEFAULT_OPTS['crowd'])))
         self.pcact.set(dict(PC_ACTS).get(opts.get('pc_act'), dict(PC_ACTS)[DEFAULT_OPTS['pc_act']]))
         self.pcdist.set(str(opts.get('pc_dist', DEFAULT_OPTS['pc_dist'])))
+        self.pcber.set(str(opts.get('pc_ber', DEFAULT_OPTS['pc_ber'])))
+        self.pcberstate()
         self.detect.set(bool(opts.get('detect', DEFAULT_OPTS['detect'])))
         self.healpct.set(str(opts.get('heal_pct', DEFAULT_OPTS['heal_pct'])))
         self.berpct.set(str(opts.get('ber_pct',   DEFAULT_OPTS['ber_pct'])))
@@ -2368,6 +2398,10 @@ class App:
             log('사람 만남 거리는 0 이상 정수만 : ' + rawpcd)
             return None, None, None
         pcact = dict((label, a) for a, label in PC_ACTS).get(self.pcact.get(), DEFAULT_OPTS['pc_act'])
+        rawpcb = self.pcber.get().strip() or '0'
+        if not rawpcb.isdigit():
+            log('강제 베르 횟수는 0 이상 정수만 : ' + rawpcb)
+            return None, None, None
 
         roles = {}
         gaps  = defaultgaps()
@@ -2403,6 +2437,7 @@ class App:
                 'crowd':  int(rawcrowd),
                 'pc_act':  pcact,
                 'pc_dist': int(rawpcd),
+                'pc_ber':  int(rawpcb),
                 'detect': self.detect.get(),
                 'heal_pct': int(self.healpct.get()),
                 'ber_pct':  int(self.berpct.get()),
@@ -2445,10 +2480,15 @@ class App:
                 self.entry[key].configure(state='normal')
                 self.note[key].configure(text='버프 주기')
 
+    #강제 베르 칸은 새로고침(텔) 동작일 때만 쓴다
+    def pcberstate(self):
+        refresh = dict((label, a) for a, label in PC_ACTS).get(self.pcact.get()) == 'refresh'
+        self.pcberent.configure(state='normal' if refresh else 'disabled')
+
     def lockui(self):
         for key in FKEYS:
             self.entry[key].configure(state='disabled')
-        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.nhent, self.dsent, self.crent, self.pcbox, self.pcent, self.dtchk) + tuple(self.rngbtn):
+        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.nhent, self.dsent, self.crent, self.pcbox, self.pcent, self.pcberent, self.dtchk) + tuple(self.rngbtn):
             b.configure(state='disabled')
         for rid, wids in self.rolewid.items():
             for w in wids:
@@ -2464,8 +2504,10 @@ class App:
 
     #정지하면 설정을 다시 만질 수 있게 열어준다
     def unlockui(self):
-        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.nhent, self.dsent, self.crent, self.pcbox, self.pcent, self.dtchk) + tuple(self.rngbtn):
+        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.nhent, self.dsent, self.crent, self.pcent, self.dtchk) + tuple(self.rngbtn):
             b.configure(state='normal')
+        self.pcbox.configure(state='readonly')   #'normal' 로 열면 글자를 쳐 넣을 수 있게 된다
+        self.pcberstate()
         for rid, wids in self.rolewid.items():
             for w in wids:
                 w.configure(state='readonly' if isinstance(w, ttk.Combobox) else 'normal')
@@ -2499,7 +2541,8 @@ class App:
             + (', 탐지 거리 안 몹 ' + str(opts['crowd']) + '마리 이상이면' if opts.get('crowd') else ''))
         log('  사람 만남 : ' + dict(PC_ACTS)[opts.get('pc_act', DEFAULT_OPTS['pc_act'])]
             + ('  ' + str(opts['pc_dist']) + '타일 안' if opts.get('pc_dist') else '  보이면 바로')
-            + ('  (새로고침 키 미지정 - 베르 후 정지로 대신)' if opts.get('pc_act') == 'refresh' and not roles.get('refresh') else ''))
+            + ('  (새로고침 키 미지정 - 베르 후 정지로 대신)' if opts.get('pc_act') == 'refresh' and not roles.get('refresh') else '')
+            + ('  ' + str(opts['pc_ber']) + '번 만나면 강제 베르' if opts.get('pc_act') == 'refresh' and opts.get('pc_ber') else ''))
         log('  힐 : ' + ((roles['heal'].upper() + '  HP ' + str(opts['heal_pct']) + '% 이하') if roles.get('heal') else '미지정'))
         log('  베르 : ' + ((roles['ber'].upper() + '  HP ' + str(opts['ber_pct']) + '% 이하') if roles.get('ber') else '미지정'))
         log('  이뮨 : ' + ((roles['immune'].upper() + '  주위 몹 ' + str(opts['immune_n']) + '마리 이상') if roles.get('immune') else '미지정'))
