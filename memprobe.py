@@ -2750,7 +2750,8 @@ def doactscan(pid):
         return
     try:
         say('상태 칸 찾기 : 단계마다 엔터를 치고 ' + str(int(ACTSCAN_SEC)) + '초 동안 그 행동을 계속하세요 (게임 창으로 가서)')
-        seen = []        #단계별 {오프셋: set(값)}
+        seen = []        #단계별 {오프셋: {값: 횟수}}
+        reads = []
         for label, how in ACTSCAN_PHASES:
             say()
             try:
@@ -2771,36 +2772,52 @@ def doactscan(pid):
                     if raw != None:
                         n += 1
                         for off in range(len(raw)):
-                            vals.setdefault(off, set()).add(raw[off])
+                            h = vals.setdefault(off, {})
+                            h[raw[off]] = h.get(raw[off], 0) + 1
                 time.sleep(0.05)
             say('  ' + str(n) + '번 읽음')
             seen.append(vals)
-        #단계끼리 값이 하나도 안 겹치는 바이트 = 후보. 각 단계 안에서 값 종류가 적을수록 좋다
+            reads.append(max(n, 1))
+
+        #공격 중에도 칼을 휘두르는 사이사이 가만히 자세로 돌아오고, 걷기도 클릭 사이에 멈추므로
+        #'단계끼리 값이 전혀 안 겹치는' 칸만 찾으면 진짜 상태 칸이 빠진다. 그래서
+        #  - 가만히 단계에서는 값이 거의 하나로 고정 (값 종류 2개 이하) - 계속 늘어나는 카운터는 뺀다
+        #  - 공격 단계에 가만히 때 없던 값이 10% 이상 나온다
+        #  - 걷기 단계에도 가만히 때 없던 값이 10% 이상 나오고, 그 값이 공격 때 값과 다르다
+        def fmt(h, n):
+            return ' '.join('%d(%d%%)' % (v, c * 100 // n) for v, c in sorted(h.items(), key=lambda t: -t[1])[:4])
         cands = []
         for off in range(ACTSCAN_SIZE):
-            sets = [v.get(off, set()) for v in seen]
-            if any(len(x) == 0 for x in sets):
+            hi, ha, hw = [v.get(off, {}) for v in seen]
+            if not hi or not ha or not hw or len(hi) > 2:
                 continue
-            clash = 0
-            for i in range(len(sets)):
-                for j in range(i + 1, len(sets)):
-                    clash += len(sets[i] & sets[j])
-            if clash == 0:
-                cands.append((sum(len(x) for x in sets), off, sets))
+            newa = {v: c for v, c in ha.items() if v not in hi}
+            neww = {v: c for v, c in hw.items() if v not in hi}
+            fa = sum(newa.values()) / float(reads[1])
+            fw = sum(neww.values()) / float(reads[2])
+            if fa < 0.1 or fw < 0.1:
+                continue
+            if set(newa) & set(neww):
+                continue
+            cands.append((-(fa + fw), off))
         cands.sort()
         say()
-        if not cands:
-            say('단계끼리 값이 갈리는 바이트가 없다. 단계마다 행동을 확실히 했는지 확인하고 다시')
-            return
-        say('후보 (오프셋 : 단계별 값) - 위쪽일수록 깔끔하다')
-        for score, off, sets in cands[:15]:
-            say('  +0x%03X : ' % off + '   '.join(ACTSCAN_PHASES[i][0] + ' ' + str(sorted(sets[i]))
-                                             for i in range(len(sets))))
+        say('항상 보여주는 칸 (지금 코드가 쓰는 act / base) :')
+        for off in (0x0C, 0x14):
+            say('  +0x%03X : ' % off + '   '.join(ACTSCAN_PHASES[i][0] + ' ' + fmt(seen[i].get(off, {}), reads[i])
+                                             for i in range(3)))
         say()
-        say('지금 쓰는 칸은 +0x00C 다. 위 목록 결과를 그대로 붙여넣어 주세요')
+        if not cands:
+            say('조건에 맞는 칸이 없다 (가만히 때 고정 + 공격 / 걷기 때 다른 값)')
+        else:
+            say('후보 (오프셋 : 단계별 값(비율)) - 위쪽일수록 공격 / 걷기 때 새 값이 많이 나온다')
+            for score, off in cands[:12]:
+                say('  +0x%03X : ' % off + '   '.join(ACTSCAN_PHASES[i][0] + ' ' + fmt(seen[i].get(off, {}), reads[i])
+                                                 for i in range(3)))
+        say()
+        say('결과를 그대로 붙여넣어 주세요')
     finally:
         m.detach()
-
 
 def main():
     #--where 는 경로만 찍으므로 Windows 체크보다 먼저 둔다 (어디서든 쓸 수 있게)
