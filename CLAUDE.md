@@ -104,6 +104,12 @@ To stop a running script: `pyautogui.FAILSAFE` is disabled in `oman.py`/`tell.py
   Any entity works (mobs, NPCs, players, me). Result goes to `auto_calib.json` (same `points`
   format), which heads `CALIB_FILES`; on failure the older files are used. Moves the cursor only —
   no clicks, no writes. `python autocalib.py` runs it standalone.
+- **Hold while attacking (since 2026-11-22, codes assumed, not yet confirmed in-game).** `huntloop`
+  reads my entity's `act` (+0x0C); if it is in `ATTACK_ACTS` (Lineage action table: attack =
+  1 / 5 / 12 / 21 / 25 / 41 for bare / 1H sword / axe / bow / spear / 2H sword) it does not re-click,
+  does not switch to a nearer mob, and counts as progress for the stuck check. When the target ends
+  while still attacking, the next search waits up to `ATK_WAIT_MAX`. Attack keys still fire.
+  `python memprobe.py --act` prints my act / base live to confirm the codes.
 - **Recall (`_checkrHp`)** — any entity of kind `player` other than self → `request('return')`.
   "Could not read" is never treated as "nobody around": `MEM_FAIL_LIMIT` consecutive failures stop
   the macro. The HP check is still the `checkhp.PNG` image.

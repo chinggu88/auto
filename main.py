@@ -301,6 +301,11 @@ TELE_DELAY     = 0.5    #몹이 없다고 판단한 뒤 텔 키를 누르기까�
 NEXT_DELAY     = 0.1    #잡던 몹이 끝난 뒤 다음 몹을 찾기 전에 두는 시간(초)
 TELE_GAP       = 1.5    #텔(새로고침 키)을 누른 뒤 다음 텔까지 최소 간격(초). 이동 뒤 주변이 다시 읽힐 시간
 MEM_FAIL_LIMIT = 10     #엔티티 테이블을 연속으로 이만큼 못 읽으면 멈춘다 (화면으로 넘어가지 않는다)
+#--- 내 캐릭터가 공격 중인지 (엔티티 +0x0C act, 2026-11-22. 실기 확인 전 - 리니지 행동 번호 표로 가정) ---
+#행동 번호는 무기별로 걷기 / 공격 / 피격 / 가만히 4개씩 : 0~3 맨손, 4~7 한손검, 11~14 도끼, 20~23 활, 24~27 창, 40~43 양손검
+#공격 중이면 몹 서치(더 가까운 몹으로 바꾸기)와 다시 클릭을 하지 않는다. 확인은 python memprobe.py --act
+ATTACK_ACTS    = {1, 5, 12, 21, 25, 41}
+ATK_WAIT_MAX   = 2.0    #대상이 끝났는데도 공격 동작이 이어지면 이만큼(초)까지만 서치를 미룬다 (다른 몹에 맞서는 중일 수 있다)
 CALIB_FILES    = ['auto_calib.json', 'scarecrow_calib.json', 'calib.json']   #앞엣것 우선. auto_calib.json 은 autocalib.py(자동 보정)가 만든다
 #--- 힐 / 베르 / 이뮨 ---
 #사냥 루프가 매 바퀴 HP 와 주위 몹 수를 보고 해당 키를 누른다 (키는 역할 표에서 지정)
@@ -1298,6 +1303,7 @@ def huntloop(p=None, atkvalue=None):
     hpfail  = 0        #HP 를 연속으로 못 읽은 횟수
     atks    = [a for a in ATTACKS if a[0] != None and a[1] > 0]   #쓸 수 있는 공격 키만
     apress  = [0.0] * len(atks)      #공격 키를 마지막으로 누른 시각
+    atkwait = None     #대상이 끝났는데 아직 공격 동작 중이라 서치를 미루기 시작한 시각
 
     log('사냥 : 탐지 거리 ' + str(HUNT_DIST) + '타일, 가까운 순')
     if CROWD_N > 0:
@@ -1324,6 +1330,8 @@ def huntloop(p=None, atkvalue=None):
         fail = 0
 
         now  = time.perf_counter()
+        #내 캐릭터가 공격 동작 중인지 (ATTACK_ACTS). 공격 중에는 몹 서치 / 다시 클릭을 하지 않는다
+        atking = found['me'].get('act') in ATTACK_ACTS
 
         #다른 플레이어(mem.json ent.rules 의 player : id 1,000,000~1,999,999) 가 정한 칸(PC_DIST) 안에 들어오면
         #  베르 후 정지 (PC_ACT 'ber') 또는 새로고침 키로 텔하고 사냥 계속 (PC_ACT 'refresh')
@@ -1447,10 +1455,20 @@ def huntloop(p=None, atkvalue=None):
                 continue
             target  = None
             clicked = 0.0
+            #아직 공격 동작 중이면 서치를 미룬다 (공격이 끝나 가만히 / 걷기 / 피격이 되면 고른다)
+            #다른 몹에 맞서는 중일 수 있으므로 ATK_WAIT_MAX 초가 넘으면 그냥 고른다
+            if atking and not DETECT_ONLY:
+                if atkwait == None:
+                    atkwait = now
+                if now - atkwait < ATK_WAIT_MAX:
+                    time.sleep(HUNT_POLL)
+                    continue
+            atkwait = None
             if len(mobs) > 0:
                 cur = mobs[0]
-        elif now - clicked >= RECLICK_SEC and mobs[0][0] < cur[0]:
+        elif now - clicked >= RECLICK_SEC and mobs[0][0] < cur[0] and not atking:
             #클릭할 차례마다 서치를 갱신한다 : 잡던 몹보다 더 가까운 몹이 생겼으면 그쪽으로 바꾼다
+            #공격 중일 때는 바꾸지 않는다 (치던 몹을 끝까지 친다)
             #(거리가 같으면 잡던 몹을 그대로 둔다. 안 그러면 두 몹 사이를 오락가락한다)
             cur = mobs[0]
 
@@ -1479,6 +1497,9 @@ def huntloop(p=None, atkvalue=None):
             continue
 
         #다가가고 있는지 본다. 내 좌표가 바뀌거나 거리가 줄면 진전이 있는 것
+        #공격 중이면 진전이 있는 것으로 본다 (제자리에서 치고 있다)
+        if atking and stuck['id'] == o['id']:
+            stuck['t'] = now
         if stuck['id'] != o['id']:
             stuck = {'id': o['id'], 'best': dist, 'pos': found['pos'], 't': now}
         elif dist < stuck['best'] or found['pos'] != stuck['pos']:
@@ -1494,7 +1515,8 @@ def huntloop(p=None, atkvalue=None):
             clicked = 0.0
             continue
 
-        if now - clicked >= RECLICK_SEC:
+        if now - clicked >= RECLICK_SEC and not atking:
+            #공격 동작 중에는 다시 클릭하지 않는다 (치는 중인 동작을 끊지 않는다)
             #칼 모양 확인 없이 바로 클릭한다
             # _movefast(parkpos[0], parkpos[1])      #커서 모양 초기화
             # if _probe(xy[0], xy[1], atkvalue):
