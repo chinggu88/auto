@@ -13,6 +13,7 @@
 #   python memprobe.py --watch hp,mp --sec 0.5    감시 주기 바꾸기
 #   python memprobe.py --objs                     객체 목록 덤프
 #   python memprobe.py --table                    bsearch 엔티티 테이블 순회 (플레이어 객체 찾기)
+#   python memprobe.py --actscan                  상태 칸 찾기 (가만히 / 공격 / 걷기 를 차례로 하며 갈리는 바이트)
 #   python memprobe.py --act                      내 캐릭터 행동 코드 보기 (공격중 / 가만히 / 피격중 확인용)
 #   python memprobe.py --hover                    커서 아래 엔티티 칸 찾기 (몹 위 / 빈 땅 번갈아 엔터, 보정 없는 클릭용)
 #   python memprobe.py --entkind                  엔티티 종류 보기 - 이름/거리/+0x4C/+0x44/행동 + 지금 규칙의 판정
@@ -2731,6 +2732,76 @@ def doact(pid):
         m.detach()
 
 
+#=====================================================================
+# --actscan : 내 캐릭터 상태(공격 / 가만히 / 걷기)를 담는 칸 찾기 (읽기만 한다)
+#=====================================================================
+#엔티티 +0x0C act 가 실제로 안 바뀌면, 내 엔티티 구조체 앞쪽 ACTSCAN_SIZE 바이트를 단계마다 계속 읽어
+#'가만히 / 공격 / 걷기' 단계끼리 값이 겹치지 않는 바이트를 찾는다.
+ACTSCAN_SIZE  = 0x200    #내 엔티티에서 읽을 바이트 수
+ACTSCAN_SEC   = 5.0      #단계마다 읽는 시간(초)
+ACTSCAN_PHASES = [('가만히', '아무것도 하지 말고 가만히 서 있기'),
+                  ('공격',   '몹 하나를 계속 공격하기 (몹이 죽지 않게 큰 몹이면 좋다)'),
+                  ('걷기',   '빈 땅을 클릭해 계속 걸어 다니기')]
+
+def doactscan(pid):
+    m = mr.Mem(MEM_PATH, say)
+    if not m.attach(pid):
+        say('붙기 실패 : ' + str(m.err))
+        return
+    try:
+        say('상태 칸 찾기 : 단계마다 엔터를 치고 ' + str(int(ACTSCAN_SEC)) + '초 동안 그 행동을 계속하세요 (게임 창으로 가서)')
+        seen = []        #단계별 {오프셋: set(값)}
+        for label, how in ACTSCAN_PHASES:
+            say()
+            try:
+                if input('[' + label + '] ' + how + ' - 준비되면 엔터 (q = 끝) : ').strip().lower() == 'q':
+                    return
+            except EOFError:
+                return
+            say('  3초 뒤 시작...')
+            time.sleep(3)
+            vals = {}
+            t0 = time.time()
+            n  = 0
+            while time.time() - t0 < ACTSCAN_SEC:
+                ents, head, count = m.entity_table()
+                me = m.selfent(ents) if ents else None
+                if me != None:
+                    raw = mr.readmem(m.h, me['ptr'], ACTSCAN_SIZE)
+                    if raw != None:
+                        n += 1
+                        for off in range(len(raw)):
+                            vals.setdefault(off, set()).add(raw[off])
+                time.sleep(0.05)
+            say('  ' + str(n) + '번 읽음')
+            seen.append(vals)
+        #단계끼리 값이 하나도 안 겹치는 바이트 = 후보. 각 단계 안에서 값 종류가 적을수록 좋다
+        cands = []
+        for off in range(ACTSCAN_SIZE):
+            sets = [v.get(off, set()) for v in seen]
+            if any(len(x) == 0 for x in sets):
+                continue
+            clash = 0
+            for i in range(len(sets)):
+                for j in range(i + 1, len(sets)):
+                    clash += len(sets[i] & sets[j])
+            if clash == 0:
+                cands.append((sum(len(x) for x in sets), off, sets))
+        cands.sort()
+        say()
+        if not cands:
+            say('단계끼리 값이 갈리는 바이트가 없다. 단계마다 행동을 확실히 했는지 확인하고 다시')
+            return
+        say('후보 (오프셋 : 단계별 값) - 위쪽일수록 깔끔하다')
+        for score, off, sets in cands[:15]:
+            say('  +0x%03X : ' % off + '   '.join(ACTSCAN_PHASES[i][0] + ' ' + str(sorted(sets[i]))
+                                             for i in range(len(sets))))
+        say()
+        say('지금 쓰는 칸은 +0x00C 다. 위 목록 결과를 그대로 붙여넣어 주세요')
+    finally:
+        m.detach()
+
+
 def main():
     #--where 는 경로만 찍으므로 Windows 체크보다 먼저 둔다 (어디서든 쓸 수 있게)
     if has('--where'):
@@ -2762,6 +2833,10 @@ def main():
     if kind != 'any' and kind not in mr.FMT:
         say('--type 은 any 또는 ' + ', '.join(sorted(mr.FMT))
             + ' 중 하나여야 한다 : ' + kind)
+        return
+
+    if has('--actscan'):
+        doactscan(pid)
         return
 
     if has('--act'):
