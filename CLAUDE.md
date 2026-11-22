@@ -97,7 +97,9 @@ To stop a running script: `pyautogui.FAILSAFE` is disabled in `oman.py`/`tell.py
   `ClientToScreen`), spirals the cursor out from its centre every `GRID` px reading `chains.hover_id`
   (`Lin.exe+0x1AB548`, entity pointer under the cursor, 0 on empty ground; a hit counts only if two
   reads `SETTLE` apart agree), pairs each hit with that entity's game offset from me at that moment,
-  averages the hits per (entity, tile) into one point, fits RANSAC within `INLIER_PX`, then probes
+  traces the sprite's bottom / left / right edges in `STEP` px and uses the foot centre `CLICK_UP`
+  px up as the point (sprite centres vary with mob height; feet sit on the tile), drops entities
+  that moved while being traced, fits RANSAC within `INLIER_PX`, then probes
   the predicted spot of entities not yet hit, and saves only if leave-one-out error ≤ `LOO_MAX`.
   Any entity works (mobs, NPCs, players, me). Result goes to `auto_calib.json` (same `points`
   format), which heads `CALIB_FILES`; on failure the older files are used. Moves the cursor only —

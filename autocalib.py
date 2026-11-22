@@ -12,7 +12,10 @@
 #     2. 그 안을 가운데(내 캐릭터)부터 바깥으로 GRID px 간격으로 커서를 옮기며 hover_id 를 읽는다
 #        (두 번 읽어 같을 때만 믿는다 - 커서를 옮긴 직후에는 이전 자리 값이 남아 있을 수 있다)
 #     3. 걸린 엔티티의 그 순간 게임 좌표 - 내 좌표 = (dx, dy) 와 커서 화면 좌표를 짝으로 모은다
-#        엔티티 + 칸 별로 모은 커서 자리의 가운데를 한 점으로 쓴다 (몹 그림 한가운데)
+#        처음 걸린 엔티티는 그 자리에서 그림의 아래 끝(발)과 좌우 끝을 STEP px 씩 더듬어 찾고,
+#        '발 가운데에서 CLICK_UP 위' 를 그 엔티티의 점으로 쓴다. 그림 한가운데는 몹마다 키가 달라
+#        (큰 몹 / 작은 몹) 같은 칸이라도 수십 px 씩 어긋나지만, 발은 칸 위치에 맞춰 그려지므로 일정하다.
+#        더듬는 동안 그 엔티티의 게임 좌표가 바뀌면(걷는 중) 버린다
 #     4. 점이 모이면 RANSAC(세 점씩 풀어 가장 많이 맞는 답)으로 아핀을 풀고,
 #        아직 못 걸린 엔티티는 예상 자리 둘레만 확인해서 점을 늘린다
 #     5. 한 점씩 빼고 풀어 그 점을 맞히는지(LOO) 본 뒤 통과하면 auto_calib.json 에 저장
@@ -41,6 +44,9 @@ LOO_MAX    = 30      #한 점씩 빼고 풀었을 때 평균 오차가 이보다
 VERIFY_NEAR = [(0, 0), (0, -GRID), (0, GRID), (-GRID, 0), (GRID, 0),
                (-GRID, -GRID), (GRID, -GRID), (-GRID, GRID), (GRID, GRID),
                (0, -2 * GRID), (0, 2 * GRID)]   #확인 단계 : 예상 자리 둘레 (그림은 발보다 위로 크다)
+STEP       = 4       #그림 가장자리를 찾을 때 커서 간격(px)
+EDGE_MAX   = 40      #가장자리 찾기에서 한 방향으로 최대 이만큼 걸음 (STEP x 40 = 160px)
+CLICK_UP   = 20      #저장하는 점 = 그림 아래 끝(발)에서 이만큼 위. 몹 몸통 아래쪽을 클릭하게 된다
 ENT_REFRESH = 0.3    #엔티티 표를 다시 읽는 간격(초). 몹이 움직이므로 걸린 순간 근처의 좌표를 쓴다
 
 
@@ -174,9 +180,9 @@ class _Ents:
         self.pos  = {}
         self.me   = None
 
-    def get(self):
+    def get(self, force=False):
         now = time.perf_counter()
-        if now - self.at >= ENT_REFRESH or self.me == None:
+        if force or now - self.at >= ENT_REFRESH or self.me == None:
             ents, head, count = self.mem.entity_table()
             me  = self.mem.selfent(ents) if ents else None
             pos = {}
@@ -212,31 +218,63 @@ def run(mem, log=_say, alive=None):
         return None, None, '주변 엔티티가 없음 (몹 / NPC / 다른 캐릭터가 화면에 몇 개 있어야 한다)'
 
     log('자동 보정 시작 : 게임 그림 영역 ' + str(rect) + ', 주변 엔티티 ' + str(len(pos)) + '개. 마우스를 만지지 마세요')
-    samples = {}   #(ptr, dx, dy) -> [(x, y), ...]
+    feet    = {}   #(ptr, dx, dy) -> (화면x, 화면y)  발 가운데에서 CLICK_UP 위
+    tried   = set()   #더듬어 본 (ptr, dx, dy) - 실패한 것도 다시 하지 않는다
     t0      = time.perf_counter()
 
-    def probe(x, y):
+    #커서를 (x, y) 로 옮기고 커서 아래 엔티티 ptr. 두 번 읽어 같을 때만 믿는다. 아니면 0
+    def under(x, y):
         _move(x, y)
         time.sleep(SETTLE)
         h = mem.value('hover_id')
         if not h:
-            return None
+            return 0
         time.sleep(SETTLE)
-        if mem.value('hover_id') != h:
+        return h if mem.value('hover_id') == h else 0
+
+    #(x, y) 에서 h 그림의 아래 끝과 좌우 끝을 더듬어 발 가운데를 찾는다. 못 하면 None
+    def edges(h, x, y):
+        yy = y
+        for _ in range(EDGE_MAX):
+            if under(x, yy + STEP) != h:
+                break
+            yy += STEP
+        bottom = yy
+        ym = bottom - 6           #맨 아래 줄은 그림이 가늘 수 있어 조금 위에서 폭을 잰다
+        if under(x, ym) != h:
+            ym = bottom
+        xl = x
+        for _ in range(EDGE_MAX):
+            if under(xl - STEP, ym) != h:
+                break
+            xl -= STEP
+        xr = x
+        for _ in range(EDGE_MAX):
+            if under(xr + STEP, ym) != h:
+                break
+            xr += STEP
+        return ((xl + xr) / 2.0, bottom)
+
+    def probe(x, y):
+        h = under(x, y)
+        if not h:
             return None
-        p, m = ents.get()
+        p, m = ents.get(force=True)
         if h not in p or m == None:
             return None
         key = (h, p[h][0] - m[0], p[h][1] - m[1])
-        samples.setdefault(key, []).append((x, y))
+        if key in tried:
+            return key
+        tried.add(key)
+        at = edges(h, x, y)
+        p2, m2 = ents.get(force=True)
+        if h not in p2 or m2 == None or (p2[h][0] - m2[0], p2[h][1] - m2[1]) != key[1:]:
+            return key            #더듬는 사이 움직였다 - 이 점은 버린다
+        feet[key] = (at[0], at[1] - CLICK_UP)
         return key
 
     def points():
-        out = []
-        for (h, dx, dy), xy in samples.items():
-            out.append((float(dx), float(dy),
-                        sum(q[0] for q in xy) / len(xy), sum(q[1] for q in xy) / len(xy)))
-        return out
+        return [(float(dx), float(dy), xy[0], xy[1]) for (h, dx, dy), xy in feet.items()]
 
     def stop():
         return (alive != None and not alive()) or time.perf_counter() - t0 > BUDGET
@@ -250,17 +288,17 @@ def run(mem, log=_say, alive=None):
             break
         probe(x, y)
         n += 1
-        if n % 50 == 0 and len(samples) >= NEED_ENTS:
+        if n % 50 == 0 and len(feet) >= NEED_ENTS:
             coef, ins = fitrobust(points())
             if coef != None and len(ins) >= NEED_ENTS:
                 break
-    log('  훑기 : ' + str(n) + '자리, 걸린 엔티티 자리 ' + str(len(samples)) + '개 (' + str(round(time.perf_counter() - t0, 1)) + '초)')
+    log('  훑기 : ' + str(n) + '자리, 잰 엔티티 ' + str(len(feet)) + '개 (' + str(round(time.perf_counter() - t0, 1)) + '초)')
 
     #2) 확인 : 아직 안 걸린 엔티티를 예상 자리 둘레에서 찾아 점을 늘린다 (멀리 있는 것까지 맞도록)
     coef, ins = fitrobust(points())
     if coef != None:
         p, m = ents.get()
-        seen = set(k[0] for k in samples)
+        seen = set(k[0] for k in tried)
         for ptr, gp in list(p.items()):
             if stop() or ptr in seen:
                 continue
@@ -272,10 +310,7 @@ def run(mem, log=_say, alive=None):
             for ox, oy in VERIFY_NEAR:
                 k = probe(px + ox, py + oy)
                 if k != None and k[0] == ptr:
-                    #같은 엔티티 그림 위를 조금 더 찍어 가운데를 잡는다
-                    for ox2, oy2 in VERIFY_NEAR[1:5]:
-                        probe(px + ox + ox2 // 2, py + oy + oy2 // 2)
-                    break
+                    break          #probe 가 이미 발 가운데를 더듬어 재 두었다
 
     #3) 최종 풀이 + 검사
     pts = points()
