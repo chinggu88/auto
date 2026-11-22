@@ -13,6 +13,7 @@
 #   python memprobe.py --watch hp,mp --sec 0.5    감시 주기 바꾸기
 #   python memprobe.py --objs                     객체 목록 덤프
 #   python memprobe.py --table                    bsearch 엔티티 테이블 순회 (플레이어 객체 찾기)
+#   python memprobe.py --act                      내 캐릭터 행동 코드 보기 (공격중 / 가만히 / 피격중 확인용)
 #   python memprobe.py --hover                    커서 아래 엔티티 칸 찾기 (몹 위 / 빈 땅 번갈아 엔터, 보정 없는 클릭용)
 #   python memprobe.py --entkind                  엔티티 종류 보기 - 이름/거리/+0x4C/+0x44/행동 + 지금 규칙의 판정
 #   python memprobe.py --entkind --raw            위에 더해 엔티티마다 원본 바이트를 같이 찍는다
@@ -2683,6 +2684,53 @@ def dohover(pid):
         m.detach()
 
 
+#=====================================================================
+# --act : 내 캐릭터 행동 코드 실시간 보기 (공격중 / 가만히 / 피격중 구분용. 읽기만 한다)
+#=====================================================================
+#엔티티 +0x0C act(현재 행동 코드) / +0x14 base(기본 자세) 를 바뀔 때마다 찍는다.
+#리니지 스프라이트 행동 번호는 무기별로 4개씩 묶여 있다고 알려져 있다 (걷기 / 공격 / 피격 / 숨쉬기)
+#  0~3 맨손, 4~7 한손검, 8 죽음, 11~14 도끼, 20~23 활, 24~27 창, 18 / 19 마법 (방향 / 무방향) ...
+#아래 이름은 그 표로 붙인 추정이다. 실제로 공격 / 가만히 / 맞기 를 해 보며 코드를 확인할 것
+ACT_GUESS = {0: '걷기', 1: '공격', 2: '피격', 3: '가만히',
+             4: '걷기(한손검)', 5: '공격(한손검)', 6: '피격(한손검)', 7: '가만히(한손검)',
+             8: '죽음', 11: '걷기(도끼)', 12: '공격(도끼)', 13: '피격(도끼)', 14: '가만히(도끼)',
+             18: '마법(방향)', 19: '마법(무방향)',
+             20: '걷기(활)', 21: '공격(활)', 22: '피격(활)', 23: '가만히(활)',
+             24: '걷기(창)', 25: '공격(창)', 26: '피격(창)', 27: '가만히(창)',
+             40: '걷기(양손검)', 41: '공격(양손검)', 42: '피격(양손검)', 43: '가만히(양손검)'}
+
+def doact(pid):
+    m = mr.Mem(MEM_PATH, say)
+    if not m.attach(pid):
+        say('붙기 실패 : ' + str(m.err))
+        return
+    say('내 캐릭터 행동 코드 보기 (바뀔 때만 찍는다. 끝내려면 Ctrl+C)')
+    say('가만히 서 있기 -> 몹 공격 -> 몹에게 맞기 -> 걷기 를 해 보고 각각 어떤 숫자가 나오는지 알려 주세요')
+    last = None
+    t0   = time.time()
+    try:
+        while True:
+            ents, head, count = m.entity_table()
+            me = m.selfent(ents) if ents else None
+            if me == None:
+                cur = ('못 읽음',)
+            else:
+                cur = (me.get('act'), me.get('base'))
+            if cur != last:
+                if me == None:
+                    say('%7.2f초  내 캐릭터를 못 찾음' % (time.time() - t0))
+                else:
+                    a, b = cur
+                    say('%7.2f초  act %-3s %-14s base %-3s %s' % (time.time() - t0, a, ACT_GUESS.get(a, '?'),
+                                                              b, ACT_GUESS.get(b, '?')))
+                last = cur
+            time.sleep(0.05)
+    except KeyboardInterrupt:
+        say('끝')
+    finally:
+        m.detach()
+
+
 def main():
     #--where 는 경로만 찍으므로 Windows 체크보다 먼저 둔다 (어디서든 쓸 수 있게)
     if has('--where'):
@@ -2714,6 +2762,10 @@ def main():
     if kind != 'any' and kind not in mr.FMT:
         say('--type 은 any 또는 ' + ', '.join(sorted(mr.FMT))
             + ' 중 하나여야 한다 : ' + kind)
+        return
+
+    if has('--act'):
+        doact(pid)
         return
 
     if has('--hover'):
