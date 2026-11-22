@@ -228,6 +228,7 @@ DEFAULT_OPTS = {
     'dist':   8,        #사냥 탐지 거리(타일). 이 안의 몹만 대상으로 삼는다
     'crowd':  0,        #탐지 거리 안의 살아 있는 몹이 이 수 이상이면 새로고침(텔) 키. 0 이면 안 씀
     'pc_act':  'ber',   #다른 캐릭터를 만났을 때 : 'ber'(베르 후 정지) / 'refresh'(새로고침 키로 텔하고 사냥 계속)
+    'autocal': True,    #시작할 때 자동 보정 (autocalib.py - 커서 아래 엔티티로 화면 위치를 재서 auto_calib.json 에 저장)
     'pc_ber':  0,       #새로고침(텔) 동작일 때 사람을 이 횟수만큼 만나면(텔 횟수) 강제로 베르 후 정지. 0 = 안 씀
     'pc_dist': 0,       #다른 캐릭터가 이 타일(직선 거리) 안에 들어왔을 때만 위 동작. 0 = 보이기만 하면 바로
     'detect': False,    #감지만 : 몹/캐릭터를 로그에만 찍고 클릭도 귀환도 안 한다 (확인용)
@@ -267,6 +268,7 @@ HUNT_DIST          = DEFAULT_OPTS['dist']   #사냥 탐지 거리(타일)
 CROWD_N            = DEFAULT_OPTS['crowd']  #몹이 이 수 이상 몰리면 새로고침. 0 이면 끔
 DETECT_ONLY        = DEFAULT_OPTS['detect'] #감지만 (클릭/귀환 안 함)
 PC_ACT             = DEFAULT_OPTS['pc_act']  #사람 만났을 때 : 'ber' / 'refresh'
+AUTOCAL            = DEFAULT_OPTS['autocal'] #시작할 때 자동 보정
 PC_BER             = DEFAULT_OPTS['pc_ber']  #새로고침 동작에서 사람을 이만큼 만나면 강제 베르. 0 = 안 씀
 PC_DIST            = DEFAULT_OPTS['pc_dist'] #사람이 이 타일 안에 들어오면 동작. 0 = 보이면 바로
 
@@ -299,7 +301,7 @@ TELE_DELAY     = 0.5    #몹이 없다고 판단한 뒤 텔 키를 누르기까�
 NEXT_DELAY     = 0.1    #잡던 몹이 끝난 뒤 다음 몹을 찾기 전에 두는 시간(초)
 TELE_GAP       = 1.5    #텔(새로고침 키)을 누른 뒤 다음 텔까지 최소 간격(초). 이동 뒤 주변이 다시 읽힐 시간
 MEM_FAIL_LIMIT = 10     #엔티티 테이블을 연속으로 이만큼 못 읽으면 멈춘다 (화면으로 넘어가지 않는다)
-CALIB_FILES    = ['scarecrow_calib.json', 'calib.json']   #앞엣것 우선
+CALIB_FILES    = ['auto_calib.json', 'scarecrow_calib.json', 'calib.json']   #앞엣것 우선. auto_calib.json 은 autocalib.py(자동 보정)가 만든다
 #--- 힐 / 베르 / 이뮨 ---
 #사냥 루프가 매 바퀴 HP 와 주위 몹 수를 보고 해당 키를 누른다 (키는 역할 표에서 지정)
 #재사용 간격은 그 키의 주기(초) 칸 값이고, 0 이면 아래 기본값을 쓴다
@@ -1618,6 +1620,8 @@ def loadconfig(path=None):
         pass
     if data.get('pc_act') in [a for a, label in PC_ACTS]:
         opts['pc_act'] = data['pc_act']
+    if 'autocal' in data:
+        opts['autocal'] = bool(data['autocal'])
     try:
         v = int(data.get('pc_ber', opts['pc_ber']))
         if v >= 0:
@@ -1674,6 +1678,7 @@ def saveconfig(seconds, roles, opts, path=None):
             'pc_act':  str(opts.get('pc_act',  DEFAULT_OPTS['pc_act'])),
             'pc_dist': int(opts.get('pc_dist', DEFAULT_OPTS['pc_dist'])),
             'pc_ber':  int(opts.get('pc_ber',  DEFAULT_OPTS['pc_ber'])),
+            'autocal': bool(opts.get('autocal', DEFAULT_OPTS['autocal'])),
             'detect':  bool(opts.get('detect', DEFAULT_OPTS['detect'])),
             'heal_pct': int(opts.get('heal_pct', DEFAULT_OPTS['heal_pct'])),
             'ber_pct':  int(opts.get('ber_pct',  DEFAULT_OPTS['ber_pct'])),
@@ -1700,7 +1705,7 @@ def applyconfig(seconds, roles, opts=None):
     #opts    : {'attack': bool, 'range': 'near'/'far', 'nohit': int, 'dist': int, ..., 'attacks': [...]}
     global BUFFS, BUFFKEY, TRIGGER, ORDER, PENDING
     global KEY_RETURN, KEY_REFRESH, KEY_TRANSFORM, TRANSFORM_INTERVAL, KEY_SKILL, SKILL_COOL, ATTACKS
-    global ATTACK_ON, SCAN_ROUND, NOHIT_LIMIT, HUNT_DIST, CROWD_N, DETECT_ONLY, PC_ACT, PC_DIST, PC_BER
+    global ATTACK_ON, SCAN_ROUND, NOHIT_LIMIT, HUNT_DIST, CROWD_N, DETECT_ONLY, PC_ACT, PC_DIST, PC_BER, AUTOCAL
     global KEY_HEAL, KEY_BER, KEY_IMMUNE, HEAL_PCT, BER_PCT, IMMUNE_N, HEAL_GAP, BER_GAP, IMMUNE_GAP
 
     if opts == None:
@@ -1713,6 +1718,7 @@ def applyconfig(seconds, roles, opts=None):
     PC_ACT        = opts.get('pc_act') if opts.get('pc_act') in [a for a, label in PC_ACTS] else DEFAULT_OPTS['pc_act']
     PC_DIST       = max(0, int(opts.get('pc_dist', DEFAULT_OPTS['pc_dist'])))
     PC_BER        = max(0, int(opts.get('pc_ber', DEFAULT_OPTS['pc_ber'])))
+    AUTOCAL       = bool(opts.get('autocal', DEFAULT_OPTS['autocal']))
     DETECT_ONLY   = bool(opts.get('detect', DEFAULT_OPTS['detect']))
     KEY_RETURN    = roles.get('return')
     KEY_REFRESH   = roles.get('refresh')
@@ -1803,10 +1809,22 @@ def runmacro():
 
         atk = None
         if ATTACK_ON and not DETECT_ONLY:
+            if AUTOCAL:
+                #허수아비 F9 보정 대신 : 커서 아래 엔티티 칸으로 주변 엔티티의 화면 위치를 재서 바로 쓴다
+                #실패하면 예전 보정 파일(auto_calib / scarecrow_calib / calib.json)로 넘어간다
+                import autocalib
+                pts, coef, why = autocalib.run(MEM, log, lambda: ALIVE)
+                if not ALIVE:
+                    return
+                if pts != None:
+                    autocalib.save(pts, autocalib.clientrect())
+                    log('자동 보정 완료 : ' + why + ' -> ' + autocalib.OUT_FILE)
+                else:
+                    log('자동 보정 실패 : ' + why + ' - 저장된 보정 파일을 쓴다')
             CALIB, why = loadcalib()
             if CALIB == None:
                 log('화면 보정이 없어 몹을 클릭할 수 없다 : ' + why)
-                log('postracker.py 에서 허수아비 보정(F9)을 3점 이상 찍은 뒤 다시 시작 - 시작 안 함')
+                log('자동 보정을 켜고 엔티티(몹 / NPC)가 보이는 곳에서 다시 시작하거나, postracker.py 허수아비 보정(F9) - 시작 안 함')
                 return
             log('화면 보정 : ' + why)
             #공격 커서(칼 모양)는 더 이상 확인하지 않으므로 캡처도 하지 않는다
@@ -1995,6 +2013,10 @@ class App:
         self.atkchk = ttk.Checkbutton(optbox, text='공격 사용 (가까운 몹부터 클릭)',
                                       variable=self.attack)
         self.atkchk.pack(anchor='w', padx=6, pady=4)
+        self.autocal = tk.BooleanVar(value=DEFAULT_OPTS['autocal'])
+        self.acchk   = ttk.Checkbutton(optbox, variable=self.autocal,
+                                       text='시작할 때 자동 보정 (허수아비 F9 대신. 몇 초 동안 커서가 게임 화면을 훑습니다 - 마우스를 만지지 마세요)')
+        self.acchk.pack(anchor='w', padx=6, pady=(0, 4))
         ttk.Label(optbox, foreground='#555',
                   text='몹 위치를 메모리에서 읽어 가장 가까운 몹을 클릭하고, 죽으면 다음으로 가까운 몹으로 넘어갑니다.\n'
                        '끄면 클릭하지 않고 버프 / 변신 / 피·주변 캐릭터 감시만 돕니다.'
@@ -2341,6 +2363,7 @@ class App:
         tkey = roles.get('transform')
         self.transkey.set(tkey.upper() if tkey in FKEYS else KEY_NONE)
         self.attack.set(bool(opts.get('attack', DEFAULT_OPTS['attack'])))
+        self.autocal.set(bool(opts.get('autocal', DEFAULT_OPTS['autocal'])))
         self.range.set(str(opts.get('range',  DEFAULT_OPTS['range'])))
         self.nohit.set(str(opts.get('nohit',  DEFAULT_OPTS['nohit'])))
         self.dist.set(str(opts.get('dist',     DEFAULT_OPTS['dist'])))
@@ -2431,6 +2454,7 @@ class App:
             attacks.append({'key': self.atkkeyof(i), 'delay': delay, 'dist': int(self.atkdist[i].get())})
 
         opts = {'attack': self.attack.get(),
+                'autocal': self.autocal.get(),
                 'range':  self.range.get(),
                 'nohit':  int(raw),
                 'dist':   int(rawdist),
@@ -2488,7 +2512,7 @@ class App:
     def lockui(self):
         for key in FKEYS:
             self.entry[key].configure(state='disabled')
-        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.nhent, self.dsent, self.crent, self.pcbox, self.pcent, self.pcberent, self.dtchk) + tuple(self.rngbtn):
+        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.acchk, self.nhent, self.dsent, self.crent, self.pcbox, self.pcent, self.pcberent, self.dtchk) + tuple(self.rngbtn):
             b.configure(state='disabled')
         for rid, wids in self.rolewid.items():
             for w in wids:
@@ -2504,7 +2528,7 @@ class App:
 
     #정지하면 설정을 다시 만질 수 있게 열어준다
     def unlockui(self):
-        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.nhent, self.dsent, self.crent, self.pcent, self.dtchk) + tuple(self.rngbtn):
+        for b in (self.savebtn, self.loadbtn, self.defbtn, self.atkchk, self.acchk, self.nhent, self.dsent, self.crent, self.pcent, self.dtchk) + tuple(self.rngbtn):
             b.configure(state='normal')
         self.pcbox.configure(state='readonly')   #'normal' 로 열면 글자를 쳐 넣을 수 있게 된다
         self.pcberstate()
@@ -2535,7 +2559,8 @@ class App:
         applyconfig(seconds, roles, opts)
 
         log('=== 설정 ===')
-        log('  공격 : ' + ('사용' if opts['attack'] else '끔'))
+        log('  공격 : ' + ('사용' if opts['attack'] else '끔')
+            + ('  (시작할 때 자동 보정)' if opts['attack'] and opts.get('autocal') else ''))
         log('  탐지 거리 : ' + str(opts['dist']) + '타일' + ('  (감지만)' if opts.get('detect') else ''))
         log('  새로고침(텔) : 주변에 몹이 없으면 바로'
             + (', 탐지 거리 안 몹 ' + str(opts['crowd']) + '마리 이상이면' if opts.get('crowd') else ''))
