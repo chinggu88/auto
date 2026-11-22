@@ -54,6 +54,17 @@ def _say(msg):
     print(msg)
 
 
+#Windows 화면 배율(125% / 150% ...)이 켜져 있으면, DPI 를 모르는 프로그램은 창 위치 / 커서 좌표를
+#배율로 줄인 '가짜 좌표' 로 받는다. main.py 는 pyautogui 를 불러오면서 실제 픽셀 좌표를 쓰게 되므로
+#여기서도 똑같이 실제 픽셀 좌표를 쓰도록 맞춘다 (안 그러면 보정 좌표가 배율만큼 어긋나 '화면 밖' 이 된다)
+def dpiaware():
+    try:
+        import ctypes
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
+
 #게임 창의 그림 영역 (왼, 위, 너비, 높이) - 모니터 좌표. 못 찾으면 None
 def clientrect():
     try:
@@ -207,6 +218,7 @@ def run(mem, log=_say, alive=None):
         return None, None, '메모리에 안 붙음'
     if mem.value('hover_id') == None:
         return None, None, 'mem.json chains.hover_id 를 못 읽음 (python memprobe.py --hover 로 찾아 넣을 것)'
+    dpiaware()
     rect = clientrect()
     if rect == None:
         return None, None, '게임 창(' + WIN_TITLE + ')을 못 찾음'
@@ -337,6 +349,7 @@ def save(points, rect=None):
 
 
 def main():
+    dpiaware()
     import memread as mr
     path, ok, tried = mr.findfile('mem.json')
     m = mr.Mem(path, _say)

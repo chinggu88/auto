@@ -1462,6 +1462,7 @@ def huntloop(p=None, atkvalue=None):
         mobs = []
         nskip = 0
         noff  = 0
+        offxy = None       #진단용 : 화면 밖으로 빠진 첫 몹 (이름, 게임 차이, 계산한 화면 좌표)
         for dist, o, pos in found['mobs']:
             if skip.get(o['id'], 0) > now:
                 nskip += 1
@@ -1471,6 +1472,8 @@ def huntloop(p=None, atkvalue=None):
                 mobs.append((dist, o, pos, xy))
             else:
                 noff += 1
+                if offxy == None:
+                    offxy = (o.get('name'), (pos[0] - found['pos'][0], pos[1] - found['pos'][1]), xy)
 
         #잡던 몹이 아직 살아 있는지. 목록에 없으면 죽었거나 사라졌거나 멀어진 것
         cur = None
@@ -1513,7 +1516,7 @@ def huntloop(p=None, atkvalue=None):
                 w = found.get('why') or {}
                 log('몹 없음 - 텔 : ' + KEY_REFRESH + '   [주위 몹(직선 ' + str(HUNT_DIST) + '칸) ' + str(w.get('near'))
                     + ' / 길 없음 ' + str(w.get('nopath')) + ' / 걸어서 멀다 ' + str(w.get('walkfar'))
-                    + ' / 화면 밖 ' + str(noff) + ' / 잠깐 제외 ' + str(nskip)
+                    + ' / 화면 밖 ' + str(noff) + (' 예: ' + str(offxy) if offxy != None else '') + ' / 잠깐 제외 ' + str(nskip)
                     + ('' if w.get('terrain') else ' / 지형 못 읽음') + ']')
                 time.sleep(TELE_DELAY)       #마지막 몹을 잡은 직후 바로 누르지 않고 잠깐 둔다
                 gu.press(KEY_REFRESH, presses=1)
@@ -1886,6 +1889,15 @@ def runmacro():
                 log('자동 보정을 켜고 엔티티(몹 / NPC)가 보이는 곳에서 다시 시작하거나, postracker.py 허수아비 보정(F9) - 시작 안 함')
                 return
             log('화면 보정 : ' + why)
+            #확인용 : 보정으로 본 내 캐릭터 화면 위치가 게임 창 안(가운데쯤)이어야 한다
+            me0 = toscreen(0, 0)
+            try:
+                import autocalib
+                gr = autocalib.clientrect()
+            except Exception:
+                gr = None
+            log('  보정 확인 : 내 캐릭터 화면 위치 ' + str(me0) + '  모니터 ' + str(tuple(gu.size()))
+                + '  게임 그림 영역 ' + str(gr))
             #공격 커서(칼 모양)는 더 이상 확인하지 않으므로 캡처도 하지 않는다
             # atk = setattckinfo(CENTERPOINT)
             # log('공격 커서 : ' + str(atk))
