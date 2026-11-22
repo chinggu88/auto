@@ -1189,6 +1189,8 @@ def scanents():
     mobs   = []
     people = [] if 'player' in kinds else None
     rad    = HUNT_DIST + PATH_MARGIN
+    #진단용 : 정보 창의 '주위 몹'(직선 거리) 과 사냥 루프 대상 수가 다를 때 어디서 빠졌는지 센다
+    why    = {'near': 0, 'nopath': 0, 'walkfar': 0}
     with TERRAIN_LOCK:
         t     = terraingrid(mpos, rad)
         steps = pathsteps(t, mpos, rad) if t != None else None
@@ -1202,12 +1204,21 @@ def scanents():
             people.append((dist, o, pos))
             continue
         o['line'] = dist             #직선 거리 (공격 키 사거리용)
+        #정보 창과 같은 기준(살아 있고 이름 있는 후보, 직선 HUNT_DIST 안)인지 - 진단 숫자용
+        cand = (not o['dead'] and o.get('name') and dist <= HUNT_DIST
+                and (kind == 'monster' if 'monster' in kinds else kind == 'other'))
+        if cand:
+            why['near'] += 1
         if steps != None:
             if dist > rad:
                 continue
             walk = steps.get(pos)
             if walk == None:
+                if cand:
+                    why['nopath'] += 1
                 continue             #걸어서 못 닿는다 (벽 너머 / 막힌 곳)
+            if cand and walk > HUNT_DIST:
+                why['walkfar'] += 1
             dist = walk
         if o['dead'] or dist > HUNT_DIST:
             continue
@@ -1221,7 +1232,8 @@ def scanents():
     mobs.sort(key=lambda r: r[0])
     if people != None:
         people.sort(key=lambda r: r[0])
-    return {'me': me, 'pos': mpos, 'mobs': mobs, 'players': people}
+    why['terrain'] = steps != None
+    return {'me': me, 'pos': mpos, 'mobs': mobs, 'players': people, 'why': why}
 
 #지금 HP 와 최대 HP. (hp, 최대) 또는 None (못 읽음 / 값이 이상함)
 #현재 HP 는 보안 홀더(mem.json secure)를 먼저 보고, 없으면 chains.hp 를 본다 (memread.charinfo 와 같다)
@@ -1448,12 +1460,17 @@ def huntloop(p=None, atkvalue=None):
         #화면 좌표를 미리 구해 화면 안에 있는 몹만 남긴다 (화면 밖은 클릭할 수 없다)
         #감지만 모드에서는 보정이 없을 수 있으므로 거르지 않는다
         mobs = []
+        nskip = 0
+        noff  = 0
         for dist, o, pos in found['mobs']:
             if skip.get(o['id'], 0) > now:
+                nskip += 1
                 continue      #다가가지 못해서 잠깐 빼 둔 몹 (벽 너머 등)
             xy = toscreen(pos[0] - found['pos'][0], pos[1] - found['pos'][1])
             if DETECT_ONLY or (xy != None and 0 <= xy[0] < screen[0] and 0 <= xy[1] < screen[1]):
                 mobs.append((dist, o, pos, xy))
+            else:
+                noff += 1
 
         #잡던 몹이 아직 살아 있는지. 목록에 없으면 죽었거나 사라졌거나 멀어진 것
         cur = None
@@ -1493,7 +1510,11 @@ def huntloop(p=None, atkvalue=None):
             #텔 직후에는 주변이 아직 안 읽혔을 수 있으므로 TELE_GAP 동안은 다시 누르지 않는다
             #(예전에는 NOHIT_LIMIT 회 헛돌 때까지 기다렸다)
             if KEY_REFRESH != None and (not DETECT_ONLY) and now - teled >= TELE_GAP:
-                log('몹 없음 - 텔 : ' + KEY_REFRESH)
+                w = found.get('why') or {}
+                log('몹 없음 - 텔 : ' + KEY_REFRESH + '   [주위 몹(직선 ' + str(HUNT_DIST) + '칸) ' + str(w.get('near'))
+                    + ' / 길 없음 ' + str(w.get('nopath')) + ' / 걸어서 멀다 ' + str(w.get('walkfar'))
+                    + ' / 화면 밖 ' + str(noff) + ' / 잠깐 제외 ' + str(nskip)
+                    + ('' if w.get('terrain') else ' / 지형 못 읽음') + ']')
                 time.sleep(TELE_DELAY)       #마지막 몹을 잡은 직후 바로 누르지 않고 잠깐 둔다
                 gu.press(KEY_REFRESH, presses=1)
                 teled = time.perf_counter()
