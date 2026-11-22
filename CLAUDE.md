@@ -191,7 +191,8 @@ To stop a running script: `pyautogui.FAILSAFE` is disabled in `oman.py`/`tell.py
     press ber (if set) and `dostop()`, without waiting for the 2 s timer. `KEY_SKILL` / `SKILL_COOL` remain as
     a compatibility mirror of attack key 1 for `pit.py`.
 - **Character panel** — `App.pollinfo()` shows name / LV / HP / MP / exp / AC / position / nearby
-  counts every `INFO_POLL` ms through its own read-only `Mem` (`self.imem`), separate from the
+  counts and 상태 (my action from `act` via `actname()` / `ACT_GROUPS`: 공격 중 / 피격 중 / 가만히 /
+  걷는 중 / 마법 / 죽음) every `INFO_POLL` ms through its own read-only `Mem` (`self.imem`), separate from the
   macro's `MEM`, so it works before Start.
 - **`감지만` (detect-only)** logs the chosen target and nearby players without clicking or recalling.
 - The old code is kept, unused by `main.py`: `huntloop_sweep`, `_checkmarks`. The sound

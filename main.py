@@ -305,6 +305,22 @@ MEM_FAIL_LIMIT = 10     #엔티티 테이블을 연속으로 이만큼 못 읽�
 #행동 번호는 무기별로 걷기 / 공격 / 피격 / 가만히 4개씩 : 0~3 맨손, 4~7 한손검, 11~14 도끼, 20~23 활, 24~27 창, 40~43 양손검
 #공격 중이면 몹 서치(더 가까운 몹으로 바꾸기)와 다시 클릭을 하지 않는다. 확인은 python memprobe.py --act
 ATTACK_ACTS    = {1, 5, 12, 21, 25, 41}
+#행동 번호 -> 상태 이름 (정보 창 표시용. ATTACK_ACTS 와 같은 표)
+ACT_GROUPS     = [('공격 중', ATTACK_ACTS),
+                  ('피격 중', {2, 6, 13, 22, 26, 42}),
+                  ('가만히',  {3, 7, 14, 23, 27, 43}),
+                  ('걷는 중', {0, 4, 11, 20, 24, 40}),
+                  ('마법',    {18, 19}),
+                  ('죽음',    {8})]
+
+def actname(act):
+    if act == None:
+        return '?'
+    for name, codes in ACT_GROUPS:
+        if act in codes:
+            return name
+    return '모름'
+
 ATK_WAIT_MAX   = 2.0    #대상이 끝났는데도 공격 동작이 이어지면 이만큼(초)까지만 서치를 미룬다 (다른 몹에 맞서는 중일 수 있다)
 CALIB_FILES    = ['auto_calib.json', 'scarecrow_calib.json', 'calib.json']   #앞엣것 우선. auto_calib.json 은 autocalib.py(자동 보정)가 만든다
 #--- 힐 / 베르 / 이뮨 ---
@@ -320,7 +336,7 @@ HEAL_GAP    = 2.0     #힐을 다시 누르기까지 최소 간격(초)
 BER_GAP     = 2.0
 IMMUNE_GAP  = 30.0
 GAP_DEFAULT = {'heal': 2.0, 'ber': 2.0, 'immune': 30.0}   #주기 칸이 0 일 때 쓰는 간격
-INFO_POLL   = 500     #내 캐릭터 정보 표시 갱신 간격(ms)
+INFO_POLL   = 250     #내 캐릭터 정보 표시 갱신 간격(ms). 상태(공격 / 피격) 가 짧게 바뀌므로 0.25초
 MEM            = None   #memread.Mem. runmacro 가 붙이고 뗀다
 CASTER         = None   #memcast.Caster. 힐 / 이뮨을 내 캐릭터에게 걸 때 쓴다 (postracker.py 의 턴언데드와 같은 방식)
 CALIB          = None   #아핀 계수 (a,b,c,d,e,f). 화면 = (a*dx+b*dy+c, d*dx+e*dy+f)
@@ -2343,10 +2359,13 @@ class App:
         pos  = '?'
         mobs = '?'
         ppl  = '?'
+        state = '?'
         ents, head, count = m.entity_table()
         me = m.selfent(ents) if len(ents) > 0 else None
         if me != None:
             name = str(me.get('name'))
+            #행동 코드(+0x0C act) 로 본 지금 상태. 코드 표는 가정 (python memprobe.py --act 로 확인)
+            state = actname(me.get('act')) + ' (act ' + f(me.get('act')) + ')'
             mp_  = m.entpos(me)
             pos  = str(mp_[0]) + ', ' + str(mp_[1])
             nm = 0
@@ -2365,11 +2384,12 @@ class App:
             ppl  = str(np_)
         return ('%s   LV %s   경험치 %s%%   AC %s\n'
                 'HP %s / %s (%s%%)    MP %s / %s (%s%%)\n'
-                '좌표 %s    주위 몹 %s    다른 캐릭터 %s'
+                '좌표 %s    주위 몹 %s    다른 캐릭터 %s\n'
+                '상태 %s'
                 % (name, f(c['level']), f(c['exp_pct']), f(c['ac']),
                    f(c['hp']), f(c['hp_max']), pct(c['hp'], c['hp_max']),
                    f(c['mp']), f(c['mp_max']), pct(c['mp'], c['mp_max']),
-                   pos, mobs, ppl))
+                   pos, mobs, ppl, state))
 
     #--- 폼 <-> 값 ---
 
